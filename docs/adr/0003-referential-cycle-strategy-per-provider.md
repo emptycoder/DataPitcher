@@ -57,6 +57,12 @@ Column nullability alone does not prove the two-phase strategy safe. A CHECK exp
 
 The insert, update, validation, and commit must occur in one target transaction. If insert and update commit separately, a crash leaves durable incorrect data. Without that transaction, or without a distributed transaction, the strategy violates the no-partial-state expectation and is not offered.
 
+#### Cyclic components are atomic and non-resumable
+
+A strongly connected component transferred under the Deferred, nullable two-phase, or constraint-suspension strategy is executed as a single atomic unit. It is not pausable or resumable mid-component; a pause request is honoured only at the boundary before or after that component. If the process crashes mid-component, the whole component rolls back and is retried from its start rather than resumed.
+
+A very large cyclic component may therefore require a single long transaction. If it exceeds what one transaction can reasonably hold, planning must Block rather than split it unsafely. Before sealing, the plan must surface non-resumable components to the operator so the resumability promise shown in the UI is accurate.
+
 ### 6. Constraint suspension needs a target-local recovery journal
 
 Suspension and loading should remain in one target transaction. If suspension crosses a commit boundary, a durable target-local recovery journal must commit in the same target transaction as suspension. A control-database-only journal leaves an unavoidable commit gap.

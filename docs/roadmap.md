@@ -4,6 +4,10 @@
 
 Only Slice 1 is planned in task-level detail, in `docs/plans/2026-09-02-slice-1-domain-spine.md`. Later slices depend on the seams, models, and evidence established there, so planning them task-by-task now would be speculative. Each slice below states its goal, deliverables, dependencies, Docker status, and exit gate. The sequence follows the architecture in `docs/architecture.md` and ADRs 0001 through 0007.
 
+## Traceability
+
+`docs/test-coverage-matrix.md` is the traceability artefact that maps product requirements to dependency-semantics rules, plan tasks, and tests. It must be updated as each slice completes. It is currently absent; that absence allowed behavioural tests to be dropped from Slice 1 without detection.
+
 ## The Docker blocker
 
 Docker is not installed on the current execution machine: the `docker` command is not found. This is a genuine external blocker, not a design problem. It prevents Testcontainers integration tests, Docker Compose end-to-end runs, and Playwright browser tests. Consequently, work is deliberately ordered so everything provable without a container comes first.
@@ -16,7 +20,7 @@ The goal is to prove the dependency-closure algorithm and graph algorithms witho
 
 **Docker: not required**
 
-**Exit gate:** All closure behavioural tests are green, and the coverage script exits non-zero when a test is deleted.
+**Exit gate:** Behavioural tests 1 through 13, 19, and 20 from dependency-semantics section 9, plus the DIAMOND and UNTRUSTED CONSTRAINT fixtures, are green, and the coverage script exits non-zero when a test is deleted. The remaining behavioural tests from dependency-semantics section 9 are delivered in Slice 5 (tests 14, 17, and 18, after Slice 4 supplies schema metadata) and Slice 6 (tests 15 and 16).
 
 ## Slice 2 — Control database and job state machine
 

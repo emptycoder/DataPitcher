@@ -42,7 +42,7 @@ To reject personal Microsoft accounts, configure the application registration fo
 
 ### 4. Resolve group overage fail closed
 
-Detect overage from a `claim-names` claim containing a `groups` member and also recognize `has-groups`. Never follow an endpoint supplied in `claim-sources`. When Microsoft Graph is used, construct the request from validated tenant and object identifiers instead.
+Detect overage from a `_claim_names` claim containing a `groups` member and also recognize `hasgroups`. Never follow an endpoint supplied in `_claim_sources`. When Microsoft Graph is used, construct the request from validated tenant and object identifiers instead.
 
 The result is three-way. A known grant proceeds. Complete membership with no matching grant, or an explicit deny, returns 403 Problem Details with error code `authorization_denied`. Membership that could not be resolved and might have granted access returns 503 with `authorization_indeterminate`. An absent `groups` claim is first checked for an overage indicator; only a provider contract known always to emit that indicator may treat a claimless response as empty.
 
@@ -101,13 +101,13 @@ SSE requires a custom fetch-based client, durable job event retention, and snaps
 
 ## Alternatives Considered
 
-The eight-interface proposal was rejected because five interfaces had no provider variability. Listing all bearer schemes was rejected because it produces multi-challenge 401 responses. An environment-only development-provider guard was rejected because its assembly remains available to a manipulated process. Following `claim-sources` endpoints was rejected because token data must not direct privileged outbound requests.
+The eight-interface proposal was rejected because five interfaces had no provider variability. Listing all bearer schemes was rejected because it produces multi-challenge 401 responses. An environment-only development-provider guard was rejected because its assembly remains available to a manipulated process. Following `_claim_sources` endpoints was rejected because token data must not direct privileged outbound requests.
 
 Fake-principal tests were rejected because they bypass discovery, key selection, signature, issuer, audience, and lifetime validation. Real-tenant tests alone were rejected for pull requests because they require credentials and are not deterministic. Only a real tenant can test Entra token issuance, application-registration and consent errors, Conditional Access and continuous access evaluation, live signing-key rollover, guest and personal-account edge cases, and Graph permissions, throttling, and overage generation. A separately, manually or protectively triggered smoke suite may cover these cases; pull-request tests remain credential-free.
 
 ## Verification
 
-Verify startup rejects overlapping router metadata, chooses the fallback for malformed and unroutable tokens, and yields one fallback challenge. Verify Entra single-tenant, multi-tenant allowlist, raw claim-name, and personal-account restrictions without replacing issuer validation. Verify all group outcomes, including absent groups with and without a trustworthy overage indicator, and that Graph failures return indeterminate rather than empty membership or stale grants.
+Verify startup rejects overlapping router metadata, chooses the fallback for malformed and unroutable tokens, and yields one fallback challenge. Verify Entra single-tenant, multi-tenant allowlist, raw claim-name, and personal-account restrictions without replacing issuer validation. Verify all group outcomes, including absent groups with and without a trustworthy overage indicator, and that Graph failures return indeterminate rather than empty membership or stale grants. Test that overage detection matches the exact `_claim_names`, `_claim_sources`, and `hasgroups` claim-name literals.
 
 Test immutable key construction for user and service-principal Entra tokens and generic OIDC principals, union precedence, terminal deny, and administrator bootstrap restrictions. Inspect the Production publish artifact in CI for the absent development assembly and absence of plugin probing. Run the endpoint-enumeration safety-net test. Exercise SSE reconnect, expiry, repeated 401, 403, duplicate event, retention-boundary, and authorization-on-every-open behavior. Run the deterministic token matrix in Decision 10 against the real registered schemes.
 
@@ -116,3 +116,4 @@ Test immutable key construction for user and service-principal Entra tokens and 
 - What stable provider-instance identifier format and migration policy will distinguish separately registered instances of the same generic OIDC issuer?
 - If Graph resolution is enabled, what cache TTL, request budget, and operational owner are appropriate for DataPitcher's availability requirements?
 - Which protected environment and trigger will run the real-tenant smoke suite, and how will its credentials and results be isolated from ordinary pull requests?
+- These claim names were corrected after review and should be re-verified against Microsoft's current access-token claims reference before implementation because they are external contracts outside the project's control.

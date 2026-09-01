@@ -14,9 +14,9 @@ Accepted.
 
 ## Context
 
-DataPitcher transfers a sealed row manifest into SQL Server and PostgreSQL targets. Its guarantee is no DataPitcher insert or update lies outside the planned manifest. Verification precedes Succeeded; bulk-copy completion alone is insufficient.
+DataPitcher transfers a sealed row manifest into SQL Server and PostgreSQL targets. Its guarantee is that no DataPitcher insert or update within the planned target business tables lies outside the planned manifest. DataPitcher's own control artefacts—the target checkpoint table and owned staging objects—are excluded from this claim by definition, are confined to DataPitcher-owned objects, and never touch business tables. Verification precedes Succeeded; bulk-copy completion alone is insufficient.
 
-DataPitcher supports DirectFast, which performs provider-native bulk writing directly to a business table; ResumableStaged, the production default, which batches into DataPitcher-owned target staging before a set-based apply; and an optional provider-specific ServerSide optimization. StrictExact must prove that the keys DataPitcher actually affected equal the sealed PlannedWriteManifest. That proof must be limited to facts the target database records at the job commit boundary and must not claim isolation from unrelated concurrent writers.
+DataPitcher supports DirectFast, which performs provider-native bulk writing directly to a business table; ResumableStaged, the production default, which batches into DataPitcher-owned target staging before a set-based apply; and an optional provider-specific ServerSide optimization. StrictExact must prove that the keys DataPitcher actually affected equal the sealed PlannedWriteManifest. That proof must be limited to facts the target database records across the job's committed batches and must not claim isolation from unrelated concurrent writers.
 
 ## Decision
 
@@ -44,9 +44,9 @@ Presence detection is bounded and cheap; proving effects is not. StrictExact is 
 
 ### 4. Publish a bounded StrictExact guarantee
 
-DataPitcher publishes the following guarantee: “For every job reported Succeeded in StrictExact mode, the target database's recorded keys for DataPitcher's direct INSERT and UPDATE operations equal the sealed PlannedWriteManifest, and every planned outcome was verified at the job's commit boundary. This does not assert that rows outside the manifest remained unchanged by other sessions, nor does it persist after that boundary; StrictExact is unavailable when triggers, rules, cascades, or other server-side code can create unverified writes.”
+DataPitcher publishes the following guarantee: “For every job reported Succeeded in StrictExact mode, the target database's recorded keys for DataPitcher's direct INSERT and UPDATE operations within the planned target business tables equal the sealed PlannedWriteManifest; DataPitcher's own control artefacts—the target checkpoint table and owned staging objects—are excluded from this guarantee by definition, are confined to DataPitcher-owned objects, and never touch business tables; and every planned outcome was verified after the final batch committed and before the job was reported Succeeded. This does not assert that rows outside the manifest remained unchanged by other sessions, nor does it persist after the verification point; StrictExact is unavailable when triggers, rules, cascades, or other server-side code can create unverified writes.”
 
-An unqualified assertion that no row outside the manifest changed would be false. Proving that DataPitcher did not write outside the manifest is different from proving that no row outside the manifest changed, because concurrent sessions can write independently.
+An unqualified assertion that no row outside the manifest changed would be false. Proving that DataPitcher did not write outside the manifest within the planned target business tables is different from proving that no row outside the manifest changed, because concurrent sessions can write independently.
 
 ### 5. Verify foreign-key integrity within a bounded scope
 
@@ -70,10 +70,12 @@ Reject by default float and real unless exact same-width IEEE bits are contractu
 
 ## Guarantee Matrix
 
+For ResumableStaged, affected keys are captured inside each apply transaction, each batch commits, and verification then reads the committed state.
+
 | Transfer mode | SQL Server | PostgreSQL |
 | --- | --- | --- |
 | DirectFast | Standard only. Precondition: atomic external transaction, no fired triggers, no ignored duplicates, exact explicit-key stream. Otherwise Blocked. | Standard only. Precondition: atomic COPY with stop-on-error, no triggers, exact explicit-key stream. Otherwise Blocked. |
-| ResumableStaged | StrictExact achievable. Precondition: set-based OUTPUT INTO, atomic apply-verify-commit, side-effect-free local target. | StrictExact achievable. Precondition: RETURNING with separate statements, or PostgreSQL 17+ MERGE, and a side-effect-free local target. |
+| ResumableStaged | StrictExact achievable. Precondition: set-based OUTPUT INTO and a side-effect-free local target. | StrictExact achievable. Precondition: RETURNING with separate statements, or PostgreSQL 17+ MERGE, and a side-effect-free local target. |
 | ServerSide | StrictExact for local set-based DML with OUTPUT INTO under the same transaction and schema preconditions; remote targets Blocked. | StrictExact for local RETURNING-capable DML; FDW or remote targets require explicit capability proof or are Blocked. |
 
 ## Consequences

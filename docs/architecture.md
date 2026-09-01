@@ -4,7 +4,7 @@
 
 DataPitcher is a targeted relational-data transfer tool, not a database cloning tool. A trusted operator selects an exact subset of rows in a source database. DataPitcher computes the smallest referentially complete dependency set, produces an immutable transfer plan, transfers exactly that data to a target database, and then verifies the result.
 
-SQL Server and PostgreSQL are first-class providers. Fully supported paths are same-provider transfers: SQL Server to SQL Server and PostgreSQL to PostgreSQL. A cross-provider transfer runs only when it is covered by a documented, explicitly tested compatibility matrix. Potentially lossy or unsupported conversions block plan sealing by default.
+SQL Server and PostgreSQL are first-class providers. Fully supported paths are same-provider transfers: SQL Server to SQL Server and PostgreSQL to PostgreSQL. A cross-provider transfer runs only when it is covered by a documented, explicitly tested compatibility matrix. The provider compatibility matrix document is deferred until provider integration work can run; Docker is currently unavailable and blocks producing it. Until the matrix exists, cross-provider transfer is BLOCKED by default rather than merely undocumented. Potentially lossy or unsupported conversions block plan sealing by default.
 
 The target business schema must already exist: DataPitcher neither creates nor migrates it. Source business tables are read-only. DataPitcher may write only to its source staging schema, named `__datapitcher`; planned target business tables; its target staging objects; and its control storage. It must never add columns or triggers to source business tables. Rows retain their source keys, and automatic key remapping is out of scope. Only base tables are transferable; views can assist selection but are never write targets.
 
@@ -90,7 +90,7 @@ The Core rule permits the closure algorithm, graph algorithms, plan hashing, and
 | `ISequenceReseeder` | Reseeds generated-key sequences where required. |
 | `IServerSideTransferStrategy` | Executes provider-supported server-side transfer paths. |
 
-Provider-native code remains inside provider projects and never leaks into Core or Infrastructure. `ICapabilityDetector` reports: CanConnect, CanReadSchema, CanReadBusinessRows, CanCreateSourceStaging, CanDropSourceStaging, CanCreateTargetStaging, CanDropTargetStaging, CanBulkInsert, CanPreserveIdentity, CanUseTransactions, CanUseSnapshotIsolation, CanDeferConstraints, CanDisableConstraints, CanRevalidateConstraints, CanFireTriggers, CanSuppressTriggers, CanReseedGeneratedKeys, CanUseServerSideTransfer, and SupportsDurableResume.
+Provider-native code remains inside provider projects and never leaks into Core or Infrastructure. `ICapabilityDetector` reports: CanConnect, CanReadSchema, CanReadBusinessRows, CanCreateSourceStaging, CanDropSourceStaging, CanCreateTargetStaging, CanDropTargetStaging, CanBulkInsert, CanPreserveIdentity, CanUseTransactions, CanUseSnapshotIsolation, CanDeferConstraints, CanDisableConstraints, CanRevalidateConstraints, CanFireTriggers, CanSuppressTriggers, CanReseedGeneratedKeys, CanUseServerSideTransfer, and SupportsDurableResume. These general connection-level capabilities are distinct from ADR 0003's per-strongly-connected-component strategy flags: `SupportsDeferrableForeignKeys`, `CanDeferCycleBreakingFks`, `CanUseNullableFkTwoPhase`, `CanSafelySuspendFks`, and `MustBlockScc`.
 
 ## 5. Schema discovery and the graph
 
@@ -104,7 +104,7 @@ LINQ to DB schema discovery is a portable baseline only. Provider catalog querie
 
 Dependency analysis happens primarily in the source database, never by pulling millions of keys into application memory. The preferred mode creates durable, plan-scoped typed key tables in source schema `__datapitcher`. Physical names are unpredictable and safely quoted; a logical-to-physical mapping is persisted in the control database. Tables use native key column types and a unique index across the complete stable key. There is no universal JSON key table.
 
-Staging records stable key columns, origin kind, root selection identifier, discovery generation, representative predecessor relationship, target-existence state, final action, and expansion state. It is cleaned up after completion. A TTL cleanup worker removes abandoned objects but never objects owned by an active job.
+Staging records stable key columns, origin kind, root selection identifier, immutable discovery generation, representative predecessor relationship, target-existence state, and final action. The discovery generation stamp is set only on first insert and preserved on re-discovery through conflict-ignoring insertion; a strict generation barrier applies, so no mutable expansion flag exists anywhere in staging. This follows ADR 0004, Decision 4. It is cleaned up after completion. A TTL cleanup worker removes abandoned objects but never objects owned by an active job.
 
 If durable source staging permission is unavailable, DataPitcher uses session-scoped temporary key tables on a dedicated source connection. The plan is marked reduced-resume or non-durable; it does not claim durable resume, it re-analyses if the session is lost, and it exposes the limitation before sealing. DataPitcher owns target staging objects for bulk existence probing and the staged apply path.
 
@@ -144,13 +144,13 @@ The API uses Minimal API route groups and typed request and response records. Qu
 
 | ADR | Title | Decision |
 | --- | --- | --- |
-| 0001 | Resume checkpoint ownership and fencing | The resume checkpoint lives in the target database, with fencing. |
-| 0002 | Exact-set verification scope and limits | Defines exact-set verification scope, limits, and transfer-mode guarantees. |
-| 0003 | Referential cycle strategy per provider | Defines the provider-specific strategy for referential cycles. |
-| 0004 | Single demand-driven closure | Adopts one demand-driven closure and supersedes the two-phase design. |
-| 0005 | Native bulk writers and LINQ to DB limits | Requires native bulk writers and records limits of LINQ to DB. |
-| 0006 | Authentication and authorization architecture | Defines authentication-provider and authorization architecture. |
-| 0007 | Frontend architecture and coverage isolation | Defines frontend boundaries and coverage isolation. |
+| 0001 | Checkpoint lives in the target database and is fenced with the target apply transaction. | The resume checkpoint lives in the target database, with fencing. |
+| 0002 | Exact-set verification captures committed direct writes, with bounded integrity checks and explicit limits. | Defines exact-set verification scope, limits, and transfer-mode guarantees. |
+| 0003 | Referential cycles are resolved from the planned row graph, with provider-specific capabilities applied only to the cycle-breaking edge set. | Defines the provider-specific strategy for referential cycles. |
+| 0004 | DataPitcher computes one demand-driven closure that consults target state during expansion. | Adopts one demand-driven closure and supersedes the two-phase design. |
+| 0005 | Native provider bulk writers are required for transfer writes; LINQ to DB remains the portable query and schema baseline. | Requires native bulk writers and records limits of LINQ to DB. |
+| 0006 | DataPitcher uses provider-specific authentication at the HTTP boundary, normalized immutable identities, and permission-based authorization. | Defines authentication-provider and authorization architecture. |
+| 0007 | Frontend architecture isolates server, interaction, adapter, and derived layout state so the dependency graph remains usable and handwritten code can meet the coverage requirement. | Defines frontend boundaries and coverage isolation. |
 
 ## Open Questions
 

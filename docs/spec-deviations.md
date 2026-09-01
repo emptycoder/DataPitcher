@@ -20,7 +20,7 @@ DataPitcher was specified in a detailed written specification. During architectu
 
 **INSTEAD:** Delete that property.
 
-**REASON:** D1 eliminates the candidate set, so this is not a property that is merely untested; it has no meaning. The specification’s property-based test list must be revised. The substantive guarantees it was intended to protect remain: every included row must be demanded through an enabled path, and a satisfied branch must contribute no unnecessary ancestors. Those properties are tested directly.
+**REASON:** D1 eliminates the candidate set, so this is not a property that is merely untested; it has no meaning. The specification’s property-based test list must be revised. The substantive guarantees it was intended to protect remain: every included row must be demanded through an enabled path, and a satisfied branch must contribute no unnecessary ancestors. Those properties must be tested directly.
 
 **SEE:** ADR 0004.
 
@@ -74,7 +74,7 @@ DataPitcher was specified in a detailed written specification. During architectu
 
 **INSTEAD:** Exclude LINQ to DB from the transfer write path. Provider projects call `SqlBulkCopy` and the Npgsql binary importer directly. LINQ to DB remains the primary library for querying, schema discovery, and the control database.
 
-**REASON:** The required proof failed. The provider-specific bulk copy type is advisory rather than contractual: it can downgrade toward row-by-row processing when the provider connection cannot be unwrapped. Its result reports only a row count, not the strategy that ran. A native-or-fail guarantee is therefore unobtainable through that path, and the required strategy recording is impossible.
+**REASON:** Architecture analysis of the library's source and documentation found the guarantee unobtainable. This conclusion has not yet been confirmed by an executable test in this repository; the confirming test is specified in ADR 0005's Verification section. That analysis indicates that the provider-specific bulk copy type is advisory rather than contractual: it can downgrade toward row-by-row processing when the provider connection cannot be unwrapped. Its result is indicated to report only a row count, not the strategy that ran. The decision therefore treats a native-or-fail guarantee through that path as unobtainable and the required strategy recording as impossible.
 
 **SEE:** ADR 0005.
 
@@ -160,7 +160,7 @@ DataPitcher was specified in a detailed written specification. During architectu
 
 **INSTEAD:** Make the default view the transfer-plan subgraph: selected tables plus transitive parent dependencies. Set a product target of at most roughly 200 simultaneously visible nodes, and do not treat visible-element culling as sufficient by itself.
 
-**REASON:** Culling removes off-screen elements only. A fit-view that displays every node defeats it. The realistic soft ceiling is roughly 400 to 500 simple nodes before pan, zoom, and drag frame rate degrades.
+**REASON:** Culling removes off-screen elements only. A fit-view that displays every node defeats it. The initial estimated soft ceiling is roughly 400 to 500 simple nodes before pan, zoom, and drag frame rate degrades.
 
 **SEE:** ADR 0007.
 
@@ -172,7 +172,7 @@ DataPitcher was specified in a detailed written specification. During architectu
 
 **INSTEAD:** Do not execute those container-dependent checks in the current environment. Order work so that everything provable without a container is completed first.
 
-**REASON:** Docker is not installed on the execution machine: the `docker` command is not found. Under the specification’s own definition, a Docker daemon that cannot be started or accessed is a genuine external blocker. All container-dependent verification is therefore blocked. This does not affect the domain layer, graph algorithms, closure over an abstracted store, stable key semantics, plan hashing, state machines, permission evaluation, claim normalization, or the frontend unit and component test layer.
+**REASON:** The repository contains no evidence that the current execution environment has an available Docker daemon. Docker availability must be confirmed before container-dependent verification can run; until then, it is blocked under the specification’s definition of an inaccessible daemon as an external blocker. This does not affect the domain layer, graph algorithms, closure over an abstracted store, stable key semantics, plan hashing, state machines, permission evaluation, claim normalization, or the frontend unit and component test layer.
 
 **SEE:** This entry records the environment assessment and planning consequence.
 

@@ -22,7 +22,7 @@ The centrepiece is a graph of database tables and child-to-parent foreign-key ed
 
 ### 1. Render only the useful schema subgraph
 
-Enable React Flow's `onlyRenderVisibleElements`, but do not treat it as a large-graph solution: it culls off-screen elements only, so fit-view can display all 1,000 nodes. The target is at most roughly 200 simultaneously visible nodes. The soft ceiling is approximately 400 to 500 simple nodes, or 1,000 to 2,000 visible SVG edges. Degradation appears first in pan, zoom, and drag frame rate; then selection updates; then initial mount.
+Enable React Flow's `onlyRenderVisibleElements`, but do not treat it as a large-graph solution: it culls off-screen elements only, so fit-view can display all 1,000 nodes. The target is at most roughly 200 simultaneously visible nodes. The estimated soft ceiling is approximately 400 to 500 simple nodes, or 1,000 to 2,000 visible SVG edges. Expected degradation appears first in pan, zoom, and drag frame rate; then selection updates; then initial mount.
 
 The default graph is the transfer-plan subgraph: selected tables and transitive parent dependencies. Other neighbours appear only through explicit focus and expand actions. Schemas and strongly connected components are collapsible. Memoize custom node and edge components and option objects; keep callbacks stable; hoist node-type and edge-type maps to module scope; and never subscribe a component to complete nodes or edges arrays.
 
@@ -34,7 +34,7 @@ Set the layered algorithm, rightward direction, orthogonal routing, node-to-node
 
 Relayout only when topology revision, visible-subgraph membership, measured node dimensions, or layout options change, or when the operator requests it. Never relayout for React render, a referentially new but semantically equivalent query result, pan or zoom, hover, focus, highlighting, dragging a pinned node, theme change, panel resize, or transfer progress. This trigger discipline is the principal graph-performance safeguard.
 
-Timing is an estimate: budget roughly two to five seconds for 1,000 nodes and 5,000 edges; pathological graphs can exceed ten seconds. One synthetic local run took about 2.3 seconds. Full recomputation is acceptable; incremental layout is not initially needed. ELK's browserified worker build is the principal integration risk and requires a production-build smoke test.
+No measurement has been taken. The estimated two to five seconds for 1,000 nodes and 5,000 edges requires verification; pathological graphs are estimated to exceed ten seconds. Establishing a real measurement is a prerequisite before the graph feature is considered complete. Full recomputation is acceptable; incremental layout is not initially needed. ELK's browserified worker build is the principal integration risk and requires a production-build smoke test.
 
 ### 3. Maintain a three-way graph data contract
 
@@ -70,7 +70,7 @@ Exclude the vendor ELK worker build as third-party code. Test graph-to-ELK conve
 
 Inject fetch, token provider, clock, scheduler, and randomness into SSE reconnect logic. Drive chunked readable-stream fixtures with fake timers through every branch. Cover error boundaries with a throwing child and fallback, logging, and reset assertions. Cover Suspense with a controlled deferred promise in pending, resolved, and rejected states. Exclude generated API-client output; verify reproducible generation and boundary integration instead.
 
-Coverage cannot depend on aggregating results from natively separate worker threads because that is undocumented. One hundred percent coverage adds roughly 30 to 50 percent engineering effort, needs extensive injected seams, and creates adapter tests sensitive to library upgrades. It proves execution, not correctness, graph performance, accessibility, or authorization.
+Coverage cannot depend on aggregating results from natively separate worker threads because that is undocumented. One hundred percent coverage is estimated to add roughly 30 to 50 percent engineering effort, needs extensive injected seams, and creates adapter tests sensitive to library upgrades. It would evidence execution, not correctness, graph performance, accessibility, or authorization.
 
 ### 8. Organize modules around pure logic and thin adapters
 
@@ -80,7 +80,7 @@ ELK graph, option, and result mapping is pure around an ELK adapter. The SSE par
 
 ### 9. Keep generated OpenAPI client and Zod schemas
 
-Keep both artifacts. The generated client provides endpoint calls and compile-time transport typing; generated Zod schemas validate runtime input at the trust boundary, which TypeScript cannot do after its types vanish. OpenAPI is the single transport source of truth and generates both. Parse responses and SSE payloads before Query-cache insertion, then expose inferred types or mapped domain models. Do not handwrite duplicate transport types. Handwritten refinements may wrap generated schemas without restating fields. CI regenerates and fails on drift.
+Keep both artifacts. The generated client provides endpoint calls and compile-time transport typing; generated Zod schemas validate runtime input at the trust boundary, which TypeScript cannot do after its types vanish. OpenAPI is the single transport source of truth and generates both. Parse responses and SSE payloads before Query-cache insertion, then expose inferred types or mapped domain models. Do not handwrite duplicate transport types. Handwritten refinements may wrap generated schemas without restating fields. CI must regenerate and fail on drift.
 
 ### 10. Pin frontend versions
 
@@ -103,7 +103,7 @@ This architecture creates deliberately thin seams around browser APIs and vendor
 
 ## Alternatives Considered
 
-Rendering the full graph by default was rejected because fit-view defeats visible-element culling. Relayout on every render or query-object change turns routine interaction into expensive worker work. Incremental ELK layout was deferred because full recomputation meets the estimate with less risk.
+Rendering the full graph by default was rejected because fit-view defeats visible-element culling. Relayout on every render or query-object change turns routine interaction into expensive worker work. Incremental ELK layout was deferred because full recomputation is projected to meet the estimate with less risk.
 
 A single persisted Zustand store was rejected because it duplicates refetchable state and can persist secrets or large payloads. Storing job progress in Zustand creates a second authoritative copy. Native `EventSource` cannot provide the needed Authorization header and response-body handling. Client permission checks cannot secure protected actions.
 
@@ -115,11 +115,11 @@ Production-build smoke-test ELK worker integration and exercise default, expand,
 
 Architecture tests and review rules must reject transport types in stores, generic store patching, persisted session state, unvalidated Query writes, and relayouts outside semantic triggers. Test layout-key cache hits and misses, state ownership, preference allowlisting, SSE ordering, gaps, reconnection, authentication, cleanup, permission invalidation, and surprising 403s.
 
-Use unit tests for pure modules and adapter contracts, React Testing Library for components, and Playwright smoke tests for real Monaco, React Flow navigation, and worker-enabled production builds. CI regenerates OpenAPI artifacts, fails on drift, and enforces handwritten-code coverage.
+Use unit tests for pure modules and adapter contracts, React Testing Library for components, and Playwright smoke tests for real Monaco, React Flow navigation, and worker-enabled production builds. CI must regenerate OpenAPI artifacts, fail on drift, and enforce handwritten-code coverage.
 
 ## Coverage Cost
 
-The 100% requirement needs the pure-module and adapter-shell boundary, injected time, randomness, networking, authentication, and worker seams; exhaustive branch fixtures; and ongoing repair when vendor APIs change. Expect 30 to 50 percent additional engineering effort. It evidences executed handwritten paths, not performance, accessibility, security, or server-side authorization.
+The 100% requirement needs the pure-module and adapter-shell boundary, injected time, randomness, networking, authentication, and worker seams; exhaustive branch fixtures; and ongoing repair when vendor APIs change. Expect 30 to 50 percent additional engineering effort. When achieved, it will evidence executed handwritten paths, not performance, accessibility, security, or server-side authorization.
 
 ## Open Questions
 
