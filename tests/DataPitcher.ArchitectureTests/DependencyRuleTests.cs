@@ -21,6 +21,14 @@ public sealed class DependencyRuleTests
         Assert.Equal(["DataPitcher.Core"], References(project));
         Assert.Empty(Packages(project));
     }
+    [Fact]
+    public void AuthHosting_IsTheOnlySourceProjectReferencingConcreteAuthenticationProviders()
+    {
+        var concrete = new[] { "DataPitcher.Auth.Entra", "DataPitcher.Auth.OpenIdConnect", "DataPitcher.Auth.Development" };
+        var sourceReferences = Projects().Where(project => Path.GetRelativePath(Root, project).StartsWith("src" + Path.DirectorySeparatorChar, StringComparison.Ordinal)).ToDictionary(Name, References);
+        Assert.Equal(concrete.OrderBy(name => name, StringComparer.Ordinal), sourceReferences["DataPitcher.Auth.Hosting"].Where(concrete.Contains).OrderBy(name => name, StringComparer.Ordinal));
+        Assert.DoesNotContain(sourceReferences.Where(pair => pair.Key != "DataPitcher.Auth.Hosting").SelectMany(pair => pair.Value), concrete.Contains);
+    }
     private static string Root { get; }=FindRoot();
     private static string Project(string name)=>Projects().Single(p=>Name(p)==name);
     private static IEnumerable<string> Projects()=>Directory.GetFiles(Root,"*.csproj",SearchOption.AllDirectories);
