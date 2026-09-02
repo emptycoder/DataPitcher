@@ -190,6 +190,8 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
 
 ### Task 3: Establish structural session and preference state boundaries
 
+Zustand selectors must return primitives or use an explicit shallow comparator. Never return a newly allocated array or object from a selector without shallow comparison: React will treat every selection as changed and can loop until the maximum update depth is exceeded.
+
 **Files:**
 - Create: `web/src/stores/sessionStore.ts`, `web/src/stores/preferencesStore.ts`, `web/src/stores/storeBoundary.test.tsx`
 - Modify: none
@@ -198,28 +200,29 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
 1. - [ ] **Write the failing state-boundary tests.** Create `web/src/stores/storeBoundary.test.tsx` with this complete test body. It makes the persisted shape and forbidden transport-import rule executable rather than review convention.
 
    ```tsx
-   import { readFileSync } from 'node:fs';
-   import { afterEach, expect, it } from 'vitest';
-   import { render, screen } from '@testing-library/react';
-   import { preferenceActions, useColorScheme, useReducedMotion } from './preferencesStore';
-   import { sessionActions, useConnectionIds, useSessionIdentity } from './sessionStore';
+    import { readFileSync } from 'node:fs';
+    import { resolve } from 'node:path';
+    import { afterEach, expect, it } from 'vitest';
+    import { render, screen } from '@testing-library/react';
+    import { createPreferencesStore, preferenceActions } from './preferencesStore';
+    import { sessionActions, useSessionIdentity, useSourceConnectionId, useTargetConnectionId } from './sessionStore';
 
-   function SessionProbe() {
-     const identity = useSessionIdentity();
-     const [sourceId, targetId] = useConnectionIds();
-     return <output role="status">{`${identity?.subjectId}|${sourceId}|${targetId}`}</output>;
-   }
-   function PreferenceProbe() {
-     return <output role="status">{`${useColorScheme()}|${useReducedMotion()}`}</output>;
-   }
+    function SessionProbe() {
+      const identity = useSessionIdentity();
+      const sourceId = useSourceConnectionId();
+      const targetId = useTargetConnectionId();
+      return <output role="status">{`${identity?.subjectId}|${sourceId}|${targetId}`}</output>;
+    }
+    function PreferenceProbe({ preferences }: { preferences: ReturnType<typeof createPreferencesStore> }) {
+      return <output role="status">{`${preferences.useColorScheme()}|${preferences.useReducedMotion()}`}</output>;
+    }
 
    afterEach(() => {
      sessionActions.setIdentity(null);
      sessionActions.setConnectionIds(null, null);
      preferenceActions.setColorScheme('system');
      preferenceActions.setReducedMotion(false);
-     localStorage.clear();
-   });
+    });
 
    it('exposes only named session identifiers through selectors', () => {
      sessionActions.setIdentity({ subjectId: 'operator-1', tenantId: 'tenant-1' });
@@ -228,21 +231,28 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
      expect(screen.getByRole('status')).toHaveTextContent('operator-1|source-1|target-1');
    });
 
-   it('persists only the preference allowlist', () => {
-     preferenceActions.setColorScheme('dark');
-     render(<PreferenceProbe />);
-     expect(screen.getByRole('status')).toHaveTextContent('dark|false');
-     expect(JSON.parse(localStorage.getItem('datapitcher.preferences')!).state)
-       .toEqual({ colorScheme: 'dark', reducedMotion: false });
-   });
+    it('persists only the preference allowlist', () => {
+      const values = new Map<string, string>();
+      const preferences = createPreferencesStore({
+        getItem: (name) => values.get(name) ?? null,
+        setItem: (name, value) => { values.set(name, value); },
+        removeItem: (name) => { values.delete(name); },
+      });
+      preferences.actions.setColorScheme('dark');
+      render(<PreferenceProbe preferences={preferences} />);
+      expect(screen.getByRole('status')).toHaveTextContent('dark|false');
+      expect(JSON.parse(values.get('datapitcher.preferences')!).state)
+        .toEqual({ colorScheme: 'dark', reducedMotion: false });
+    });
 
-   it('keeps store modules free of transport imports and preferences allowlisted', () => {
-     const preferenceSource = readFileSync(new URL('./preferencesStore.ts', import.meta.url), 'utf8');
-     expect(preferenceSource).toContain('partialize');
-     for (const name of ['sessionStore.ts', 'preferencesStore.ts']) {
-       expect(readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')).not.toMatch(/from\s+['"][^'"]*\/api\//);
-     }
-   });
+    it('keeps store modules free of transport imports and preferences allowlisted', () => {
+      const stores = resolve(process.cwd(), 'src/stores');
+      const preferenceSource = readFileSync(resolve(stores, 'preferencesStore.ts'), 'utf8');
+      expect(preferenceSource).toContain('partialize');
+      for (const name of ['sessionStore.ts', 'preferencesStore.ts']) {
+        expect(readFileSync(resolve(stores, name), 'utf8')).not.toMatch(/from\s+['"][^'"]*\/api\//);
+      }
+    });
    ```
 
 2. - [ ] **Run the missing-store tests.** Run `npm --prefix web test -- --run src/stores/storeBoundary.test.tsx`; expect non-zero exit and `Failed to resolve import "./sessionStore"`.
@@ -273,15 +283,16 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
      setIdentity: (identity: SessionIdentity | null) => useSessionState.getState().setIdentity(identity),
      setConnectionIds: (sourceConnectionId: string | null, targetConnectionId: string | null) => useSessionState.getState().setConnectionIds(sourceConnectionId, targetConnectionId),
    };
-   export const useSessionIdentity = () => useSessionState((state) => state.identity);
-   export const useConnectionIds = () => useSessionState((state) => [state.sourceConnectionId, state.targetConnectionId] as const);
+    export const useSessionIdentity = () => useSessionState((state) => state.identity);
+    export const useSourceConnectionId = () => useSessionState((state) => state.sourceConnectionId);
+    export const useTargetConnectionId = () => useSessionState((state) => state.targetConnectionId);
    ```
 
    Create the separately persisted preference store below. It exports only named setters and selectors. `partialize` stays even though these are currently the only data fields: omitting it persists every future state field by default, exactly the accident this boundary prevents.
 
    ```ts
    import { create } from 'zustand';
-   import { persist } from 'zustand/middleware';
+    import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 
    type ColorScheme = 'system' | 'light' | 'dark';
    type PreferencesState = {
@@ -291,26 +302,37 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
      setReducedMotion: (reducedMotion: boolean) => void;
    };
 
-   const usePreferencesState = create<PreferencesState>()(persist(
-     (set) => ({
-       colorScheme: 'system',
-       reducedMotion: false,
-       setColorScheme: (colorScheme) => set({ colorScheme }),
-       setReducedMotion: (reducedMotion) => set({ reducedMotion }),
-     }),
-     {
-       name: 'datapitcher.preferences',
-       partialize: ({ colorScheme, reducedMotion }) => ({ colorScheme, reducedMotion }),
-     },
-   ));
+    export function createPreferencesStore(storage: StateStorage = window.localStorage) {
+      const usePreferencesState = create<PreferencesState>()(persist(
+        (set) => ({
+          colorScheme: 'system',
+          reducedMotion: false,
+          setColorScheme: (colorScheme) => set({ colorScheme }),
+          setReducedMotion: (reducedMotion) => set({ reducedMotion }),
+        }),
+        {
+          name: 'datapitcher.preferences',
+          storage: createJSONStorage(() => storage),
+          partialize: ({ colorScheme, reducedMotion }) => ({ colorScheme, reducedMotion }),
+        },
+      ));
+      return {
+        actions: {
+          setColorScheme: (colorScheme: ColorScheme) => usePreferencesState.getState().setColorScheme(colorScheme),
+          setReducedMotion: (reducedMotion: boolean) => usePreferencesState.getState().setReducedMotion(reducedMotion),
+        },
+        useColorScheme: () => usePreferencesState((state) => state.colorScheme),
+        useReducedMotion: () => usePreferencesState((state) => state.reducedMotion),
+      };
+    }
 
-   export const preferenceActions = {
-     setColorScheme: (colorScheme: ColorScheme) => usePreferencesState.getState().setColorScheme(colorScheme),
-     setReducedMotion: (reducedMotion: boolean) => usePreferencesState.getState().setReducedMotion(reducedMotion),
-   };
-   export const useColorScheme = () => usePreferencesState((state) => state.colorScheme);
-   export const useReducedMotion = () => usePreferencesState((state) => state.reducedMotion);
-   ```
+    const preferences = createPreferencesStore();
+    export const preferenceActions = preferences.actions;
+    export const useColorScheme = preferences.useColorScheme;
+    export const useReducedMotion = preferences.useReducedMotion;
+    ```
+
+    `createJSONStorage` is the explicit persistence adapter. Its production instance receives `window.localStorage`, never the ambient `localStorage` global; the test injects an in-memory `StateStorage` double. The factory result still exposes only named actions and selectors, never the underlying Zustand hook or a generic patch operation.
 
    Neither store may import generated types or any other transport type; that makes large server payloads unstorable by construction. Access tokens are not a session field, not a preference, never in localStorage, and never in a URL.
 
