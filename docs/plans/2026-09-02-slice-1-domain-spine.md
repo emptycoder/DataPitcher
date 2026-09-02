@@ -798,7 +798,6 @@ public sealed class DependencyClosureTests
     [Fact] public async Task Closure_WhenParticipantHasNoStableKeySelection_RejectsRequestBeforeSeeding() { var c=T("C"); var s=new InMemoryClosureStore(); var request=new ClosureRequest([Root(c,1)],[],new Dictionary<TableDefinition,StableKeySelection>()); await Assert.ThrowsAsync<BlockedTableException>(()=>new DependencyClosure(s).ComputeAsync(request,CancellationToken.None)); Assert.Equal(0,s.SeedCalls); }
     [Fact] public async Task Closure_WhenRootUsesExplicitNonNullableUniqueStableKey_IncludesIt() { var unique=new UniqueConstraint("UQ_Code",["Code"]); var c=new TableDefinition("dbo","C",[new ColumnDefinition("Code",typeof(string),false)],null,[unique]); var s=new InMemoryClosureStore(); var request=new ClosureRequest([Root(c,1)],[],new Dictionary<TableDefinition,StableKeySelection> { [c]=StableKeySelector.Select(c,"UQ_Code") }); var r=await new DependencyClosure(s).ComputeAsync(request,CancellationToken.None); Assert.True(r.Contains(c,K(1))); }
     [Fact] public async Task Closure_WhenSelectedUniqueContainsNullableColumn_RejectsRequestBeforeSeeding() { var unique=new UniqueConstraint("UQ_Code",["Code"]); var c=new TableDefinition("dbo","C",[new ColumnDefinition("Code",typeof(string),true)],null,[unique]); var s=new InMemoryClosureStore(); var request=new ClosureRequest([Root(c,1)],[],new Dictionary<TableDefinition,StableKeySelection> { [c]=StableKeySelector.Select(c,"UQ_Code") }); await Assert.ThrowsAsync<BlockedTableException>(()=>new DependencyClosure(s).ComputeAsync(request,CancellationToken.None)); Assert.Equal(0,s.SeedCalls); }
-    [Fact] public async Task Closure_WhenSelectedUniqueHasNoColumns_RejectsRequestBeforeSeeding() { var unique=new UniqueConstraint("UQ_Empty",[]); var c=new TableDefinition("dbo","C",[],null,[unique]); var s=new InMemoryClosureStore(); var request=new ClosureRequest([Root(c,1)],[],new Dictionary<TableDefinition,StableKeySelection> { [c]=StableKeySelector.Select(c,"UQ_Empty") }); await Assert.ThrowsAsync<BlockedTableException>(()=>new DependencyClosure(s).ComputeAsync(request,CancellationToken.None)); Assert.Equal(0,s.SeedCalls); }
     [Fact] public async Task Closure_WhenParentSatisfiedOnOnePathButRequiredOnAnother_StillTransfersSharedAncestor() { var r=T("R"); var a=T("A"); var b=T("B"); var x=T("X"); var ra=E(F(r,a)); var rb=E(F(r,b)); var ax=E(F(a,x)); var bx=E(F(b,x)); var s=new InMemoryClosureStore(); s.MarkTarget(a,K(2)); s.SetTargetConstraint(ax,Target(ax)); s.Link(ra,(K(1),K(2))); s.Link(rb,(K(1),K(3))); s.Link(ax,(K(2),K(4))); s.Link(bx,(K(3),K(4))); var result=await Run(s,[ra,rb,ax,bx],Root(r,1)); Assert.True(result.Contains(x,K(4))); }
     [Fact] public async Task Closure_WhenAncestorDemandedByTwoIncludedPaths_AppearsExactlyOnce() { var r=T("R"); var a=T("A"); var b=T("B"); var x=T("X"); var ra=E(F(r,a)); var rb=E(F(r,b)); var ax=E(F(a,x)); var bx=E(F(b,x)); var s=new InMemoryClosureStore(); s.Link(ra,(K(1),K(2))); s.Link(rb,(K(1),K(3))); s.Link(ax,(K(2),K(4))); s.Link(bx,(K(3),K(4))); var result=await Run(s,[ra,rb,ax,bx],Root(r,1)); Assert.Single(result.Rows.Where(row=>row.Table==x && row.Key==K(4))); }
     [Fact] public void StableKey_WhenReconstructedWithSameComponents_IsFoundInClosureResult() { var table=T("T"); var result=new ClosureResult([new ClosureRow(table,K(1),0)],[]); Assert.True(result.Contains(table,K(1))); }
@@ -894,7 +893,7 @@ public sealed class DependencyClosure(IClosureStore store)
 
 Run: `dotnet test --filter "FullyQualifiedName~DependencyClosureTests"`
 
-Expected: `Passed: 32. Failed: 0.`
+Expected: `Passed: 31. Failed: 0.`
 
 - [ ] **Step 5: Commit**
 
@@ -1061,6 +1060,7 @@ The coverage script runs the full solution test inventory as part of its gate; t
 - Added: all definitions introduced in Tasks 4–7 defensively copy collection inputs and expose non-writable collections, with same-task mutation tests.
 - Added: overlapping root selections deduplicate in `Closure_WhenTwoRootsSelectTheSameKey_IncludesItOnce` in Task 7.
 - Deferred: a no-per-key-target-probe assertion, because the provider's set-based probe implementation is Docker-blocked; add call-count instrumentation with that provider slice.
+- Removed: a Task 7 closure-level test asserting rejection of a zero-column selected unique constraint was removed, because `UniqueConstraint` throws on construction when given an empty column list — a zero-column key would collapse every row in a table to one shared identity, the worst possible failure mode for this product — so the state the test constructed is unreachable. That invariant is enforced earlier, at `UniqueConstraint` construction, and is pinned by `UniqueConstraint_WhenColumnListIsEmpty_IsRejected`. A defence-in-depth check at the closure level would be untestable, since no caller can ever produce a `UniqueConstraint` with an empty column list to pass in.
 
 ## Self-Review
 

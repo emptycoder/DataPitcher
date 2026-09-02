@@ -1,3 +1,4 @@
+
 # Execution State
 
 As of 2026-09-02.
@@ -7,9 +8,9 @@ and know exactly where to pick up — no other context required.
 
 ## Status
 
-The architecture and specification phase is **COMPLETE**. Implementation has
-**NOT** started. No production code exists anywhere in this repository. The
-repository currently contains documentation only.
+**Slice 1 (Domain Spine) is COMPLETE.** Slices 2 through 11 are **NOT started**.
+The provider-independent domain model exists and is fully tested. No database
+code, no API code, and no frontend code exists anywhere in this repository yet.
 
 ## Environment
 
@@ -17,76 +18,67 @@ repository currently contains documentation only.
 - Work branch: `architecture/foundation`, checked out in worktree
   `.worktrees/architecture-foundation` (git-ignored, not part of `main`'s tree).
 - .NET SDK 10.0.400 — available.
-- Node v25.2.1 — available.
-- Docker — **NOT INSTALLED**. The `docker` command is not found on this machine.
+- Node — available.
+- Docker — **NOT INSTALLED on PATH**. The `docker` command is not found. Docker
+  Desktop is present on disk but its CLI is not on `PATH` and its daemon is not
+  running.
+- The machine is **arm64 Apple Silicon**, a known risk for SQL Server container
+  images, which must be verified before the SQL Server slice is attempted.
 
-## Completed
+## What Slice 1 delivered
 
-Thirteen documents have been produced:
+Eight tasks, executed test-first per `docs/plans/2026-09-02-slice-1-domain-spine.md`:
 
-- `docs/architecture.md` — system map, solution structure, dependency rules.
-- `docs/dependency-semantics.md` — the normative closure and satisfaction rules.
-- `docs/spec-deviations.md` — the 17 deliberate deviations from the original specification.
-- `docs/threat-model.md` — 30 design-phase threats.
-- `docs/roadmap.md` — 11 slices with Docker status and exit gates per slice.
-- `docs/plans/2026-09-02-slice-1-domain-spine.md` — the task-by-task TDD plan for Slice 1.
-- `docs/adr/0001` — the resume checkpoint lives in the target database, with fencing.
-- `docs/adr/0002` — exact-set verification scope and limits.
-- `docs/adr/0003` — referential cycle strategy per provider.
-- `docs/adr/0004` — a single demand-driven closure, superseding the two-phase design.
-- `docs/adr/0005` — native bulk writers and the limits of LINQ to DB.
-- `docs/adr/0006` — authentication and authorization architecture.
-- `docs/adr/0007` — frontend architecture and coverage isolation.
+1. **Solution scaffold** — `DataPitcher.sln`, `DataPitcher.Core`, `DataPitcher.UnitTests`, `Directory.Build.props`, `global.json`, building and testing green with zero tests collected.
+2. **`StableKey` value type** — composite key with binary and ordinal-ordering semantics, giving deterministic, locale-independent comparison and hashing across composite column values.
+3. **Schema model with stable-key selection** — table, column, foreign key and unique-constraint definitions, plus the logic that selects which constraint on a table serves as its stable key.
+4. **Dependency graph** — child-to-parent edges built from foreign keys, with bidirectional adjacency for traversal in both directions.
+5. **Tarjan strongly connected components** — with condensation of cycles into single nodes and a transfer-ordered topological layering of the condensed graph.
+6. **Closure store abstraction** — the `IClosureStore` interface plus an in-memory fake implementation, giving a seam for the algorithm to be tested without any real database.
+7. **Demand-driven, target-aware closure algorithm** — computes the exact-set closure of rows to transfer, pruning subtrees already satisfied in the target when the relevant foreign key is enforced and trusted.
+8. **Architecture tests, coverage gate scripts, and a CI workflow** — enforcing dependency-direction rules and a 100% coverage bar on every future change.
 
-## Quality gate status
+## Verified quality gates
 
-Stated honestly: no build exists, no tests exist, no coverage has been
-measured, no lint is configured. Every quality gate is **NOT YET APPLICABLE**
-— none are passing, none are failing, because there is nothing yet to run
-them against. No claim of passing anything has been made anywhere in this
-repository.
+- `dotnet test DataPitcher.sln`: **118 unit tests + 3 architecture tests = 121 tests, 0 failing.**
+- `dotnet build`: clean, **zero warnings**, under warnings-as-errors.
+- `./scripts/test-all.sh`: **100% line coverage, 100% branch coverage, 103 of 103 methods covered**, gate script exits 0.
+- This gate is known to work, not merely assumed to: it was observed **FAILING at 96.42%** coverage before the final equality-contract tests were added, and passed only after those tests closed the gap. That failure-then-pass sequence is the evidence the gate actually enforces something.
+
+## Evidence from independent review
+
+Every one of the eight tasks was reviewed by an agent that did not write it, and every review found real defects. The most significant findings:
+
+- Binary stable keys were unconstructible as originally implemented.
+- String-based key ordering depended on machine locale rather than being deterministic.
+- A nullable unique constraint was initially accepted as a valid row identity.
+- A zero-column unique constraint would have collapsed every row in a table to a single shared identity.
+- The dependency graph did not canonicalise edge endpoints, risking duplicate/divergent edge representations.
+- Topological layers were inverted relative to transfer order.
+- Graph output was not order-invariant, risking nondeterministic transfer ordering across runs.
+- Closure root ordering could silently suppress the default safety blocker under certain input orderings.
+- The closure relationship type lacked value equality — undetected, this would have destroyed exact-set minimality the first time a real provider slice relied on set deduplication.
+
+Separately, a differential test ran **25,000 randomly generated schemas** through this implementation and an independently written reference implementation of the same closure semantics, and found **zero extra rows and zero missing rows** across all of them.
 
 ## Blockers
 
-One genuine external blocker: **Docker is not installed** on this machine, so
-Testcontainers integration tests, Docker Compose end-to-end runs, and
-Playwright browser tests cannot execute here. Under the original
-specification's own definition, an inaccessible Docker daemon counts as a
-genuine external blocker, not a shortcut taken by choice. Slice 1 was
-deliberately scoped to require none of it, so this blocker does not stop the
-next executable action below.
+**Docker is unavailable** (not on PATH, daemon not running), blocking Testcontainers integration tests, Docker Compose end-to-end runs, and Playwright browser tests. Slice 1 was deliberately scoped to need none of this. The `IClosureStore` abstraction from Task 6 is the seam that makes this tractable going forward: the closure algorithm's existing tests are written against the interface, not the in-memory fake, so they can be re-run unchanged against a real database-backed implementation once Slice 5 introduces one.
 
-## Key decisions a future session must not silently reverse
+## Key decisions that must not be silently reversed
 
-1. A single demand-driven closure is used, not the specification's original
-   two-phase candidate-then-final design (ADR 0004).
-2. Target-satisfied pruning requires the target foreign key to be both
-   enforced and trusted; otherwise the row must be transferred rather than
-   pruned (ADR 0004).
-3. The authoritative resume checkpoint lives in the target database inside
-   the apply transaction; the control database mirror must never be
-   consulted for correctness (ADR 0001).
-4. LINQ to DB is excluded from the transfer write path because its bulk
-   copy silently degrades under some conditions and does not report which
-   strategy it actually used (ADR 0005).
-5. StrictExact verification is blocked when triggers exist on a planned
-   target table, and is unavailable at all for DirectFast (ADR 0002).
+1. A single demand-driven closure is used, not the specification's original two-phase candidate-then-final design (ADR 0004).
+2. Target-satisfied pruning requires the target foreign key to be both enforced and trusted; otherwise the row must be transferred rather than pruned (ADR 0004).
+3. The authoritative resume checkpoint lives in the target database inside the apply transaction; the control database mirror must never be consulted for correctness (ADR 0001).
+4. LINQ to DB is excluded from the transfer write path because its bulk copy silently degrades under some conditions and does not report which strategy it actually used (ADR 0005).
+5. StrictExact verification is blocked when triggers exist on a planned target table, and is unavailable at all for DirectFast (ADR 0002).
+6. Stable keys do **not** normalize CLR types; the type of each key component is taken as-is from the schema.
+7. Virtual stable keys are deferred — not implemented in Slice 1.
+8. A malformed schema degrades to a `Blocked` result rather than throwing an exception.
+9. Topological layer index 0 is the parents, ordered in transfer order.
+10. Graph and closure output is canonically ordered using ordinal comparison, so results are deterministic across runs.
+11. Overlapping closure roots with differing conflict policies are rejected rather than silently resolved.
 
 ## Exact next executable action
 
-Open `docs/plans/2026-09-02-slice-1-domain-spine.md` and execute **Task 1,
-Step 1**: create `DataPitcher.sln`, the `DataPitcher.Core` project, the
-`DataPitcher.UnitTests` project, `Directory.Build.props`, and `global.json`.
-Then verify that `dotnet build` and `dotnet test` both succeed with zero
-tests collected. Slice 1 requires no Docker and can proceed immediately —
-this is not blocked by the Docker gap above.
-
-## Not verified
-
-Stated plainly, as an honesty record: these documents were produced by
-delegated agents, and their internal prose has not been independently
-re-read line by line by the coordinating session. A separate cross-document
-consistency review was run, and its findings are recorded in the commit
-history rather than restated here. Do not treat the existence of these
-documents as evidence of correctness beyond what that review actually
-checked — confidence should not be overstated in either direction.
+Begin **Slice 2: the control database and job state machine**, per `docs/roadmap.md`. This slice requires no Docker, because it uses SQLite running in-process. It has **no task-level plan yet** — one must be written first, following the same task-by-task TDD format used in `docs/plans/2026-09-02-slice-1-domain-spine.md`, before any implementation work begins.
