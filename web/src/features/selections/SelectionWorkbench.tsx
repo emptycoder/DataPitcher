@@ -21,6 +21,7 @@ type SelectionWorkbenchProps = {
   schema: SelectionSchema;
   onVisualChange: (selection: VisualSelection) => void;
   onRequestSqlSnapshot: () => void;
+  previewTab?: ReactNode;
 };
 
 const tabs: readonly { name: string; value: WorkbenchTab }[] = [
@@ -30,7 +31,7 @@ const tabs: readonly { name: string; value: WorkbenchTab }[] = [
   { name: 'Explain', value: 'explain' },
 ];
 
-export function SelectionWorkbench({ tables, root, selectionName, activeTab, preferences, onSelectRoot, onShowColumns, onSelectionNameChange, onTabChange, rightRail, selection, schema, onVisualChange, onRequestSqlSnapshot }: SelectionWorkbenchProps) {
+export function SelectionWorkbench({ tables, root, selectionName, activeTab, preferences, onSelectRoot, onShowColumns, onSelectionNameChange, onTabChange, rightRail, selection, schema, onVisualChange, onRequestSqlSnapshot, previewTab }: SelectionWorkbenchProps) {
   const [search, setSearch] = useState('');
   const validationMessages = validateVisualSelection(selection, schema);
 
@@ -52,6 +53,7 @@ export function SelectionWorkbench({ tables, root, selectionName, activeTab, pre
           </nav>
         </header>
         {activeTab === 'visual' ? <VisualBuilder selection={selection} schema={schema} validationMessages={validationMessages} onChange={onVisualChange} onRequestSqlSnapshot={onRequestSqlSnapshot} /> : null}
+        {activeTab === 'preview' ? previewTab : null}
       </section>
       <aside aria-label="Selection cart">{rightRail}</aside>
     </section>
