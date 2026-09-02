@@ -30,11 +30,14 @@
 - `src/DataPitcher.Core/Closure/DependencyClosure.cs` — target-aware generation loop.
 - `tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj` — Core unit-test assembly.
 - `tests/DataPitcher.UnitTests/Identity/StableKeyTests.cs` — key equality and ordering tests.
+- `tests/DataPitcher.UnitTests/Identity/StableKeyByteArrayTests.cs` — byte-array stable-key tests.
+- `tests/DataPitcher.UnitTests/Identity/StableKeyDefectTests.cs` — culture-independent ordering and equality-ordering consistency tests.
 - `tests/DataPitcher.UnitTests/Schema/ForeignKeyDefinitionTests.cs` — FK invariant test.
 - `tests/DataPitcher.UnitTests/Schema/StableKeySelectorTests.cs` — key-selection tests.
 - `tests/DataPitcher.UnitTests/Graph/DependencyGraphTests.cs` — graph-edge tests.
 - `tests/DataPitcher.UnitTests/Graph/TarjanSccTests.cs` — SCC and condensation tests.
 - `tests/DataPitcher.UnitTests/Closure/InMemoryClosureStore.cs` — deterministic store fake.
+- `tests/DataPitcher.UnitTests/Closure/ClosureModelsTests.cs` — closure-model immutability tests.
 - `tests/DataPitcher.UnitTests/Closure/DependencyClosureTests.cs` — closure behavior fixtures.
 - `tests/DataPitcher.ArchitectureTests/DataPitcher.ArchitectureTests.csproj` — project-boundary tests.
 - `tests/DataPitcher.ArchitectureTests/DependencyRuleTests.cs` — reference-rule assertions.
@@ -77,7 +80,7 @@ Run `dotnet new sln --name DataPitcher --format sln` (SDK 10.0.400 defaults `dot
 
 Run: `dotnet build && dotnet test`
 
-Expected: build succeeds; test output reports `Total tests: 0. Passed: 0. Failed: 0.`
+Expected: build succeeds; test output states that no test is available in the assembly. `dotnet test` exits with code 0; that exit code is the check for this empty test inventory.
 
 - [ ] **Step 3: Commit**
 
@@ -88,7 +91,7 @@ Run: `git add DataPitcher.sln Directory.Build.props global.json src/DataPitcher.
 **Files:**
 - Create: `src/DataPitcher.Core/Identity/StableKey.cs`
 - Modify: none
-- Test: `tests/DataPitcher.UnitTests/Identity/StableKeyTests.cs`
+- Test: `tests/DataPitcher.UnitTests/Identity/StableKeyTests.cs`, `tests/DataPitcher.UnitTests/Identity/StableKeyByteArrayTests.cs`, `tests/DataPitcher.UnitTests/Identity/StableKeyDefectTests.cs`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -131,20 +134,153 @@ public sealed class StableKeyTests
 }
 ```
 
+`tests/DataPitcher.UnitTests/Identity/StableKeyByteArrayTests.cs`:
+
+```csharp
+using DataPitcher.Core.Identity;
+using Xunit;
+
+namespace DataPitcher.UnitTests.Identity;
+
+public sealed class StableKeyByteArrayTests
+{
+    [Fact]
+    public void StableKey_WhenValueIsByteArray_CanBeConstructed()
+    {
+        byte[] value = [1, 2, 3];
+        var key = new StableKey([new("A", value)]);
+        Assert.NotNull(key);
+    }
+
+    [Fact]
+    public void StableKey_WhenByteArrayValuesAreStructurallyEqual_KeysAreEqual()
+    {
+        byte[] left = [1, 2, 3];
+        byte[] right = [1, 2, 3];
+        var leftKey = new StableKey([new("A", left)]);
+        var rightKey = new StableKey([new("A", right)]);
+
+        Assert.Equal(leftKey, rightKey);
+        Assert.Equal(leftKey.GetHashCode(), rightKey.GetHashCode());
+        Assert.Single(new HashSet<StableKey> { leftKey, rightKey });
+    }
+
+    [Fact]
+    public void StableKey_WhenByteArrayValuesDiffer_OrdersDeterministically()
+    {
+        byte[] lowerValue = [1, 2, 3];
+        byte[] higherValue = [1, 2, 4];
+        var lower = new StableKey([new("A", lowerValue)]);
+        var higher = new StableKey([new("A", higherValue)]);
+
+        Assert.True(lower.CompareTo(higher) < 0);
+        Assert.True(higher.CompareTo(lower) > 0);
+    }
+}
+```
+
+`tests/DataPitcher.UnitTests/Identity/StableKeyDefectTests.cs`:
+
+```csharp
+using System.Globalization;
+using System.Linq;
+using DataPitcher.Core.Identity;
+using Xunit;
+
+namespace DataPitcher.UnitTests.Identity;
+
+public sealed class StableKeyDefectTests
+{
+    [Fact]
+    public void StableKey_WhenSortingStringValues_OrderIsOrdinalAndCultureIndependent()
+    {
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            string[] values = ["apple", "Banana", "cherry"];
+            var expectedOrdinal = values.OrderBy(v => v, StringComparer.Ordinal).ToArray();
+
+            CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+            var invariantOrder = SortUnderCurrentCulture(values);
+
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("sv-SE");
+            var svOrder = SortUnderCurrentCulture(values);
+
+            Assert.Equal(expectedOrdinal, invariantOrder);
+            Assert.Equal(expectedOrdinal, svOrder);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
+    }
+
+    private static string[] SortUnderCurrentCulture(string[] values)
+    {
+        var keys = values.Select(v => new StableKey([new("A", v)])).ToList();
+        keys.Sort();
+        return keys.Select(k => (string)k.Components[0].Value!).ToArray();
+    }
+
+    public static IEnumerable<object[]> EqualValuePairs()
+    {
+        yield return new object[] { 1.0m, 1.00m };
+        yield return new object[]
+        {
+            new DateTimeOffset(2024, 1, 1, 12, 0, 0, TimeSpan.FromHours(2)),
+            new DateTimeOffset(2024, 1, 1, 10, 0, 0, TimeSpan.Zero),
+        };
+        yield return new object[] { 0.0, -0.0 };
+    }
+
+    [Theory]
+    [MemberData(nameof(EqualValuePairs))]
+    public void StableKey_WhenValuesAreEqual_CompareToReturnsZero(IComparable left, IComparable right)
+    {
+        var leftKey = new StableKey([new("A", left)]);
+        var rightKey = new StableKey([new("A", right)]);
+
+        Assert.True(leftKey.Equals(rightKey));
+        Assert.Equal(0, leftKey.CompareTo(rightKey));
+
+        var hashSet = new HashSet<StableKey> { leftKey, rightKey };
+        var sortedSet = new SortedSet<StableKey> { leftKey, rightKey };
+        Assert.Equal(hashSet.Count, sortedSet.Count);
+    }
+}
+```
+
+The byte-array tests were first written against the former `IComparable?` component constraint, where they correctly REDed with CS1503, `cannot convert from 'byte[]' to 'System.IComparable?'`; a compile failure is the correct RED when the missing capability is a type constraint.
+
 - [ ] **Step 2: Run them and confirm the right failure**
 
-Run: `dotnet test --filter "FullyQualifiedName~StableKeyTests"`
+Run: `dotnet test --filter "FullyQualifiedName~StableKey"`
 
-Expected: compilation fails with `The type or namespace name 'Identity' does not exist in the namespace 'DataPitcher.Core'`.
+Expected: compilation fails with CS0234: `The type or namespace name 'Core' does not exist in the namespace 'DataPitcher'`. At this point the Core project contains no types, so the namespace fails one level higher than `Identity`.
 
 - [ ] **Step 3: Write the minimal implementation**
 
 ```csharp
-using System.Globalization;
-
 namespace DataPitcher.Core.Identity;
 
-public readonly record struct KeyComponent(string Column, IComparable? Value);
+public readonly record struct KeyComponent(string Column, object? Value)
+{
+    public bool Equals(KeyComponent other) =>
+        StringComparer.Ordinal.Equals(Column, other.Column) &&
+        (Value is byte[] bytes && other.Value is byte[] otherBytes
+            ? bytes.AsSpan().SequenceEqual(otherBytes)
+            : EqualityComparer<object?>.Default.Equals(Value, other.Value));
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Column, StringComparer.Ordinal);
+        if (Value is byte[] bytes)
+            foreach (var value in bytes) hash.Add(value);
+        else hash.Add(Value);
+        return hash.ToHashCode();
+    }
+}
 
 public sealed class StableKey : IEquatable<StableKey>, IComparable<StableKey>
 {
@@ -168,27 +304,32 @@ public sealed class StableKey : IEquatable<StableKey>, IComparable<StableKey>
         }
         return _components.Length.CompareTo(other._components.Length);
     }
-    private static int CompareValues(IComparable? left, IComparable? right)
+    private static int CompareValues(object? left, object? right)
     {
         if (left is null) return right is null ? 0 : -1;
         if (right is null) return 1;
         var type = StringComparer.Ordinal.Compare(left.GetType().AssemblyQualifiedName, right.GetType().AssemblyQualifiedName);
         if (type != 0) return type;
-        var result = left.CompareTo(right);
-        return result != 0 ? result : StringComparer.Ordinal.Compare(Convert.ToString(left, CultureInfo.InvariantCulture), Convert.ToString(right, CultureInfo.InvariantCulture));
+        if (left is string leftString && right is string rightString) return StringComparer.Ordinal.Compare(leftString, rightString);
+        if (left is byte[] leftBytes && right is byte[] rightBytes) return leftBytes.AsSpan().SequenceCompareTo(rightBytes);
+        return ((IComparable)left).CompareTo(right);
     }
 }
 ```
 
+`KeyComponent.Value` is `object?`, not `IComparable?`: `byte[]` does not implement `IComparable`, so the former type made SQL Server `rowversion`, `binary(n)`, and `varbinary(n)` and PostgreSQL `bytea` stable keys impossible to construct at compile time. `KeyComponent` must hand-write `Equals` and `GetHashCode` with a structural byte-array case. This is a record struct, so compiler-generated equality would use the default equality comparer, which degrades to reference equality for `object?` arrays and silently breaks deduplication; this is the single easiest trap to get wrong here.
+
+String values compare ordinally and the string-conversion tie-break is deleted. Culture-sensitive comparison would make resumable keyset-pagination ordering depend on host locale, while the tie-break manufactured non-zero orderings for equal values so hash and sorted sets disagreed on element count. Apply ordinal string comparison before deleting the tie-break: culture comparison can return zero for strings that are genuinely not equal, so deleting it first introduces a worse defect.
+
 - [ ] **Step 4: Run them and confirm they pass**
 
-Run: `dotnet test --filter "FullyQualifiedName~StableKeyTests"`
+Run: `dotnet test --filter "FullyQualifiedName~StableKey"`
 
-Expected: `Passed: 4. Failed: 0.`
+Expected: `Passed: 11. Failed: 0.`
 
 - [ ] **Step 5: Commit**
 
-Run: `git add src/DataPitcher.Core/Identity/StableKey.cs tests/DataPitcher.UnitTests/Identity/StableKeyTests.cs && git commit -m "feat: add stable key value type"`
+Run: `git add src/DataPitcher.Core/Identity/StableKey.cs tests/DataPitcher.UnitTests/Identity/StableKeyTests.cs tests/DataPitcher.UnitTests/Identity/StableKeyByteArrayTests.cs tests/DataPitcher.UnitTests/Identity/StableKeyDefectTests.cs && git commit -m "feat: add stable key value type"`
 
 ### Task 3: Schema model and stable-key selection
 
@@ -317,6 +458,15 @@ public sealed class DependencyGraphTests
     { var employees = T("Employees"); var fk = F("Manager", employees, employees); var graph = new DependencyGraph([employees], [fk]); Assert.Equal(fk, Assert.Single(graph.DependenciesOf(employees))); }
     [Fact] public void DependencyGraph_WhenForeignKeyUsesRehydratedTableDefinitions_UsesTheMatchingGraphNodes()
     { var orders = T("Orders"); var customers = T("Customers"); var fk = F("Customer", T("Orders"), T("Customers")); var graph = new DependencyGraph([orders, customers], [fk]); Assert.Equal(fk, Assert.Single(graph.DependenciesOf(orders))); Assert.Equal(fk, Assert.Single(graph.DependentsOf(customers))); }
+    [Fact] public void DependencyGraph_WhenInputsOrReturnedViewsAreMutated_RemainsImmutable()
+    {
+        var orders = T("Orders"); var customers = T("Customers"); var foreignKey = F("Customer", orders, customers); var tables = new List<TableDefinition> { orders, customers }; var foreignKeys = new List<ForeignKeyDefinition> { foreignKey };
+        var graph = new DependencyGraph(tables, foreignKeys); tables.Clear(); foreignKeys.Clear();
+        Assert.Equal(2, graph.Tables.Count); Assert.Single(graph.DependenciesOf(orders));
+        Assert.Throws<NotSupportedException>(() => ((IList<TableDefinition>)graph.Tables).RemoveAt(0));
+        Assert.Throws<NotSupportedException>(() => ((IList<ForeignKeyDefinition>)graph.DependenciesOf(orders)).Add(foreignKey));
+        Assert.Throws<NotSupportedException>(() => ((IList<ForeignKeyDefinition>)graph.DependentsOf(customers)).Add(foreignKey));
+    }
     private static TableDefinition T(string name) => new("dbo", name, [], null, []);
     private static ForeignKeyDefinition F(string name, TableDefinition child, TableDefinition parent) => new(name, child, parent, ["Id"], ["Id"], true, true);
 }
@@ -335,12 +485,13 @@ using DataPitcher.Core.Schema;
 namespace DataPitcher.Core.Graph;
 public sealed class DependencyGraph
 {
-    private readonly Dictionary<TableDefinition, List<ForeignKeyDefinition>> _dependencies;
-    private readonly Dictionary<TableDefinition, List<ForeignKeyDefinition>> _dependents;
+    private readonly IReadOnlyDictionary<TableDefinition, IReadOnlyList<ForeignKeyDefinition>> _dependencies;
+    private readonly IReadOnlyDictionary<TableDefinition, IReadOnlyList<ForeignKeyDefinition>> _dependents;
     public DependencyGraph(IEnumerable<TableDefinition> tables, IEnumerable<ForeignKeyDefinition> foreignKeys)
     {
-        Tables = tables.Distinct().ToArray(); _dependencies = Tables.ToDictionary(x => x, _ => new List<ForeignKeyDefinition>()); _dependents = Tables.ToDictionary(x => x, _ => new List<ForeignKeyDefinition>());
-        foreach (var foreignKey in foreignKeys) { _dependencies[foreignKey.ChildTable].Add(foreignKey); _dependents[foreignKey.ParentTable].Add(foreignKey); }
+        var tableList = tables.Distinct().ToArray(); var dependencies = tableList.ToDictionary(x => x, _ => new List<ForeignKeyDefinition>()); var dependents = tableList.ToDictionary(x => x, _ => new List<ForeignKeyDefinition>());
+        foreach (var foreignKey in foreignKeys.ToArray()) { dependencies[foreignKey.ChildTable].Add(foreignKey); dependents[foreignKey.ParentTable].Add(foreignKey); }
+        Tables = Array.AsReadOnly(tableList); _dependencies = dependencies.ToDictionary(x => x.Key, x => (IReadOnlyList<ForeignKeyDefinition>)Array.AsReadOnly(x.Value.ToArray())); _dependents = dependents.ToDictionary(x => x.Key, x => (IReadOnlyList<ForeignKeyDefinition>)Array.AsReadOnly(x.Value.ToArray()));
     }
     public IReadOnlyList<TableDefinition> Tables { get; }
     public IReadOnlyList<ForeignKeyDefinition> DependenciesOf(TableDefinition table) => _dependencies[table];
@@ -352,7 +503,7 @@ public sealed class DependencyGraph
 
 Run: `dotnet test --filter "FullyQualifiedName~DependencyGraphTests"`
 
-Expected: `Passed: 4. Failed: 0.`
+Expected: `Passed: 5. Failed: 0.`
 
 - [ ] **Step 5: Commit**
 
@@ -377,6 +528,16 @@ public sealed class TarjanSccTests
     [Fact] public void TarjanScc_WhenNodeHasOnlySelfEdge_DoesNotCreateMultiNodeComponent() { var (g, _, _, _) = G(("A", "A")); Assert.Single(Assert.Single(TarjanScc.Find(g)).Tables); }
     [Fact] public void CondensedGraph_IsAlwaysAcyclic() { var (g, _, _, _) = G(("A", "B"), ("B", "A"), ("B", "C")); Assert.True(new CondensedGraph(g).IsAcyclic()); }
     [Fact] public void CondensedGraph_TopologicalLayers_RespectEveryEdge() { var (g, _, _, _) = G(("A", "B"), ("B", "C")); var condensed = new CondensedGraph(g); var layer = condensed.TopologicalLayers().SelectMany((x, i) => x.Select(id => (id, i))).ToDictionary(x => x.id, x => x.i); Assert.All(condensed.Edges, edge => Assert.True(layer[edge.From] < layer[edge.To])); }
+    [Fact] public void SccAndCondensedGraph_WhenInputOrReturnedViewsAreMutated_RemainImmutable()
+    {
+        var tables = new List<TableDefinition> { new("dbo", "A", [], null, []) }; var scc = new Scc(1, tables); tables.Clear();
+        Assert.Single(scc.Tables); Assert.Throws<NotSupportedException>(() => ((IList<TableDefinition>)scc.Tables).RemoveAt(0));
+        var (graph, _, _, _) = G(("A", "B")); var condensed = new CondensedGraph(graph); var layers = condensed.TopologicalLayers();
+        Assert.Throws<NotSupportedException>(() => ((IList<Scc>)condensed.Components).RemoveAt(0));
+        Assert.Throws<NotSupportedException>(() => ((IList<CondensedEdge>)condensed.Edges).RemoveAt(0));
+        Assert.Throws<NotSupportedException>(() => ((IList<IReadOnlyList<int>>)layers).RemoveAt(0));
+        Assert.Throws<NotSupportedException>(() => ((IList<int>)layers[0]).RemoveAt(0));
+    }
     private static (DependencyGraph Graph, TableDefinition A, TableDefinition B, TableDefinition C) G(params (string Child, string Parent)[] edges) { var names = edges.SelectMany(x => new[] { x.Child, x.Parent }).Distinct().ToArray(); var tables = names.ToDictionary(x => x, x => new TableDefinition("dbo", x, [], null, [])); return (new DependencyGraph(tables.Values, edges.Select((x, i) => new ForeignKeyDefinition($"FK{i}", tables[x.Child], tables[x.Parent], ["Id"], ["Id"], true, true))), tables.GetValueOrDefault("A")!, tables.GetValueOrDefault("B")!, tables.GetValueOrDefault("C")!); }
 }
 ```
@@ -393,14 +554,18 @@ Expected: compilation fails with `The name 'TarjanScc' does not exist in the cur
 // src/DataPitcher.Core/Graph/TarjanScc.cs
 using DataPitcher.Core.Schema;
 namespace DataPitcher.Core.Graph;
-public sealed record Scc(int Id, IReadOnlyList<TableDefinition> Tables);
+public sealed class Scc
+{
+    public Scc(int id, IEnumerable<TableDefinition> tables) { Id = id; Tables = Array.AsReadOnly(tables.ToArray()); }
+    public int Id { get; } public IReadOnlyList<TableDefinition> Tables { get; }
+}
 public static class TarjanScc
 {
     public static IReadOnlyList<Scc> Find(DependencyGraph graph)
     {
         var index = 0; var stack = new Stack<TableDefinition>(); var active = new HashSet<TableDefinition>(); var indices = new Dictionary<TableDefinition, int>(); var low = new Dictionary<TableDefinition, int>(); var result = new List<Scc>();
         void Visit(TableDefinition table) { indices[table] = low[table] = index++; stack.Push(table); active.Add(table); foreach (var edge in graph.DependenciesOf(table)) { var parent = edge.ParentTable; if (!indices.ContainsKey(parent)) { Visit(parent); low[table] = Math.Min(low[table], low[parent]); } else if (active.Contains(parent)) low[table] = Math.Min(low[table], indices[parent]); } if (low[table] != indices[table]) return; var members = new List<TableDefinition>(); TableDefinition member; do { member = stack.Pop(); active.Remove(member); members.Add(member); } while (!ReferenceEquals(member, table)); result.Add(new Scc(result.Count, members)); }
-        foreach (var table in graph.Tables) if (!indices.ContainsKey(table)) Visit(table); return result;
+        foreach (var table in graph.Tables) if (!indices.ContainsKey(table)) Visit(table); return Array.AsReadOnly(result.ToArray());
     }
 }
 ```
@@ -411,10 +576,10 @@ namespace DataPitcher.Core.Graph;
 public sealed record CondensedEdge(int From, int To);
 public sealed class CondensedGraph
 {
-    public CondensedGraph(DependencyGraph graph) { Components = TarjanScc.Find(graph); var owner = Components.SelectMany(c => c.Tables.Select(t => (t, c.Id))).ToDictionary(x => x.t, x => x.Id); Edges = graph.Tables.SelectMany(graph.DependenciesOf).Select(f => new CondensedEdge(owner[f.ChildTable], owner[f.ParentTable])).Where(e => e.From != e.To).Distinct().ToArray(); }
+    public CondensedGraph(DependencyGraph graph) { Components = Array.AsReadOnly(TarjanScc.Find(graph).ToArray()); var owner = Components.SelectMany(c => c.Tables.Select(t => (t, c.Id))).ToDictionary(x => x.t, x => x.Id); Edges = Array.AsReadOnly(graph.Tables.SelectMany(graph.DependenciesOf).Select(f => new CondensedEdge(owner[f.ChildTable], owner[f.ParentTable])).Where(e => e.From != e.To).Distinct().ToArray()); }
     public IReadOnlyList<Scc> Components { get; } public IReadOnlyList<CondensedEdge> Edges { get; }
     public bool IsAcyclic() { var seen = 0; var pending = Components.ToDictionary(c => c.Id, _ => 0); foreach (var edge in Edges) pending[edge.To]++; var queue = new Queue<int>(pending.Where(x => x.Value == 0).Select(x => x.Key)); while (queue.TryDequeue(out var id)) { seen++; foreach (var edge in Edges.Where(x => x.From == id)) if (--pending[edge.To] == 0) queue.Enqueue(edge.To); } return seen == Components.Count; }
-    public IReadOnlyList<IReadOnlyList<int>> TopologicalLayers() { var pending = Components.ToDictionary(c => c.Id, _ => 0); foreach (var edge in Edges) pending[edge.To]++; var layers = new List<IReadOnlyList<int>>(); var next = pending.Where(x => x.Value == 0).Select(x => x.Key).ToArray(); while (next.Length > 0) { layers.Add(next); next = next.SelectMany(id => Edges.Where(x => x.From == id)).Where(edge => --pending[edge.To] == 0).Select(edge => edge.To).ToArray(); } return layers; }
+    public IReadOnlyList<IReadOnlyList<int>> TopologicalLayers() { var pending = Components.ToDictionary(c => c.Id, _ => 0); foreach (var edge in Edges) pending[edge.To]++; var layers = new List<IReadOnlyList<int>>(); var next = pending.Where(x => x.Value == 0).Select(x => x.Key).ToArray(); while (next.Length > 0) { layers.Add(Array.AsReadOnly(next)); next = next.SelectMany(id => Edges.Where(x => x.From == id)).Where(edge => --pending[edge.To] == 0).Select(edge => edge.To).ToArray(); } return Array.AsReadOnly(layers.ToArray()); }
 }
 ```
 
@@ -422,7 +587,7 @@ public sealed class CondensedGraph
 
 Run: `dotnet test --filter "FullyQualifiedName~TarjanSccTests"`
 
-Expected: `Passed: 5. Failed: 0.`
+Expected: `Passed: 6. Failed: 0.`
 
 - [ ] **Step 5: Commit**
 
@@ -433,27 +598,52 @@ Run: `git add src/DataPitcher.Core/Graph/TarjanScc.cs src/DataPitcher.Core/Graph
 **Files:**
 - Create: `src/DataPitcher.Core/Closure/IClosureStore.cs`, `src/DataPitcher.Core/Closure/ClosureModels.cs`
 - Modify: none
-- Test: `tests/DataPitcher.UnitTests/Closure/InMemoryClosureStore.cs`
+- Test: `tests/DataPitcher.UnitTests/Closure/InMemoryClosureStore.cs`, `tests/DataPitcher.UnitTests/Closure/ClosureModelsTests.cs`
 
 - [ ] **Step 1: Write the failing store contract test and fake**
 
+`tests/DataPitcher.UnitTests/Closure/InMemoryClosureStore.cs`:
+
 ```csharp
+using System.Collections.ObjectModel;
 using DataPitcher.Core.Closure; using DataPitcher.Core.Identity; using DataPitcher.Core.Schema; using Xunit;
 namespace DataPitcher.UnitTests.Closure;
 public sealed class InMemoryClosureStore : IClosureStore
 {
-    private readonly HashSet<RowAddress> _target = []; private readonly Dictionary<RowAddress, int> _generations = []; private readonly Dictionary<(ClosureRelationship, StableKey), List<StableKey>> _links = []; private readonly Dictionary<ClosureRelationship, TargetConstraintState> _targetConstraints = [];
+    private sealed record SourceRow(StableKey Key, IReadOnlyDictionary<string, object?> Values);
+    private readonly HashSet<RowAddress> _target = []; private readonly Dictionary<RowAddress, int> _generations = []; private readonly Dictionary<(ClosureRelationship, StableKey), List<StableKey>> _links = []; private readonly Dictionary<ClosureRelationship, TargetConstraintState> _targetConstraints = []; private readonly Dictionary<TableDefinition, List<SourceRow>> _sourceRows = [];
+    public int SeedCalls { get; private set; }
     public void MarkTarget(TableDefinition table, params StableKey[] keys) { foreach (var key in keys) _target.Add(new(table, key)); }
     public void Link(ClosureRelationship relationship, params (StableKey From, StableKey To)[] pairs) { foreach (var pair in pairs) { var key = (relationship, pair.From); if (!_links.TryGetValue(key, out var values)) _links[key] = values = []; values.Add(pair.To); } }
     public void SetTargetConstraint(ClosureRelationship relationship, TargetConstraintState state) => _targetConstraints[relationship] = state;
-    public Task<IReadOnlyCollection<StableKey>> SeedRootKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken) => InsertAsync(table, keys, 0);
-    public Task<IReadOnlyDictionary<StableKey, TargetProbe>> ProbeTargetAsync(TableDefinition table, ClosureRelationship? incoming, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken)
+    public void AddRow(TableDefinition table, StableKey key, IReadOnlyDictionary<string, object?> values)
     {
-        var constraint = incoming is null ? null : _targetConstraints.GetValueOrDefault(incoming, new TargetConstraintState(false, false, false));
-        return Task.FromResult<IReadOnlyDictionary<StableKey, TargetProbe>>(keys.ToDictionary(key => key, key => new TargetProbe(_target.Contains(new(table, key)), constraint)));
+        if (!_sourceRows.TryGetValue(table, out var rows)) _sourceRows[table] = rows = [];
+        rows.Add(new SourceRow(key, new ReadOnlyDictionary<string, object?>(values.ToDictionary(x => x.Key, x => x.Value))));
     }
-    public Task<IReadOnlyCollection<StableKey>> ExpandAsync(ClosureRelationship relationship, IReadOnlyCollection<StableKey> fromKeys, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyCollection<StableKey>>(fromKeys.SelectMany(key => _links.GetValueOrDefault((relationship, key)) ?? []).Distinct().ToArray());
+    public Task<IReadOnlyCollection<StableKey>> SeedRootKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken) { SeedCalls++; return InsertAsync(table, keys, 0); }
+    public Task<IReadOnlyDictionary<StableKey, TargetProbe>> ProbeTargetAsync(TableDefinition table, IReadOnlyCollection<ClosureRelationship> outgoingRelationships, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken)
+    {
+        var states = outgoingRelationships.ToDictionary(relationship => relationship, relationship => _targetConstraints.GetValueOrDefault(relationship, new TargetConstraintState(relationship.Name, false, false, false)));
+        return Task.FromResult<IReadOnlyDictionary<StableKey, TargetProbe>>(keys.ToDictionary(key => key, key => new TargetProbe(_target.Contains(new(table, key)), states)));
+    }
+    public Task<IReadOnlyCollection<StableKey>> ExpandAsync(ClosureRelationship relationship, IReadOnlyCollection<StableKey> fromKeys, CancellationToken cancellationToken)
+    {
+        if (relationship.ForeignKey is { } foreignKey && !relationship.IsInbound && _sourceRows.ContainsKey(relationship.FromTable))
+            return Task.FromResult<IReadOnlyCollection<StableKey>>(fromKeys.SelectMany(key => Resolve(foreignKey, key)).Distinct().ToArray());
+        return Task.FromResult<IReadOnlyCollection<StableKey>>(fromKeys.SelectMany(key => _links.GetValueOrDefault((relationship, key)) ?? []).Distinct().ToArray());
+    }
     public Task<IReadOnlyCollection<StableKey>> InsertNewKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, int generation, CancellationToken cancellationToken) => InsertAsync(table, keys, generation);
+    private IEnumerable<StableKey> Resolve(ForeignKeyDefinition foreignKey, StableKey childKey)
+    {
+        if (!_sourceRows.TryGetValue(foreignKey.ChildTable, out var children) || !_sourceRows.TryGetValue(foreignKey.ParentTable, out var parents)) yield break;
+        foreach (var child in children.Where(row => row.Key == childKey))
+        {
+            var values = foreignKey.ChildColumns.Select(column => child.Values.GetValueOrDefault(column)).ToArray();
+            if (values.Any(value => value is null)) continue;
+            foreach (var parent in parents.Where(row => foreignKey.ParentColumns.Select(column => row.Values.GetValueOrDefault(column)).SequenceEqual(values))) yield return parent.Key;
+        }
+    }
     private Task<IReadOnlyCollection<StableKey>> InsertAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, int generation) => Task.FromResult<IReadOnlyCollection<StableKey>>(keys.Where(key => _generations.TryAdd(new(table, key), generation)).ToArray());
 }
 public sealed class InMemoryClosureStoreTests
@@ -473,13 +663,33 @@ public sealed class InMemoryClosureStoreTests
 }
 ```
 
+`tests/DataPitcher.UnitTests/Closure/ClosureModelsTests.cs`:
+
+```csharp
+using DataPitcher.Core.Closure; using DataPitcher.Core.Identity; using DataPitcher.Core.Schema; using Xunit;
+namespace DataPitcher.UnitTests.Closure;
+public sealed class ClosureModelsTests
+{
+    [Fact] public void ClosureModels_WhenInputsAreMutated_ExposeDefensiveNonWritableCopies()
+    {
+        var table = new TableDefinition("dbo", "T", [], new UniqueConstraint("PK_T", ["K1"]), []); var key = new StableKey([new KeyComponent("K1", 1)]); var keys = new List<StableKey> { key }; var root = new ClosureRoot(table, keys, RootConflictPolicy.FailOnConflict); var roots = new List<ClosureRoot> { root }; var relationships = new List<ClosureRelationship> { ClosureRelationship.Manual("Manual", table, table) }; var selections = new Dictionary<TableDefinition, StableKeySelection> { [table] = StableKeySelector.Select(table, null) };
+        var request = new ClosureRequest(roots, relationships, selections); var rows = new List<ClosureRow> { new(table, key, 0) }; var warnings = new List<TargetConstraintWarning> { new("FK_Target") }; var result = new ClosureResult(rows, warnings); var constraints = new Dictionary<ClosureRelationship, TargetConstraintState> { [relationships[0]] = new("FK_Target",true,true,true) }; var probe = new TargetProbe(true,constraints);
+        keys.Clear(); roots.Clear(); relationships.Clear(); selections.Clear(); rows.Clear(); warnings.Clear(); constraints.Clear();
+        Assert.Single(root.Keys); Assert.Single(request.Roots); Assert.Single(request.Relationships); Assert.Single(request.StableKeySelections); Assert.Single(result.Rows); Assert.Single(result.Warnings); Assert.Single(probe.Constraints);
+        Assert.Throws<NotSupportedException>(() => ((IList<StableKey>)root.Keys).Clear()); Assert.Throws<NotSupportedException>(() => ((IList<ClosureRoot>)request.Roots).Clear()); Assert.Throws<NotSupportedException>(() => ((IList<ClosureRelationship>)request.Relationships).Clear()); Assert.Throws<NotSupportedException>(() => ((IDictionary<TableDefinition, StableKeySelection>)request.StableKeySelections).Clear()); Assert.Throws<NotSupportedException>(() => ((IList<ClosureRow>)result.Rows).Clear()); Assert.Throws<NotSupportedException>(() => ((IList<TargetConstraintWarning>)result.Warnings).Clear()); Assert.Throws<NotSupportedException>(() => ((IDictionary<ClosureRelationship,TargetConstraintState>)probe.Constraints).Clear());
+    }
+}
+```
+
 - [ ] **Step 2: Run it and confirm it fails for the missing seam**
 
-Run: `dotnet test --filter "FullyQualifiedName~InMemoryClosureStoreTests"`
+Run: `dotnet test --filter "FullyQualifiedName~InMemoryClosureStoreTests|FullyQualifiedName~ClosureModelsTests"`
 
 Expected: compilation fails with `The type or namespace name 'Closure' does not exist in the namespace 'DataPitcher.Core'`.
 
 - [ ] **Step 3: Write the four-operation seam and its models**
+
+`src/DataPitcher.Core/Closure/IClosureStore.cs`:
 
 ```csharp
 using DataPitcher.Core.Identity; using DataPitcher.Core.Schema;
@@ -487,33 +697,65 @@ namespace DataPitcher.Core.Closure;
 public interface IClosureStore
 {
     Task<IReadOnlyCollection<StableKey>> SeedRootKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken);
-    Task<IReadOnlyDictionary<StableKey, TargetProbe>> ProbeTargetAsync(TableDefinition table, ClosureRelationship? incoming, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken);
+    Task<IReadOnlyDictionary<StableKey, TargetProbe>> ProbeTargetAsync(TableDefinition table, IReadOnlyCollection<ClosureRelationship> outgoingRelationships, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<StableKey>> ExpandAsync(ClosureRelationship relationship, IReadOnlyCollection<StableKey> fromKeys, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<StableKey>> InsertNewKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, int generation, CancellationToken cancellationToken);
 }
-public enum RootConflictPolicy { FailOnConflict, SkipExisting, Upsert }
-public sealed record ClosureRelationship(ForeignKeyDefinition ForeignKey, bool IsInbound = false, bool IsEnabled = true) { public TableDefinition FromTable => IsInbound ? ForeignKey.ParentTable : ForeignKey.ChildTable; public TableDefinition ToTable => IsInbound ? ForeignKey.ChildTable : ForeignKey.ParentTable; }
-public sealed record ClosureRoot(TableDefinition Table, IReadOnlyCollection<StableKey> Keys, RootConflictPolicy ConflictPolicy);
-public sealed record ClosureRequest(IReadOnlyCollection<ClosureRoot> Roots, IReadOnlyCollection<ClosureRelationship> Relationships);
-public sealed record RowAddress(TableDefinition Table, StableKey Key);
-public sealed record ClosureRow(TableDefinition Table, StableKey Key, int Generation);
-public sealed record TargetConstraintState(bool IsPresent, bool IsEnforced, bool IsTrusted);
-public sealed record TargetProbe(bool Exists, TargetConstraintState? Constraint);
-public sealed class ClosureResult(IReadOnlyCollection<ClosureRow> rows) { public IReadOnlyCollection<ClosureRow> Rows { get; } = rows; public bool Contains(TableDefinition table, StableKey key) => Rows.Any(row => row.Table == table && row.Key == key); }
-public sealed class RootConflictException(RowAddress row) : InvalidOperationException($"Root already exists: {row.Table.Schema}.{row.Table.Name}.");
 ```
 
-`ProbeTargetAsync` now takes the `ClosureRelationship?` a key was reached through (`null` for root keys, which have no incoming relationship) and returns a `TargetProbe` per key carrying both row existence (`Exists`) and the TARGET-side constraint state for that relationship (`Constraint`) — `TargetConstraintState.IsPresent`/`IsEnforced`/`IsTrusted` describe the target database's foreign key, not the source schema's `ForeignKeyDefinition`. The fake treats an unset relationship state as absent on the target, so tests that require satisfaction set a trusted target state explicitly. This is the seam Task 7's closure algorithm uses to decide `TargetSatisfied`; the source `ForeignKeyDefinition.IsEnforced`/`IsTrusted` flags remain descriptive schema metadata only and are never consulted for that decision. The database-backed implementation is deferred to the Docker-blocked provider slice; this seam lets the algorithm be fully tested now.
+`src/DataPitcher.Core/Closure/ClosureModels.cs`:
+
+```csharp
+using System.Collections.ObjectModel;
+using DataPitcher.Core.Identity; using DataPitcher.Core.Schema;
+namespace DataPitcher.Core.Closure;
+public enum RootConflictPolicy { FailOnConflict, SkipExisting, Upsert }
+public sealed class ClosureRelationship
+{
+    private ClosureRelationship(string name, TableDefinition fromTable, TableDefinition toTable, ForeignKeyDefinition? foreignKey, bool isInbound, bool isEnabled) { Name = name; FromTable = fromTable; ToTable = toTable; ForeignKey = foreignKey; IsInbound = isInbound; IsEnabled = isEnabled; }
+    public ClosureRelationship(ForeignKeyDefinition foreignKey, bool isInbound = false, bool isEnabled = true) : this(foreignKey.Name, isInbound ? foreignKey.ParentTable : foreignKey.ChildTable, isInbound ? foreignKey.ChildTable : foreignKey.ParentTable, foreignKey, isInbound, isEnabled) { }
+    public static ClosureRelationship Manual(string name, TableDefinition fromTable, TableDefinition toTable, bool isEnabled = true) => new(name, fromTable, toTable, null, false, isEnabled);
+    public string Name { get; } public TableDefinition FromTable { get; } public TableDefinition ToTable { get; } public ForeignKeyDefinition? ForeignKey { get; } public bool IsInbound { get; } public bool IsEnabled { get; }
+}
+public sealed class ClosureRoot
+{
+    public ClosureRoot(TableDefinition table, IEnumerable<StableKey> keys, RootConflictPolicy conflictPolicy) { Table = table; Keys = Array.AsReadOnly(keys.ToArray()); ConflictPolicy = conflictPolicy; }
+    public TableDefinition Table { get; } public IReadOnlyCollection<StableKey> Keys { get; } public RootConflictPolicy ConflictPolicy { get; }
+}
+public sealed class ClosureRequest
+{
+    public ClosureRequest(IEnumerable<ClosureRoot> roots, IEnumerable<ClosureRelationship> relationships, IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeySelections) { Roots = Array.AsReadOnly(roots.ToArray()); Relationships = Array.AsReadOnly(relationships.ToArray()); StableKeySelections = new ReadOnlyDictionary<TableDefinition, StableKeySelection>(stableKeySelections.ToDictionary(x => x.Key, x => x.Value)); }
+    public IReadOnlyCollection<ClosureRoot> Roots { get; } public IReadOnlyCollection<ClosureRelationship> Relationships { get; } public IReadOnlyDictionary<TableDefinition, StableKeySelection> StableKeySelections { get; }
+}
+public sealed record RowAddress(TableDefinition Table, StableKey Key);
+public sealed record ClosureRow(TableDefinition Table, StableKey Key, int Generation);
+public sealed record TargetConstraintState(string ConstraintName, bool IsPresent, bool IsEnforced, bool IsTrusted);
+public sealed class TargetProbe
+{
+    public TargetProbe(bool exists, IReadOnlyDictionary<ClosureRelationship, TargetConstraintState> constraints) { Exists = exists; Constraints = new ReadOnlyDictionary<ClosureRelationship, TargetConstraintState>(constraints.ToDictionary(x => x.Key, x => x.Value)); }
+    public bool Exists { get; } public IReadOnlyDictionary<ClosureRelationship, TargetConstraintState> Constraints { get; }
+}
+public sealed record TargetConstraintWarning(string ConstraintName);
+public sealed class ClosureResult
+{
+    public ClosureResult(IEnumerable<ClosureRow> rows, IEnumerable<TargetConstraintWarning> warnings) { Rows = Array.AsReadOnly(rows.ToArray()); Warnings = Array.AsReadOnly(warnings.ToArray()); }
+    public IReadOnlyCollection<ClosureRow> Rows { get; } public IReadOnlyCollection<TargetConstraintWarning> Warnings { get; } public bool Contains(TableDefinition table, StableKey key) => Rows.Any(row => row.Table == table && row.Key == key);
+}
+public sealed class RootConflictException(RowAddress row) : InvalidOperationException($"Root already exists: {row.Table.Schema}.{row.Table.Name}.");
+public sealed class BlockedTableException(TableDefinition table) : InvalidOperationException($"Table has no valid stable key: {table.Schema}.{table.Name}.");
+```
+
+`ProbeTargetAsync` receives the enabled outgoing relationships that need to be licensed before an existing dependency row can prune its ancestors. It returns the target row's existence plus the TARGET-side state, keyed by each relationship; target constraint names travel with that state so untrusted or unvalidated constraints can be reported. `TargetSatisfied` is therefore true only when the target row exists and every required outgoing target constraint is present, enforced, and trusted; an absent state is unsatisfied. The target state is never read from `ForeignKeyDefinition.IsEnforced` or `.IsTrusted`, which remain source-schema metadata only. The fake defaults an unset target state to absent, defensively copies each source row's values, and resolves a direct foreign key from its actual child row values by zipping `ChildColumns` to `ParentColumns` in positional order; it falls back to explicit links only for relationships without source rows, including manual and reverse relationships. `ClosureRoot`, `ClosureRequest`, `TargetProbe`, and `ClosureResult` defensively copy all collections and expose non-writable views.
 
 - [ ] **Step 4: Run it and confirm the seam compiles**
 
-Run: `dotnet test --filter "FullyQualifiedName~InMemoryClosureStoreTests"`
+Run: `dotnet test --filter "FullyQualifiedName~InMemoryClosureStoreTests|FullyQualifiedName~ClosureModelsTests"`
 
-Expected: `Passed: 2. Failed: 0.`
+Expected: `Passed: 3. Failed: 0.`
 
 - [ ] **Step 5: Commit**
 
-Run: `git add src/DataPitcher.Core/Closure/IClosureStore.cs src/DataPitcher.Core/Closure/ClosureModels.cs tests/DataPitcher.UnitTests/Closure/InMemoryClosureStore.cs && git commit -m "feat: define closure store seam"`
+Run: `git add src/DataPitcher.Core/Closure/IClosureStore.cs src/DataPitcher.Core/Closure/ClosureModels.cs tests/DataPitcher.UnitTests/Closure/InMemoryClosureStore.cs tests/DataPitcher.UnitTests/Closure/ClosureModelsTests.cs && git commit -m "feat: define closure store seam"`
 
 ### Task 7: The closure algorithm
 
@@ -532,24 +774,43 @@ public sealed class DependencyClosureTests
     [Fact] public async Task Closure_WhenChildSelected_IncludesMissingParent() { var c=T("C"); var p=T("P"); var e=E(F(c,p)); var s=new InMemoryClosureStore(); s.Link(e,(K(1),K(2))); var r=await Run(s,[e],Root(c,1)); Assert.True(r.Contains(p,K(2))); }
     [Fact] public async Task Closure_WhenParentSelected_ExcludesInboundChildrenByDefault() { var c=T("C"); var p=T("P"); var e=E(F(c,p)); var s=new InMemoryClosureStore(); s.Link(e,(K(1),K(2))); var r=await Run(s,[e],Root(p,2)); Assert.False(r.Contains(c,K(1))); }
     [Fact] public async Task Closure_WhenInboundRelationshipEnabled_IncludesChildren() { var c=T("C"); var p=T("P"); var e=E(F(c,p), true); var s=new InMemoryClosureStore(); s.Link(e,(K(2),K(1))); var r=await Run(s,[e],Root(p,2)); Assert.True(r.Contains(c,K(1))); }
-    [Fact] public async Task Closure_WhenOptionalForeignKeyIsNull_AddsNoParent() { var c=T("C"); var p=T("P"); var e=E(F(c,p)); var s=new InMemoryClosureStore(); var r=await Run(s,[e],Root(c,1)); Assert.False(r.Contains(p,K(2))); }
-    [Fact] public async Task Closure_WhenForeignKeyIsComposite_ResolvesParent() { var c=T("C"); var p=T("P"); var e=E(F(c,p, count:2)); var s=new InMemoryClosureStore(); s.Link(e,(K(1,2),K(7,8))); var r=await Run(s,[e],new ClosureRoot(c,[K(1,2)],RootConflictPolicy.FailOnConflict)); Assert.True(r.Contains(p,K(7,8))); }
+    [Fact] public async Task Closure_WhenOptionalForeignKeyIsNull_AddsNoParent() { var c=T("C"); var p=T("P"); var e=E(F(c,p,["Ref"],["Code"])); var s=new InMemoryClosureStore(); s.AddRow(c,K(1),new Dictionary<string,object?> { ["Ref"]=null }); s.AddRow(p,K(2),new Dictionary<string,object?> { ["Code"]=2 }); var r=await Run(s,[e],Root(c,1)); Assert.False(r.Contains(p,K(2))); }
+    [Fact] public async Task Closure_WhenForeignKeyIsComposite_ResolvesParentByConstraintNativePosition() { var c=T("C"); var p=T("P"); var e=E(F(c,p,["ChildFirst","ChildSecond"],["ParentFirst","ParentSecond"])); var s=new InMemoryClosureStore(); s.AddRow(c,K(1),new Dictionary<string,object?> { ["ChildFirst"]=7,["ChildSecond"]=8 }); s.AddRow(p,K(9),new Dictionary<string,object?> { ["ParentFirst"]=7,["ParentSecond"]=8 }); var r=await Run(s,[e],Root(c,1)); Assert.True(r.Contains(p,K(9))); }
+    [Fact] public async Task Closure_WhenForeignKeyReferencesUniqueConstraint_ResolvesByThatKeyRatherThanPrimaryKey() { var c=T("C"); var p=T("P",["Code"]); var e=E(F(c,p,["RefCode"],["Code"])); var s=new InMemoryClosureStore(); s.AddRow(c,K(1),new Dictionary<string,object?> { ["RefCode"]="external" }); s.AddRow(p,K(9),new Dictionary<string,object?> { ["Code"]="external" }); var r=await Run(s,[e],Root(c,1)); Assert.True(r.Contains(p,K(9))); }
+    [Fact] public async Task Closure_WhenTwoForeignKeysBetweenSameTables_AppliesBothRelationships() { var c=T("C"); var p=T("P"); var billTo=E(F(c,p,["BillCode"],["Code"],name:"FK_BillTo")); var shipTo=E(F(c,p,["ShipCode"],["Code"],name:"FK_ShipTo")); var s=new InMemoryClosureStore(); s.AddRow(c,K(1),new Dictionary<string,object?> { ["BillCode"]="B",["ShipCode"]="S" }); s.AddRow(p,K(9),new Dictionary<string,object?> { ["Code"]="B" }); s.AddRow(p,K(10),new Dictionary<string,object?> { ["Code"]="S" }); var r=await Run(s,[billTo,shipTo],Root(c,1)); Assert.True(r.Contains(p,K(9))); Assert.True(r.Contains(p,K(10))); }
+    [Fact] public async Task Closure_WhenRelationshipIsManuallyDeclared_ExpandsItLikeAForeignKey() { var c=T("C"); var p=T("P"); var e=ClosureRelationship.Manual("Manual_C_P",c,p); var s=new InMemoryClosureStore(); s.Link(e,(K(1),K(2))); var r=await Run(s,[e],Root(c,1)); Assert.True(r.Contains(p,K(2))); }
+    [Fact] public async Task Closure_WhenSourceForeignKeyIsOrphaned_TransfersChildWithoutFabricatingParent() { var c=T("C"); var p=T("P"); var e=E(F(c,p,["Ref"],["Code"])); var s=new InMemoryClosureStore(); s.AddRow(c,K(1),new Dictionary<string,object?> { ["Ref"]="missing" }); var r=await Run(s,[e],Root(c,1)); Assert.True(r.Contains(c,K(1))); Assert.False(r.Contains(p,K(2))); }
     [Fact] public async Task Closure_WhenParentSharedByTwoChildren_IncludesParentOnce() { var c=T("C"); var p=T("P"); var e=E(F(c,p)); var s=new InMemoryClosureStore(); s.Link(e,(K(1),K(9)),(K(2),K(9))); var r=await Run(s,[e],new ClosureRoot(c,[K(1),K(2)],RootConflictPolicy.FailOnConflict)); Assert.Single(r.Rows.Where(x=>x.Table==p && x.Key==K(9))); }
+    [Fact] public async Task Closure_WhenRootIsFailOnConflictAndExists_Throws() { var c=T("C"); var s=new InMemoryClosureStore(); s.MarkTarget(c,K(1)); await Assert.ThrowsAsync<RootConflictException>(()=>Run(s,[],Root(c,1))); }
     [Fact] public async Task Closure_WhenRootIsSkipExistingAndExists_ExpandsNothing() { var c=T("C"); var p=T("P"); var e=E(F(c,p)); var s=new InMemoryClosureStore(); s.MarkTarget(c,K(1)); s.Link(e,(K(1),K(2))); var r=await Run(s,[e],Root(c,1,RootConflictPolicy.SkipExisting)); Assert.False(r.Contains(c,K(1))); Assert.False(r.Contains(p,K(2))); }
     [Fact] public async Task Closure_WhenRootIsUpsertAndExists_ExpandsDependencies() { var c=T("C"); var p=T("P"); var e=E(F(c,p)); var s=new InMemoryClosureStore(); s.MarkTarget(c,K(1)); s.Link(e,(K(1),K(2))); var r=await Run(s,[e],Root(c,1,RootConflictPolicy.Upsert)); Assert.True(r.Contains(c,K(1))); Assert.True(r.Contains(p,K(2))); }
-    [Fact] public async Task Closure_WhenParentSatisfiedBehindTrustedConstraint_TerminatesBranch() { var c=T("C"); var p=T("P"); var g=T("G"); var cp=E(F(c,p)); var pg=E(F(p,g)); var s=new InMemoryClosureStore(); s.MarkTarget(p,K(2)); s.SetTargetConstraint(cp,new TargetConstraintState(true,true,true)); s.Link(cp,(K(1),K(2))); s.Link(pg,(K(2),K(3))); var r=await Run(s,[cp,pg],Root(c,1)); Assert.False(r.Contains(p,K(2))); Assert.False(r.Contains(g,K(3))); }
-    [Fact] public async Task Closure_WhenParentExistsWithoutTargetConstraint_TransfersParentAnyway() { var c=T("C"); var p=T("P"); var g=T("G"); var cp=E(F(c,p)); var pg=E(F(p,g)); var s=new InMemoryClosureStore(); s.MarkTarget(p,K(2)); s.Link(cp,(K(1),K(2))); s.Link(pg,(K(2),K(3))); var r=await Run(s,[cp,pg],Root(c,1)); Assert.True(r.Contains(p,K(2))); Assert.True(r.Contains(g,K(3))); }
-    [Fact] public async Task Closure_WhenParentSatisfiedBehindUntrustedConstraint_TransfersParentAnyway() { var c=T("C"); var p=T("P"); var g=T("G"); var cp=E(F(c,p)); var pg=E(F(p,g)); var s=new InMemoryClosureStore(); s.MarkTarget(p,K(2)); s.SetTargetConstraint(cp,new TargetConstraintState(true,true,false)); s.Link(cp,(K(1),K(2))); s.Link(pg,(K(2),K(3))); var r=await Run(s,[cp,pg],Root(c,1)); Assert.True(r.Contains(p,K(2))); Assert.True(r.Contains(g,K(3))); }
-    [Fact] public async Task Closure_WhenRelationshipDisabled_ContributesNoRows() { var c=T("C"); var p=T("P"); var e=new ClosureRelationship(F(c,p),false,false); var s=new InMemoryClosureStore(); s.Link(e,(K(1),K(2))); var r=await Run(s,[e],Root(c,1)); Assert.False(r.Contains(p,K(2))); }
+    [Fact] public async Task Closure_WhenParentExistsBehindTrustedTargetConstraint_TerminatesItsAncestorBranch() { var c=T("C"); var p=T("P"); var g=T("G"); var cp=E(F(c,p)); var pg=E(F(p,g)); var s=new InMemoryClosureStore(); s.MarkTarget(p,K(2)); s.SetTargetConstraint(pg,Target(pg)); s.Link(cp,(K(1),K(2))); s.Link(pg,(K(2),K(3))); var r=await Run(s,[cp,pg],Root(c,1)); Assert.False(r.Contains(p,K(2))); Assert.False(r.Contains(g,K(3))); }
+    [Fact] public async Task Closure_WhenParentDoesNotExistDespiteTrustedTargetConstraint_TransfersIt() { var c=T("C"); var p=T("P"); var g=T("G"); var cp=E(F(c,p)); var pg=E(F(p,g)); var s=new InMemoryClosureStore(); s.SetTargetConstraint(pg,Target(pg)); s.Link(cp,(K(1),K(2))); s.Link(pg,(K(2),K(3))); var r=await Run(s,[cp,pg],Root(c,1)); Assert.True(r.Contains(p,K(2))); Assert.True(r.Contains(g,K(3))); }
+    [Fact] public async Task Closure_WhenParentExistsButItsTargetConstraintIsAbsent_TransfersParentAnyway() { var c=T("C"); var p=T("P"); var g=T("G"); var cp=E(F(c,p)); var pg=E(F(p,g)); var s=new InMemoryClosureStore(); s.MarkTarget(p,K(2)); s.SetTargetConstraint(cp,Target(cp)); s.Link(cp,(K(1),K(2))); s.Link(pg,(K(2),K(3))); var r=await Run(s,[cp,pg],Root(c,1)); Assert.True(r.Contains(p,K(2))); Assert.True(r.Contains(g,K(3))); }
+    [Fact] public async Task Closure_WhenParentTargetConstraintIsUntrusted_TransfersParentAndNamesTheConstraint() { var c=T("C"); var p=T("P"); var g=T("G"); var cp=E(F(c,p)); var pg=E(F(p,g)); var s=new InMemoryClosureStore(); s.MarkTarget(p,K(2)); s.SetTargetConstraint(pg,Target(pg,isTrusted:false)); s.Link(cp,(K(1),K(2))); s.Link(pg,(K(2),K(3))); var r=await Run(s,[cp,pg],Root(c,1)); Assert.True(r.Contains(p,K(2))); Assert.True(r.Contains(g,K(3))); Assert.Contains(new TargetConstraintWarning($"Target_{pg.Name}"),r.Warnings); }
+    [Fact] public async Task Closure_WhenParentTargetConstraintIsDisabled_TransfersParentAnyway() { var c=T("C"); var p=T("P"); var g=T("G"); var cp=E(F(c,p)); var pg=E(F(p,g)); var s=new InMemoryClosureStore(); s.MarkTarget(p,K(2)); s.SetTargetConstraint(pg,Target(pg,isEnforced:false)); s.Link(cp,(K(1),K(2))); s.Link(pg,(K(2),K(3))); var r=await Run(s,[cp,pg],Root(c,1)); Assert.True(r.Contains(p,K(2))); Assert.True(r.Contains(g,K(3))); }
+    [Fact] public async Task Closure_WhenSourceConstraintMetadataDisagrees_UsesTrustedTargetConstraint() { var c=T("C"); var p=T("P"); var g=T("G"); var cp=E(F(c,p)); var pg=E(F(p,g,isEnforced:false,isTrusted:false)); var s=new InMemoryClosureStore(); s.MarkTarget(p,K(2)); s.SetTargetConstraint(pg,Target(pg)); s.Link(cp,(K(1),K(2))); s.Link(pg,(K(2),K(3))); var r=await Run(s,[cp,pg],Root(c,1)); Assert.False(r.Contains(p,K(2))); Assert.False(r.Contains(g,K(3))); }
+    [Fact] public async Task Closure_WhenRelationshipDisabled_ContributesNoRows() { var r=T("R"); var p=T("P"); var x=T("X"); var rp=E(F(r,p)); var px=new ClosureRelationship(F(p,x),false,false); var s=new InMemoryClosureStore(); s.Link(rp,(K(1),K(2))); s.Link(px,(K(2),K(3))); var result=await Run(s,[rp,px],Root(r,1)); Assert.True(result.Contains(p,K(2))); Assert.False(result.Contains(x,K(3))); }
     [Fact] public async Task Closure_WhenGraphHasTwoTableCycle_Terminates() { var a=T("A"); var b=T("B"); var ab=E(F(a,b)); var ba=E(F(b,a)); var s=new InMemoryClosureStore(); s.Link(ab,(K(1),K(2))); s.Link(ba,(K(2),K(1))); var r=await Run(s,[ab,ba],Root(a,1)); Assert.Equal(2,r.Rows.Count); }
-    [Fact] public async Task Closure_WhenTableIsSelfReferencing_Terminates() { var eTable=T("E"); var e=E(F(eTable,eTable)); var s=new InMemoryClosureStore(); s.Link(e,(K(1),K(1))); var r=await Run(s,[e],Root(eTable,1)); Assert.Single(r.Rows); }
+    [Fact] public async Task Closure_WhenTableIsSelfReferencing_FollowsHierarchyAndTerminates() { var eTable=T("E"); var e=E(F(eTable,eTable)); var s=new InMemoryClosureStore(); s.Link(e,(K(2),K(1)),(K(1),K(1))); var r=await Run(s,[e],Root(eTable,2)); Assert.True(r.Contains(eTable,K(1))); Assert.Equal(2,r.Rows.Count); }
+    [Fact] public async Task Closure_WhenChainExpands_StampsBreadthFirstGenerations() { var c=T("C"); var p=T("P"); var g=T("G"); var cp=E(F(c,p)); var pg=E(F(p,g)); var s=new InMemoryClosureStore(); s.Link(cp,(K(1),K(2))); s.Link(pg,(K(2),K(3))); var r=await Run(s,[cp,pg],Root(c,1)); Assert.Equal(0,Assert.Single(r.Rows.Where(row=>row.Table==c)).Generation); Assert.Equal(1,Assert.Single(r.Rows.Where(row=>row.Table==p)).Generation); Assert.Equal(2,Assert.Single(r.Rows.Where(row=>row.Table==g)).Generation); }
+    [Fact] public async Task Closure_WhenEnabledParticipantIsBlocked_RejectsRequestBeforeSeeding() { var c=T("C"); var blocked=new TableDefinition("dbo","Blocked",[],null,[]); var e=E(F(c,blocked)); var s=new InMemoryClosureStore(); var request=new ClosureRequest([Root(c,1)],[e],new Dictionary<TableDefinition,StableKeySelection> { [c]=StableKeySelector.Select(c,null),[blocked]=StableKeySelection.NoStableKey }); await Assert.ThrowsAsync<BlockedTableException>(()=>new DependencyClosure(s).ComputeAsync(request,CancellationToken.None)); Assert.Equal(0,s.SeedCalls); }
+    [Fact] public async Task Closure_WhenParticipantHasNoStableKeySelection_RejectsRequestBeforeSeeding() { var c=T("C"); var s=new InMemoryClosureStore(); var request=new ClosureRequest([Root(c,1)],[],new Dictionary<TableDefinition,StableKeySelection>()); await Assert.ThrowsAsync<BlockedTableException>(()=>new DependencyClosure(s).ComputeAsync(request,CancellationToken.None)); Assert.Equal(0,s.SeedCalls); }
+    [Fact] public async Task Closure_WhenRootUsesExplicitNonNullableUniqueStableKey_IncludesIt() { var unique=new UniqueConstraint("UQ_Code",["Code"]); var c=new TableDefinition("dbo","C",[new ColumnDefinition("Code",typeof(string),false)],null,[unique]); var s=new InMemoryClosureStore(); var request=new ClosureRequest([Root(c,1)],[],new Dictionary<TableDefinition,StableKeySelection> { [c]=StableKeySelector.Select(c,"UQ_Code") }); var r=await new DependencyClosure(s).ComputeAsync(request,CancellationToken.None); Assert.True(r.Contains(c,K(1))); }
+    [Fact] public async Task Closure_WhenSelectedUniqueContainsNullableColumn_RejectsRequestBeforeSeeding() { var unique=new UniqueConstraint("UQ_Code",["Code"]); var c=new TableDefinition("dbo","C",[new ColumnDefinition("Code",typeof(string),true)],null,[unique]); var s=new InMemoryClosureStore(); var request=new ClosureRequest([Root(c,1)],[],new Dictionary<TableDefinition,StableKeySelection> { [c]=StableKeySelector.Select(c,"UQ_Code") }); await Assert.ThrowsAsync<BlockedTableException>(()=>new DependencyClosure(s).ComputeAsync(request,CancellationToken.None)); Assert.Equal(0,s.SeedCalls); }
+    [Fact] public async Task Closure_WhenSelectedUniqueHasNoColumns_RejectsRequestBeforeSeeding() { var unique=new UniqueConstraint("UQ_Empty",[]); var c=new TableDefinition("dbo","C",[],null,[unique]); var s=new InMemoryClosureStore(); var request=new ClosureRequest([Root(c,1)],[],new Dictionary<TableDefinition,StableKeySelection> { [c]=StableKeySelector.Select(c,"UQ_Empty") }); await Assert.ThrowsAsync<BlockedTableException>(()=>new DependencyClosure(s).ComputeAsync(request,CancellationToken.None)); Assert.Equal(0,s.SeedCalls); }
+    [Fact] public async Task Closure_WhenParentSatisfiedOnOnePathButRequiredOnAnother_StillTransfersSharedAncestor() { var r=T("R"); var a=T("A"); var b=T("B"); var x=T("X"); var ra=E(F(r,a)); var rb=E(F(r,b)); var ax=E(F(a,x)); var bx=E(F(b,x)); var s=new InMemoryClosureStore(); s.MarkTarget(a,K(2)); s.SetTargetConstraint(ax,Target(ax)); s.Link(ra,(K(1),K(2))); s.Link(rb,(K(1),K(3))); s.Link(ax,(K(2),K(4))); s.Link(bx,(K(3),K(4))); var result=await Run(s,[ra,rb,ax,bx],Root(r,1)); Assert.True(result.Contains(x,K(4))); }
+    [Fact] public async Task Closure_WhenAncestorDemandedByTwoIncludedPaths_AppearsExactlyOnce() { var r=T("R"); var a=T("A"); var b=T("B"); var x=T("X"); var ra=E(F(r,a)); var rb=E(F(r,b)); var ax=E(F(a,x)); var bx=E(F(b,x)); var s=new InMemoryClosureStore(); s.Link(ra,(K(1),K(2))); s.Link(rb,(K(1),K(3))); s.Link(ax,(K(2),K(4))); s.Link(bx,(K(3),K(4))); var result=await Run(s,[ra,rb,ax,bx],Root(r,1)); Assert.Single(result.Rows.Where(row=>row.Table==x && row.Key==K(4))); }
+    [Fact] public void StableKey_WhenReconstructedWithSameComponents_IsFoundInClosureResult() { var table=T("T"); var result=new ClosureResult([new ClosureRow(table,K(1),0)],[]); Assert.True(result.Contains(table,K(1))); }
+    [Fact] public async Task Closure_WhenTwoRootsSelectTheSameKey_IncludesItOnce() { var c=T("C"); var s=new InMemoryClosureStore(); var r=await Run(s,[],new ClosureRoot(c,[K(1)],RootConflictPolicy.FailOnConflict),new ClosureRoot(c,[K(1)],RootConflictPolicy.FailOnConflict)); Assert.Single(r.Rows.Where(row=>row.Table==c && row.Key==K(1))); }
 
-    private static TableDefinition T(string name) => new("dbo",name,[],new UniqueConstraint($"PK_{name}",["K1"]),[]);
-    private static StableKey K(params object?[] values) => new(values.Select((value,index)=>new KeyComponent($"K{index+1}",value as IComparable ?? (IComparable?)value)));
-    private static ForeignKeyDefinition F(TableDefinition child,TableDefinition parent,int count=1) { var columns=Enumerable.Range(1,count).Select(x=>$"K{x}").ToArray(); return new ForeignKeyDefinition($"FK_{child.Name}_{parent.Name}",child,parent,columns,columns,true,true); }
+    private static TableDefinition T(string name,string[]? uniqueColumns=null) => new("dbo",name,[],new UniqueConstraint($"PK_{name}",["K1"]),uniqueColumns is null ? [] : [new UniqueConstraint($"UQ_{name}",uniqueColumns)]);
+    private static StableKey K(params object?[] values) => new(values.Select((value,index)=>new KeyComponent($"K{index+1}",value)));
+    private static ForeignKeyDefinition F(TableDefinition child,TableDefinition parent,string[]? childColumns=null,string[]? parentColumns=null,bool isEnforced=true,bool isTrusted=true,string? name=null) { var childColumnsToUse=childColumns ?? ["K1"]; var parentColumnsToUse=parentColumns ?? ["K1"]; return new ForeignKeyDefinition(name ?? $"FK_{child.Name}_{parent.Name}",child,parent,childColumnsToUse,parentColumnsToUse,isEnforced,isTrusted); }
     private static ClosureRelationship E(ForeignKeyDefinition foreignKey,bool inbound=false) => new(foreignKey,inbound);
     private static ClosureRoot Root(TableDefinition table,int key,RootConflictPolicy policy=RootConflictPolicy.FailOnConflict) => new(table,[K(key)],policy);
-    private static Task<ClosureResult> Run(InMemoryClosureStore store,ClosureRelationship[] relationships,params ClosureRoot[] roots) => new DependencyClosure(store).ComputeAsync(new ClosureRequest(roots,relationships),CancellationToken.None);
+    private static TargetConstraintState Target(ClosureRelationship relationship,bool isEnforced=true,bool isTrusted=true) => new($"Target_{relationship.Name}",true,isEnforced,isTrusted);
+    private static Task<ClosureResult> Run(InMemoryClosureStore store,ClosureRelationship[] relationships,params ClosureRoot[] roots) { var tables=roots.Select(root=>root.Table).Concat(relationships.SelectMany(relationship=>new[] { relationship.FromTable,relationship.ToTable })).Distinct(); return new DependencyClosure(store).ComputeAsync(new ClosureRequest(roots,relationships,tables.ToDictionary(table=>table,table=>StableKeySelector.Select(table,null))),CancellationToken.None); }
 }
 ```
 
@@ -566,29 +827,34 @@ using DataPitcher.Core.Identity; using DataPitcher.Core.Schema;
 namespace DataPitcher.Core.Closure;
 public sealed class DependencyClosure(IClosureStore store)
 {
-    private sealed record Frontier(TableDefinition Table, StableKey Key, RootConflictPolicy? RootPolicy, ClosureRelationship? Incoming);
+    private sealed record Frontier(TableDefinition Table, StableKey Key, RootConflictPolicy? RootPolicy);
     public async Task<ClosureResult> ComputeAsync(ClosureRequest request, CancellationToken cancellationToken)
     {
-        var frontier = new List<Frontier>(); var included = new Dictionary<RowAddress, ClosureRow>();
+        var participants = request.Roots.Select(root => root.Table).Concat(request.Relationships.Where(relationship => relationship.IsEnabled).SelectMany(relationship => new[] { relationship.FromTable, relationship.ToTable })).Distinct();
+        var blocked = participants.FirstOrDefault(table => !request.StableKeySelections.TryGetValue(table, out var selection) || !HasUsableStableKey(table, selection));
+        if (blocked is not null) throw new BlockedTableException(blocked);
+        var frontier = new List<Frontier>(); var included = new Dictionary<RowAddress, ClosureRow>(); var warnings = new HashSet<TargetConstraintWarning>();
         foreach (var root in request.Roots)
             foreach (var key in await store.SeedRootKeysAsync(root.Table, root.Keys, cancellationToken))
-                frontier.Add(new(root.Table, key, root.ConflictPolicy, null));
+                frontier.Add(new(root.Table, key, root.ConflictPolicy));
         for (var generation = 0; frontier.Count > 0; generation++)
         {
             var expandable = new Dictionary<TableDefinition, List<StableKey>>();
-            foreach (var group in frontier.GroupBy(x => (x.Table, x.Incoming)))
+            foreach (var group in frontier.GroupBy(x => x.Table))
             {
                 var keys = group.Select(x => x.Key).Distinct().ToArray();
-                var probes = await store.ProbeTargetAsync(group.Key.Table, group.Key.Incoming, keys, cancellationToken);
+                var requirements = request.Relationships.Where(relationship => relationship.IsEnabled && !relationship.IsInbound && relationship.FromTable == group.Key).ToArray();
+                var probes = await store.ProbeTargetAsync(group.Key, requirements, keys, cancellationToken);
                 foreach (var item in group)
                 {
                     var probe = probes[item.Key];
+                    if (item.RootPolicy is null && probe.Exists) foreach (var state in probe.Constraints.Values.Where(state => state.IsPresent && !state.IsTrusted)) warnings.Add(new TargetConstraintWarning(state.ConstraintName));
                     var include = item.RootPolicy switch
                     {
                         RootConflictPolicy.FailOnConflict when probe.Exists => throw new RootConflictException(new(item.Table, item.Key)),
                         RootConflictPolicy.SkipExisting => !probe.Exists,
                         RootConflictPolicy.Upsert => true,
-                        null => !IsTargetSatisfied(probe),
+                        null => !IsTargetSatisfied(probe, requirements),
                         _ => true
                     };
                     if (!include) continue;
@@ -597,114 +863,40 @@ public sealed class DependencyClosure(IClosureStore store)
                     keysToExpand.Add(item.Key);
                 }
             }
-            var discovered = new Dictionary<RowAddress, ClosureRelationship>();
+            var discovered = new HashSet<RowAddress>();
             foreach (var relationship in request.Relationships.Where(x => x.IsEnabled))
             {
                 if (!expandable.TryGetValue(relationship.FromTable, out var fromKeys)) continue;
-                foreach (var key in await store.ExpandAsync(relationship, fromKeys.Distinct().ToArray(), cancellationToken)) discovered.TryAdd(new(relationship.ToTable, key), relationship);
+                foreach (var key in await store.ExpandAsync(relationship, fromKeys.Distinct().ToArray(), cancellationToken)) discovered.Add(new(relationship.ToTable, key));
             }
             frontier = [];
-            foreach (var group in discovered.GroupBy(x => x.Key.Table))
+            foreach (var group in discovered.GroupBy(address => address.Table))
             {
-                var keys = group.Select(x => x.Key.Key).ToArray();
+                var keys = group.Select(address => address.Key).ToArray();
                 foreach (var key in await store.InsertNewKeysAsync(group.Key, keys, generation + 1, cancellationToken))
-                    frontier.Add(new(group.Key, key, null, discovered[new(group.Key, key)]));
+                    frontier.Add(new(group.Key, key, null));
             }
         }
-        return new ClosureResult(included.Values);
+        return new ClosureResult(included.Values, warnings);
     }
-    private static bool IsTargetSatisfied(TargetProbe probe) => probe.Exists && probe.Constraint is { IsPresent: true, IsEnforced: true, IsTrusted: true };
+    private static bool IsTargetSatisfied(TargetProbe probe, IReadOnlyCollection<ClosureRelationship> requirements) => probe.Exists && requirements.All(relationship => probe.Constraints.TryGetValue(relationship, out var state) && state is { IsPresent: true, IsEnforced: true, IsTrusted: true });
+    private static bool HasUsableStableKey(TableDefinition table, StableKeySelection selection)
+    {
+        if (selection.Constraint is not { Columns.Count: > 0 } constraint) return false;
+        return table.PrimaryKey == constraint || constraint.Columns.All(name => table.Columns.FirstOrDefault(column => StringComparer.Ordinal.Equals(column.Name, name)) is { IsNullable: false });
+    }
 }
 ```
 
-`TargetSatisfied` is now decided purely from the `TargetProbe` the store returns for the relationship a row was reached through — the target's presence, enforcement, and trust — never from the source `ForeignKeyDefinition`'s own flags.
+`TargetSatisfied` is decided from the target's existence plus every enabled, natural outgoing target relationship of the dependency row; a reverse inclusion rule is not the row's own referential requirement. This is what licenses pruning that row's ancestors. The test data deliberately marks the incoming constraint trusted while leaving the dependency row's own target constraint absent, proving the algorithm neither inspects source flags nor mistakes the incoming source relationship for the target integrity guarantee. A serial whole-generation loop awaits all expansions and all inserts before consuming the next frontier, so each row receives an immutable first-discovery generation and the generation barrier is explicit. The provider store must perform its probes and expansions against one frozen source snapshot; this fake is immutable for the lifetime of a test.
 
 - [ ] **Step 4: Run them and confirm they pass**
 
 Run: `dotnet test --filter "FullyQualifiedName~DependencyClosureTests"`
 
-Expected: `Passed: 14. Failed: 0.`
+Expected: `Passed: 32. Failed: 0.`
 
-- [ ] **Step 5: Add the diamond fixture — Closure_WhenParentSatisfiedOnOnePathButRequiredOnAnother_StillTransfersSharedAncestor**
-
-```csharp
-[Fact] public async Task Closure_WhenParentSatisfiedOnOnePathButRequiredOnAnother_StillTransfersSharedAncestor()
-{
-    var r=T("R"); var a=T("A"); var b=T("B"); var x=T("X"); var ra=E(F(r,a)); var rb=E(F(r,b)); var ax=E(F(a,x)); var bx=E(F(b,x));
-    var s=new InMemoryClosureStore(); s.MarkTarget(a,K(2)); s.SetTargetConstraint(ra,new TargetConstraintState(true,true,true)); s.Link(ra,(K(1),K(2))); s.Link(rb,(K(1),K(3))); s.Link(ax,(K(2),K(4))); s.Link(bx,(K(3),K(4)));
-    var result=await Run(s,[ra,rb,ax,bx],Root(r,1));
-    Assert.True(result.Contains(x,K(4)));
-}
-```
-
-This test catches computing the final set by subtraction: it proves a satisfied path (`A`) does not suppress an ancestor (`X`) still required through an unsatisfied path (`B`). Because `A` is pruned, `X` is reachable through only the `B` path here — this fixture does not exercise multi-path deduplication; Step 7 below adds a separate fixture for that. Insert this test before the fixture helpers in `DependencyClosureTests`.
-
-- [ ] **Step 6: Run all closure tests and confirm they pass**
-
-Run: `dotnet test --filter "FullyQualifiedName~DependencyClosureTests"`
-
-Expected: `Passed: 15. Failed: 0.`
-
-- [ ] **Step 7: Add the multi-path deduplication fixture — Closure_WhenAncestorDemandedByTwoIncludedPaths_AppearsExactlyOnce**
-
-```csharp
-[Fact] public async Task Closure_WhenAncestorDemandedByTwoIncludedPaths_AppearsExactlyOnce()
-{
-    var r=T("R"); var a=T("A"); var b=T("B"); var xTable=T("X"); var ra=E(F(r,a)); var rb=E(F(r,b)); var ax=E(F(a,xTable)); var bx=E(F(b,xTable));
-    var s=new InMemoryClosureStore(); s.Link(ra,(K(1),K(2))); s.Link(rb,(K(1),K(3))); s.Link(ax,(K(2),K(4))); s.Link(bx,(K(3),K(4)));
-    var result=await Run(s,[ra,rb,ax,bx],Root(r,1));
-    Assert.Single(result.Rows.Where(row=>row.Table==xTable && row.Key==K(4)));
-}
-```
-
-Unlike Step 5, neither `A` nor `B` is target-satisfied here, so both paths are included and both genuinely demand `X` — this is the fixture that proves deduplication rather than assuming it.
-
-- [ ] **Step 8: Run all closure tests and confirm they pass**
-
-Run: `dotnet test --filter "FullyQualifiedName~DependencyClosureTests"`
-
-Expected: `Passed: 16. Failed: 0.`
-
-- [ ] **Step 9: Add the StableKey equality regression guard — StableKey_WhenReconstructedWithSameComponents_IsFoundInClosureResult**
-
-```csharp
-[Fact] public void StableKey_WhenReconstructedWithSameComponents_IsFoundInClosureResult()
-{
-    var table = T("T");
-    var result = new ClosureResult([new ClosureRow(table, K(1), 0)]);
-    Assert.True(result.Contains(table, K(1)));
-}
-```
-
-`ClosureResult.Contains` compares keys with `==`. If `StableKey` ever regresses to reference equality (its `operator ==`/`operator !=` removed), a freshly constructed key with identical components would stop being found, and this test fails loudly instead of the four negative closure fixtures above passing vacuously again.
-
-- [ ] **Step 10: Run all closure tests and confirm they pass**
-
-Run: `dotnet test --filter "FullyQualifiedName~DependencyClosureTests"`
-
-Expected: `Passed: 17. Failed: 0.`
-
-- [ ] **Step 11: Add the overlapping-root-selection fixture — Closure_WhenTwoRootsSelectTheSameKey_IncludesItOnce**
-
-```csharp
-[Fact] public async Task Closure_WhenTwoRootsSelectTheSameKey_IncludesItOnce()
-{
-    var c=T("C");
-    var s=new InMemoryClosureStore();
-    var r=await Run(s,[],new ClosureRoot(c,[K(1)],RootConflictPolicy.FailOnConflict),new ClosureRoot(c,[K(1)],RootConflictPolicy.FailOnConflict));
-    Assert.Single(r.Rows.Where(row=>row.Table==c && row.Key==K(1)));
-}
-```
-
-Two overlapping root selections for the same table and key must still produce exactly one row; this exercises `SeedRootKeysAsync`'s "genuinely new keys" dedup across roots.
-
-- [ ] **Step 12: Run all closure tests and confirm they pass**
-
-Run: `dotnet test --filter "FullyQualifiedName~DependencyClosureTests"`
-
-Expected: `Passed: 18. Failed: 0.`
-
-- [ ] **Step 13: Commit**
+- [ ] **Step 5: Commit**
 
 Run: `git add src/DataPitcher.Core/Closure/DependencyClosure.cs tests/DataPitcher.UnitTests/Closure/DependencyClosureTests.cs && git commit -m "feat: compute target-aware dependency closure"`
 
@@ -715,6 +907,8 @@ Run: `git add src/DataPitcher.Core/Closure/DependencyClosure.cs tests/DataPitche
 - Modify: `DataPitcher.sln`
 - Test: `tests/DataPitcher.ArchitectureTests/DependencyRuleTests.cs`
 - Prerequisite: `xmllint` (from `libxml2`) must be on `PATH` — install via `apt-get install -y libxml2-utils` on Ubuntu/CI runners or `brew install libxml2` on macOS. `scripts/test-all.sh` calls it unqualified rather than at a hardcoded absolute path.
+
+The 100% coverage gate is reachable only when some test exercises every public member; this was already nearly missed once. A task that adds a public member MUST add the test that exercises it in that same task; do not defer its coverage to a later task or slice.
 
 - [ ] **Step 1: Write the failing architecture tests**
 
@@ -853,12 +1047,18 @@ Run: `git add .github/workflows/ci.yml && git commit -m "ci: build, test, and en
 
 The coverage script runs the full solution test inventory as part of its gate; the explicit architecture step keeps that boundary check visible in CI even if the script changes later.
 
+## Open Questions
+
+- [RESOLVED] `StableKey` does not normalize CLR types; provider adapters materialize key values using the schema-declared CLR column type, which keeps same-provider identity construction consistent, and cross-provider mismatches remain a mapping issue handled by existing SafeWidening/ExplicitConversionRequired status until a compatibility matrix exists (see `docs/dependency-semantics.md` section 3).
+- Remaining Task 6 guard requirement: when closure-store work constructs stable keys from schema, add a test that asserts key component CLR types match declared column types.
+
 ## Scope decisions
 
 - Deferred: a concurrent-frontier fixture comparing the closure with a single-threaded reference run, because Slice 1's generation loop is deliberately serial; add it when frontier parallelism is introduced.
-- Deferred: per-table conflict policy and the rule that an Upsert dependency is never target-satisfied, because Slice 1 models conflict policy only for roots and does not yet write transfers.
 - Deferred: positive and negative provenance (`TargetSatisfied`, `RootSkipped`, and `NotDemanded`), because `ClosureResult` currently represents only rows needed for the transfer stage.
-- Added: alternative stable-key selection is covered by `StableKeySelector_WhenUniqueConstraintExplicitlySelected_UsesIt` in Task 3.
+- Added: an explicitly selected non-null alternative stable key is proven end to end by `Closure_WhenRootUsesExplicitNonNullableUniqueStableKey_IncludesIt` in Task 7.
+- Dropped from the initial release: virtual stable keys. Stable-key priority is primary key, then an explicitly selected non-null unique constraint, otherwise Blocked; virtual-key uniqueness proof is deferred beyond the initial release and is not a third fallback.
+- Added: all definitions introduced in Tasks 4–7 defensively copy collection inputs and expose non-writable collections, with same-task mutation tests.
 - Added: overlapping root selections deduplicate in `Closure_WhenTwoRootsSelectTheSameKey_IncludesItOnce` in Task 7.
 - Deferred: a no-per-key-target-probe assertion, because the provider's set-based probe implementation is Docker-blocked; add call-count instrumentation with that provider slice.
 

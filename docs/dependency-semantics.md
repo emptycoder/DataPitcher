@@ -39,6 +39,10 @@ A table with no reliable stable identity is marked Blocked and cannot participat
 
 Composite keys must work throughout every one of those operations. Preserve key column order, native database types, provider equality semantics, collation implications, and null behaviour — a composite key is not reducible to a concatenated string without risking false or missed matches under provider-specific comparison rules. Primary key and required foreign key columns can never be removed from the transfer mapping, even when an operator's column selection would otherwise exclude them, because doing so would silently break identity or referential resolution downstream. Keys must not be serialized into a universal JSON value for database joins; staging uses typed key columns matching the source types, so joins and comparisons execute with native provider semantics rather than string equality.
 
+### CLR type handling in stable keys
+
+`StableKey` does not normalize CLR types. Key components must be materialized by the provider adapter using the CLR type declared in the schema snapshot so that same-provider transfers stay consistent by construction. Cross-provider key-type divergence is therefore a type-mapping compatibility issue, surfaced through existing `SafeWidening` and `ExplicitConversionRequired` status classes, and cross-provider transfer is blocked by default until a compatibility matrix is in place. A test guard is required when constructing stable keys from schema to assert every key component CLR type matches its declared column type.
+
 ## 4. The closure algorithm
 
 The closure is a single, demand-driven, target-aware breadth-first fixed point computed over generations. An earlier design used two closures — a source-only candidate closure followed by a separate minimal final closure — superseded by this design. See ADR 0004 for the reasoning.
