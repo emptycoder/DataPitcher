@@ -11,3 +11,130 @@ export const EffectivePermissionsResponse = zod.object({
   "tenantId": zod.string().min(1),
   "permissions": zod.array(zod.string())
 })
+
+
+export const GetSelectionWorkbenchSchemaResponse = zod.object({
+  "tables": zod.array(zod.object({
+  "tableId": zod.string(),
+  "schemaName": zod.string(),
+  "tableName": zod.string(),
+  "approximateRowCount": zod.union([zod.number(),zod.null()]),
+  "stableKeyColumns": zod.union([zod.array(zod.string()),zod.null()]),
+  "columns": zod.array(zod.object({
+  "name": zod.string(),
+  "valueKind": zod.enum(['int', 'decimal', 'string', 'boolean', 'date', 'time', 'dateTime', 'guid'])
+}))
+})),
+  "foreignKeys": zod.array(zod.object({
+  "foreignKeyId": zod.string(),
+  "childTableId": zod.string(),
+  "parentTableId": zod.string()
+})),
+  "schemaRevision": zod.string()
+})
+
+
+export const ListSelectionsResponse = zod.object({
+  "selections": zod.array(zod.object({
+  "selectionId": zod.string(),
+  "displayName": zod.string(),
+  "version": zod.int(),
+  "eTag": zod.string(),
+  "mode": zod.enum(['visual', 'raw']),
+  "warnings": zod.array(zod.string())
+}))
+})
+
+
+export const CompileSelectionBody = zod.object({
+  "mode": zod.enum(['visual', 'raw']),
+  "visual": zod.union([zod.looseObject({
+
+}),zod.null()]),
+  "rawSql": zod.union([zod.string(),zod.null()]),
+  "parameters": zod.array(zod.object({
+  "name": zod.string(),
+  "kind": zod.enum(['int', 'decimal', 'string', 'boolean', 'date', 'time', 'dateTime', 'guid']),
+  "value": zod.union([zod.string(),zod.number(),zod.boolean()])
+})),
+  "schemaRevision": zod.string()
+})
+
+export const CompileSelectionResponse = zod.object({
+  "sqlSnapshot": zod.string(),
+  "parameters": zod.array(zod.object({
+  "name": zod.string(),
+  "kind": zod.enum(['int', 'decimal', 'string', 'boolean', 'date', 'time', 'dateTime', 'guid'])
+})),
+  "warnings": zod.array(zod.string()),
+  "schemaRevision": zod.string()
+})
+
+
+export const PreviewSelectionBody = zod.object({
+  "mode": zod.enum(['visual', 'raw']),
+  "visual": zod.union([zod.looseObject({
+
+}),zod.null()]),
+  "rawSql": zod.union([zod.string(),zod.null()]),
+  "parameters": zod.array(zod.object({
+  "name": zod.string(),
+  "kind": zod.enum(['int', 'decimal', 'string', 'boolean', 'date', 'time', 'dateTime', 'guid']),
+  "value": zod.union([zod.string(),zod.number(),zod.boolean()])
+})),
+  "schemaRevision": zod.string()
+})
+
+export const PreviewSelectionResponse = zod.object({
+  "columns": zod.array(zod.string()),
+  "rows": zod.array(zod.record(zod.string(), zod.unknown())),
+  "hasMore": zod.boolean(),
+  "revision": zod.string()
+})
+
+
+export const CountSelectionBody = zod.object({
+  "mode": zod.enum(['visual', 'raw']),
+  "visual": zod.union([zod.looseObject({
+
+}),zod.null()]),
+  "rawSql": zod.union([zod.string(),zod.null()]),
+  "parameters": zod.array(zod.object({
+  "name": zod.string(),
+  "kind": zod.enum(['int', 'decimal', 'string', 'boolean', 'date', 'time', 'dateTime', 'guid']),
+  "value": zod.union([zod.string(),zod.number(),zod.boolean()])
+})),
+  "schemaRevision": zod.string()
+})
+
+export const countSelectionResponseDistinctStableKeyCountMin = 0;
+
+
+
+export const CountSelectionResponse = zod.object({
+  "distinctStableKeyCount": zod.int().min(countSelectionResponseDistinctStableKeyCountMin)
+})
+
+
+export const SaveSelectionBody = zod.object({
+  "mode": zod.enum(['visual', 'raw']),
+  "visual": zod.union([zod.looseObject({
+
+}),zod.null()]),
+  "rawSql": zod.union([zod.string(),zod.null()]),
+  "parameters": zod.array(zod.object({
+  "name": zod.string(),
+  "kind": zod.enum(['int', 'decimal', 'string', 'boolean', 'date', 'time', 'dateTime', 'guid']),
+  "value": zod.union([zod.string(),zod.number(),zod.boolean()])
+})),
+  "schemaRevision": zod.string()
+})
+
+export const SaveSelectionResponse = zod.object({
+  "selectionId": zod.string(),
+  "displayName": zod.string(),
+  "version": zod.int(),
+  "eTag": zod.string(),
+  "mode": zod.enum(['visual', 'raw']),
+  "warnings": zod.array(zod.string())
+})

@@ -14,6 +14,58 @@
           }
         }
       }
+    },
+    "/api/selections/workbench-schema": {
+      "get": {
+        "operationId": "getSelectionWorkbenchSchema",
+        "responses": {
+          "200": { "description": "Selection workbench schema", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SelectionWorkbenchSchemaResponse" } } } }
+        }
+      }
+    },
+    "/api/selections": {
+      "get": {
+        "operationId": "listSelections",
+        "responses": {
+          "200": { "description": "Saved selections", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ListSelectionsResponse" } } } }
+        }
+      }
+    },
+    "/api/selections/compile": {
+      "post": {
+        "operationId": "compileSelection",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SelectionRequest" } } } },
+        "responses": {
+          "200": { "description": "Generated SQL snapshot", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompilationResponse" } } } }
+        }
+      }
+    },
+    "/api/selections/preview": {
+      "post": {
+        "operationId": "previewSelection",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SelectionRequest" } } } },
+        "responses": {
+          "200": { "description": "Bounded selection preview", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PreviewResponse" } } } }
+        }
+      }
+    },
+    "/api/selections/count": {
+      "post": {
+        "operationId": "countSelection",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SelectionRequest" } } } },
+        "responses": {
+          "200": { "description": "Distinct stable-key count", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CountResponse" } } } }
+        }
+      }
+    },
+    "/api/selections/save": {
+      "post": {
+        "operationId": "saveSelection",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SelectionRequest" } } } },
+        "responses": {
+          "200": { "description": "Saved selection", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SavedSelection" } } } }
+        }
+      }
     }
   },
   "components": {
@@ -26,6 +78,101 @@
           "tenantId": { "type": "string", "minLength": 1 },
           "permissions": { "type": "array", "items": { "type": "string" } }
         }
+      },
+      "ValueKind": {
+        "type": "string",
+        "enum": ["int", "decimal", "string", "boolean", "date", "time", "dateTime", "guid"]
+      },
+      "TypedParameterDefinition": {
+        "type": "object",
+        "required": ["name", "kind"],
+        "properties": { "name": { "type": "string" }, "kind": { "$ref": "#/components/schemas/ValueKind" } }
+      },
+      "TypedParameterValue": {
+        "type": "object",
+        "required": ["name", "kind", "value"],
+        "properties": {
+          "name": { "type": "string" },
+          "kind": { "$ref": "#/components/schemas/ValueKind" },
+          "value": { "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }] }
+        }
+      },
+      "SelectionRequest": {
+        "type": "object",
+        "required": ["mode", "visual", "rawSql", "parameters", "schemaRevision"],
+        "properties": {
+          "mode": { "type": "string", "enum": ["visual", "raw"] },
+          "visual": { "oneOf": [{ "type": "object" }, { "type": "null" }] },
+          "rawSql": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+          "parameters": { "type": "array", "items": { "$ref": "#/components/schemas/TypedParameterValue" } },
+          "schemaRevision": { "type": "string" }
+        }
+      },
+      "SelectionColumn": {
+        "type": "object",
+        "required": ["name", "valueKind"],
+        "properties": { "name": { "type": "string" }, "valueKind": { "$ref": "#/components/schemas/ValueKind" } }
+      },
+      "SelectionTable": {
+        "type": "object",
+        "required": ["tableId", "schemaName", "tableName", "approximateRowCount", "stableKeyColumns", "columns"],
+        "properties": {
+          "tableId": { "type": "string" },
+          "schemaName": { "type": "string" },
+          "tableName": { "type": "string" },
+          "approximateRowCount": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+          "stableKeyColumns": { "oneOf": [{ "type": "array", "items": { "type": "string" } }, { "type": "null" }] },
+          "columns": { "type": "array", "items": { "$ref": "#/components/schemas/SelectionColumn" } }
+        }
+      },
+      "ForeignKeyPath": {
+        "type": "object",
+        "required": ["foreignKeyId", "childTableId", "parentTableId"],
+        "properties": { "foreignKeyId": { "type": "string" }, "childTableId": { "type": "string" }, "parentTableId": { "type": "string" } }
+      },
+      "SelectionWorkbenchSchemaResponse": {
+        "type": "object",
+        "required": ["tables", "foreignKeys", "schemaRevision"],
+        "properties": {
+          "tables": { "type": "array", "items": { "$ref": "#/components/schemas/SelectionTable" } },
+          "foreignKeys": { "type": "array", "items": { "$ref": "#/components/schemas/ForeignKeyPath" } },
+          "schemaRevision": { "type": "string" }
+        }
+      },
+      "SavedSelection": {
+        "type": "object",
+        "required": ["selectionId", "displayName", "version", "eTag", "mode", "warnings"],
+        "properties": {
+          "selectionId": { "type": "string" }, "displayName": { "type": "string" }, "version": { "type": "integer" }, "eTag": { "type": "string" },
+          "mode": { "type": "string", "enum": ["visual", "raw"] }, "warnings": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "ListSelectionsResponse": {
+        "type": "object",
+        "required": ["selections"],
+        "properties": { "selections": { "type": "array", "items": { "$ref": "#/components/schemas/SavedSelection" } } }
+      },
+      "CompilationResponse": {
+        "type": "object",
+        "required": ["sqlSnapshot", "parameters", "warnings", "schemaRevision"],
+        "properties": {
+          "sqlSnapshot": { "type": "string" }, "parameters": { "type": "array", "items": { "$ref": "#/components/schemas/TypedParameterDefinition" } },
+          "warnings": { "type": "array", "items": { "type": "string" } }, "schemaRevision": { "type": "string" }
+        }
+      },
+      "PreviewResponse": {
+        "type": "object",
+        "required": ["columns", "rows", "hasMore", "revision"],
+        "properties": {
+          "columns": { "type": "array", "items": { "type": "string" } },
+          "rows": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "hasMore": { "type": "boolean" }, "revision": { "type": "string" }
+        }
+      },
+      "CountResponse": {
+        "type": "object",
+        "required": ["distinctStableKeyCount"],
+        "properties": { "distinctStableKeyCount": { "type": "integer", "minimum": 0 } }
       }
     }
   }
