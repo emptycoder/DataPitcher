@@ -38,3 +38,20 @@ public sealed class TransferPipelineOptions
     public BatchTarget BatchTarget { get; }
     public int MaximumQueuedBatches { get; }
 }
+public sealed class BatchTransferStatistics
+{
+    public BatchTransferStatistics(TransferBatch batch, BatchWriteResult result, TimeSpan duration) { Batch = batch; Result = result; Duration = duration; }
+    public TransferBatch Batch { get; } public BatchWriteResult Result { get; } public TimeSpan Duration { get; }
+}
+public sealed class TransferPipelineResult
+{
+    public TransferPipelineResult(long rowsRead, long bytesRead, IEnumerable<BatchTransferStatistics> batches, TimeSpan duration)
+    {
+        ArgumentNullException.ThrowIfNull(batches); RowsRead = rowsRead; BytesRead = bytesRead; Batches = Array.AsReadOnly(batches.ToArray()); Duration = duration;
+        RowsInserted = Batches.Sum(batch => batch.Result.Inserted); RowsUpdated = Batches.Sum(batch => batch.Result.Updated); RowsSkipped = Batches.Sum(batch => batch.Result.Skipped); RowsFailed = Batches.Sum(batch => batch.Result.Failed); BytesWritten = Batches.Sum(batch => batch.Result.BytesWritten);
+    }
+    public long RowsRead { get; } public long RowsInserted { get; } public long RowsUpdated { get; } public long RowsSkipped { get; } public long RowsFailed { get; }
+    public long BytesRead { get; } public long BytesWritten { get; } public IReadOnlyList<BatchTransferStatistics> Batches { get; } public TimeSpan Duration { get; }
+    public double RowsPerSecond => Duration <= TimeSpan.Zero ? 0 : RowsRead / Duration.TotalSeconds;
+    public double MebibytesPerSecond => Duration <= TimeSpan.Zero ? 0 : BytesWritten / 1024d / 1024d / Duration.TotalSeconds;
+}
