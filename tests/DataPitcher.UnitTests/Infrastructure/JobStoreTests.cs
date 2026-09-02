@@ -16,6 +16,23 @@ public sealed class JobStoreTests
     }
 
     [Fact]
+    public void JobStore_WhenStarted_ReadsBackEveryPersistedField()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock);
+        var job = store.Start(new(Guid.NewGuid(), "start-45")).Job;
+        var read = store.Get(job.JobId);
+        Assert.Equal(job.JobId, read.JobId); Assert.Equal(job.RunId, read.RunId); Assert.Equal(job.PlanId, read.PlanId); Assert.Equal(job.IdempotencyKey, read.IdempotencyKey); Assert.Equal(job.State, read.State);
+    }
+
+    [Fact]
+    public void JobStore_WhenIdempotencyKeyIsBlank_RejectsTheStart()
+    {
+        using var fixture = new ControlDatabaseFixture(); var store = new JobStore(fixture.Database, fixture.Clock);
+
+        Assert.Throws<ArgumentException>(() => store.Start(new(Guid.NewGuid(), "")));
+    }
+
+    [Fact]
     public void JobStore_WhenLeaseIsCurrent_PersistsTheStateChangeAndItsHistory()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock);
