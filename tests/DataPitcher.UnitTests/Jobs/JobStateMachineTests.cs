@@ -9,9 +9,9 @@ public sealed class JobStateMachineTests
     [
         (JobState.Draft, JobState.Queued), (JobState.Draft, JobState.Cancelling),
         (JobState.Queued, JobState.Preparing), (JobState.Queued, JobState.Cancelling),
-        (JobState.Preparing, JobState.Running), (JobState.Preparing, JobState.Pausing), (JobState.Preparing, JobState.Cancelling), (JobState.Preparing, JobState.Failed),
-        (JobState.Running, JobState.Pausing), (JobState.Running, JobState.Cancelling), (JobState.Running, JobState.Verifying), (JobState.Running, JobState.Failed),
-        (JobState.Pausing, JobState.Paused), (JobState.Pausing, JobState.Cancelling), (JobState.Pausing, JobState.Failed),
+        (JobState.Preparing, JobState.Running), (JobState.Preparing, JobState.Pausing), (JobState.Preparing, JobState.Cancelling), (JobState.Preparing, JobState.Failed), (JobState.Preparing, JobState.Queued),
+        (JobState.Running, JobState.Pausing), (JobState.Running, JobState.Cancelling), (JobState.Running, JobState.Verifying), (JobState.Running, JobState.Failed), (JobState.Running, JobState.Queued),
+        (JobState.Pausing, JobState.Paused), (JobState.Pausing, JobState.Cancelling), (JobState.Pausing, JobState.Failed), (JobState.Pausing, JobState.Queued),
         (JobState.Paused, JobState.Queued), (JobState.Paused, JobState.Cancelling),
         (JobState.Cancelling, JobState.Cancelled), (JobState.Cancelling, JobState.Failed),
         (JobState.Verifying, JobState.Succeeded), (JobState.Verifying, JobState.Failed), (JobState.Verifying, JobState.VerificationFailed),

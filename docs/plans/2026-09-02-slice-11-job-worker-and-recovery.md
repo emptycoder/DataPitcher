@@ -39,6 +39,8 @@ This slice owns orchestration and recovery, not provider writers, native bulk-co
 
 Every worker-owned session is newly opened for that worker and disposed by it. A source reader and source connection belong only to `ITransferReadSession`; a target connection and transaction belong only to `ITargetRunSession`; the renewal loop calls `LeaseStore`, which opens a separate SQLite connection. No mutable connection, transaction, reader, or command is shared concurrently. Lease expiration is scheduling information, not target-write authorization. Each target apply asserts the immutable `LeaseGrant.FenceToken` against the target checkpoint in the same transaction as its staged apply and checkpoint update. A worker that wakes after losing its lease is therefore harmless: it can fail, but it cannot commit a stale target mutation.
 
+Worker-driven transitions—claiming, preparing, running, committing a batch, pausing at a boundary, and completing—are made only by the owning worker and require its owner ID, unexpired lease, and exact fence token. Operator-driven control requests—pause, resume, and cancel—are authorized API actions that record intent for a worker to observe; they do not require a worker lease. In particular, a paused job has no owner because its worker released its lease, so requiring one would make `Paused -> Queued` resume impossible. Authorization remains the separate API concern already modeled by the system.
+
 Pause is a boundary command. On observing `Pausing`, the worker lets the current normal batch—or the current atomic SCC transfer unit—finish its target transaction and checkpoint update. It then stops the pipeline from admitting another unit, discards any prefetched but uncommitted in-memory rows, disposes the source reader and source connection, and removes target staging rows for the completed `(job_id, fence_token, batch_sequence)` in that same completed apply transaction. No payload is durable across a pause. Resume opens fresh sessions and keyset-seeks strictly after the target checkpoint’s last committed `StableKey`; it never uses `OFFSET`. A cancellation command cancels the linked token supplied to every source, target, target-repair, mirror, and SQLite operation, aborts an incomplete unit, disposes both sessions, and reaches `Cancelled` only after no uncommitted unit remains.
 
 An SCC selected for an atomic cycle strategy is one `TransferUnit` regardless of row count. It is not pausable between its member rows or internal writer batches. A pause requested while that unit is applying becomes effective only before it begins or after its one target commit. A connection loss or process interruption during it rolls back the entire target transaction; its checkpoint does not advance and recovery retries the complete SCC unit.
@@ -228,6 +230,8 @@ JobState.Running => [JobState.Pausing, JobState.Cancelling, JobState.Verifying, 
 JobState.Pausing => [JobState.Paused, JobState.Cancelling, JobState.Failed, JobState.Queued],
 ```
 
+The recovery requeues deliberately expand the exhaustive state-machine transition set: an interrupted active job must return to `Queued` so restart recovery can reclaim it rather than leaving it permanently unrecoverable.
+
 ```csharp
 // src/DataPitcher.Infrastructure/Checkpoints/CheckpointMirrorStore.cs
 using System.Globalization;
@@ -247,7 +251,7 @@ public sealed class CheckpointMirrorStore(ControlDatabase database) : IControlCh
 }
 ```
 
-Implement `JobStore : IJobControl` and `LeaseStore` asynchronous APIs with one conditional SQLite transaction per transition: candidate query is only scheduling discovery; `LeaseStore.AcquireAsync` remains the decisive claim; every state update includes `OwnerId`, unexpired `ExpiresUtc`, and exact `FenceToken`; the history row and `FailureCode` update share that transaction. `TryClaimNextAsync` considers `Queued` plus expired `Preparing`, `Running`, and `Pausing` rows, labels the latter `IsInterrupted`, and does not claim another worker’s unexpired lease. `PrepareAsync` first records interrupted active state to `Queued`, then `Queued -> Preparing`; normal jobs only record the latter. Add separately tested `RequestPauseAsync`, `RequestResumeAsync`, and `RequestCancelAsync` conditional command methods, each with history and its cancellation token passed to SQLite.
+Implement `JobStore : IJobControl` and `LeaseStore` asynchronous APIs with one conditional SQLite transaction per transition: candidate query is only scheduling discovery; `LeaseStore.AcquireAsync` remains the decisive claim; every worker-driven state update includes `OwnerId`, unexpired `ExpiresUtc`, and exact `FenceToken`; the history row and `FailureCode` update share that transaction. `TryClaimNextAsync` considers `Queued` plus expired `Preparing`, `Running`, and `Pausing` rows, labels the latter `IsInterrupted`, and does not claim another worker’s unexpired lease. `PrepareAsync` first records interrupted active state to `Queued`, then `Queued -> Preparing`; normal jobs only record the latter. Add separately tested `RequestPauseAsync`, `RequestResumeAsync`, and `RequestCancelAsync` conditional operator-intent methods, each with history and its cancellation token passed to SQLite; they are authorized separately and must not require `OwnerId`, lease expiry, or fence token.
 
 4. - [ ] **Run the focused SQLite suite and confirm durable scheduling behavior.**
 
@@ -262,7 +266,7 @@ Run: `git add src/DataPitcher.Core/Jobs/JobState.cs src/DataPitcher.Infrastructu
 ### Task 3: Implement lease renewal and the hosted worker’s normal run
 
 **Files:**
-- Create: `src/DataPitcher.Infrastructure/Worker/LeaseRenewer.cs`, `src/DataPitcher.Infrastructure/Worker/JobWorker.cs`, `tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs`, `tests/DataPitcher.UnitTests/Worker/JobWorkerTests.cs`
+- Create: `src/DataPitcher.Infrastructure/Worker/LeaseRenewer.cs`, `src/DataPitcher.Infrastructure/Worker/JobWorker.cs` (normal uninterrupted path only; no recovery dependency), `tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs`, `tests/DataPitcher.UnitTests/Worker/JobWorkerTests.cs`
 - Modify: `src/DataPitcher.Infrastructure/DataPitcher.Infrastructure.csproj`
 - Test: `tests/DataPitcher.UnitTests/Worker/JobWorkerTests.cs`
 
@@ -274,7 +278,9 @@ Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --fil
 
 Expected: compilation fails with `CS0246` because `JobWorker` and `LeaseRenewer` are not defined.
 
-3. - [ ] **Add hosting support, the renewing loop, and the complete normal coordinator.** Add `Microsoft.Extensions.Hosting.Abstractions` version `10.0.11` to Infrastructure. `LeaseRenewer` must call `delay.UntilAsync(current.RenewAfterUtc, token)`, then `LeaseStore.RenewIfDue`; a null renewal cancels its linked lease-loss token. `JobWorker` must inherit `BackgroundService`, create a fresh linked token per claim, and await the renewer and run task before accepting another job.
+3. - [ ] **Add hosting support, the renewing loop, and the complete normal coordinator.** Add `Microsoft.Extensions.Hosting.Abstractions` version `10.0.11` to Infrastructure. `LeaseRenewer` must call `delay.UntilAsync(current.RenewAfterUtc, token)`, then the existing synchronous `LeaseStore.RenewIfDue`; a null renewal cancels its linked lease-loss token. `JobWorker` must inherit `BackgroundService`, create a fresh linked token per claim, and await the renewer and run task before accepting another job.
+
+`RenewIfDue` intentionally remains synchronous. The control database is in-process SQLite, and the store layer's `Start`, `TryTransition`, and `Get` APIs are synchronous; an async variant adds inconsistency without a network round trip to await.
 
 ```csharp
 // src/DataPitcher.Infrastructure/Worker/LeaseRenewer.cs
@@ -292,7 +298,7 @@ public sealed class LeaseRenewer(LeaseStore leases, IWorkerDelay delay)
             while (!stopToken.IsCancellationRequested)
             {
                 await delay.UntilAsync(current.RenewAfterUtc, stopToken);
-                var renewed = await leases.RenewIfDueAsync(current, ttl, stopToken);
+                var renewed = leases.RenewIfDue(current, ttl);
                 if (renewed is null) { leaseLost.Cancel(); return; }
                 current = renewed;
             }
@@ -312,7 +318,7 @@ namespace DataPitcher.Infrastructure.Worker;
 
 public sealed class JobWorker(
     IJobControl jobs, IJobRunCatalog catalog, ITargetRunSessionFactory targets,
-    ITransferReadSessionFactory sources, RecoveryCoordinator recovery, LeaseRenewer renewer,
+    ITransferReadSessionFactory sources, LeaseRenewer renewer,
     IControlCheckpointMirror mirror, IWorkerFaults faults, IWorkerDelay delay, IClock clock,
     string ownerId, TimeSpan leaseTtl, TimeSpan pollInterval) : BackgroundService
 {
@@ -336,21 +342,14 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
         await jobs.PrepareAsync(claim, leaseLost.Token);
         var run = await catalog.LoadAsync(claim.Job, leaseLost.Token);
         await using var target = await targets.OpenAsync(run, leaseLost.Token);
-        var recovered = await recovery.RecoverAsync(claim, run, target, leaseLost.Token);
         await jobs.MarkRunningAsync(claim.Lease, leaseLost.Token);
-        await using var source = await sources.OpenKeysetAsync(run, recovered.LastStableKey, leaseLost.Token);
+        await using var source = await sources.OpenKeysetAsync(run, null, leaseLost.Token);
         for (TransferUnit? unit; (unit = await source.ReadNextAsync(leaseLost.Token)) is not null;)
         {
             await faults.HitAsync(TransferFaultPoint.BeforeTargetCommit, leaseLost.Token);
             var checkpoint = await target.ApplyAsync(run, claim.Lease, unit, leaseLost.Token);
             await faults.HitAsync(TransferFaultPoint.AfterTargetCommitBeforeControlMirror, leaseLost.Token);
             await mirror.OverwriteAsync(checkpoint, leaseLost.Token);
-            if (await jobs.GetStateAsync(claim.Job.JobId, leaseLost.Token) is JobState.Pausing)
-            {
-                await source.DiscardUncommittedAsync(leaseLost.Token);
-                await jobs.MarkPausedAsync(claim.Lease, leaseLost.Token);
-                return;
-            }
         }
         await jobs.MarkVerifyingAsync(claim.Lease, leaseLost.Token);
     }
@@ -359,13 +358,13 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
 }
 ```
 
-Task 6 adds the command-aware cancellation and classified-failure catches around this complete success path. The worker invokes no HTTP object and never exposes a session outside `RunClaimAsync`.
+Task 5 adds pause, resume, and cancellation boundary handling test-first, and Task 6 adds classified-failure catches around this complete success path. The worker invokes no HTTP object and never exposes a session outside `RunClaimAsync`.
 
 4. - [ ] **Run the normal worker suite and confirm clock-driven ownership.**
 
 Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --filter "FullyQualifiedName~JobWorkerTests"`
 
-Expected: `Passed: 2. Failed: 0.` No test contains `Thread.Sleep` or `Task.Delay`; the gate makes renewal deterministic and confirms all sessions are worker-owned and disposed.
+Expected: `Passed: 2. Failed: 0.` No test contains `Thread.Sleep` or `Task.Delay`; the gate makes renewal deterministic and confirms all sessions are worker-owned and disposed. The normal worker opens the source from `null`; target checkpoint recovery and keyset resumption are introduced and wired in Task 4.
 
 5. - [ ] **Commit hosted normal orchestration.**
 
@@ -375,7 +374,7 @@ Run: `git add src/DataPitcher.Infrastructure/DataPitcher.Infrastructure.csproj s
 
 **Files:**
 - Create: `src/DataPitcher.Infrastructure/Worker/RecoveryCoordinator.cs`, `tests/DataPitcher.UnitTests/Worker/RecoveryCoordinatorTests.cs`
-- Modify: `tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs`
+- Modify: `src/DataPitcher.Infrastructure/Worker/JobWorker.cs`, `tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs`, `tests/DataPitcher.UnitTests/Worker/JobWorkerTests.cs`
 - Test: `tests/DataPitcher.UnitTests/Worker/RecoveryCoordinatorTests.cs`
 
 1. - [ ] **Write failing target-authority and repair tests.** Use a target fake with checkpoint batch 7/key 700 and a stale SQLite mirror at batch 4. Assert recovery opens with the newer SQLite lease token, calls the target fence/checkpoint operation before mirror overwrite, opens the source later with key 700, and never queries the mirror. Test mismatched target manifest hash throws `ManifestSealMismatchException`; a run with `SupportsDurableResume == false` throws `NonResumableInterruptedException`. Test repair of a disabled trigger changes its journal entry to `Repaired`; test an unrepaired untrusted constraint calls `QuarantineAsync` and keeps its state `Quarantined`.
@@ -386,7 +385,7 @@ Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --fil
 
 Expected: compilation fails with `CS0246` because `RecoveryCoordinator` does not exist.
 
-3. - [ ] **Implement target-first recovery and journal repair.** `AcquireFenceReadCheckpointAndJournalAsync` is a provider contract with a strict implementation rule: in a target transaction, create the initial `(job_id, run_id)` checkpoint if absent; otherwise compare the stored seal ordinally, reject mismatch, advance its fence only when stored token is lower, read the checkpoint, and commit. It must not accept an equal or lower stale token. Its implementation writes the target mutation journal entry in the same target transaction as each durable mutation, records repair completion only after catalog verification, and preserves a quarantined record.
+3. - [ ] **Implement target-first recovery and journal repair, then wire it into the worker.** `AcquireFenceReadCheckpointAndJournalAsync` is a provider contract with a strict implementation rule: in a target transaction, create the initial `(job_id, run_id)` checkpoint if absent; otherwise compare the stored seal ordinally, reject mismatch, advance its fence only when stored token is lower, read the checkpoint, and commit. It must not accept an equal or lower stale token. Its implementation writes the target mutation journal entry in the same target transaction as each durable mutation, records repair completion only after catalog verification, and preserves a quarantined record. Add `RecoveryCoordinator recovery` to `JobWorker` after `sources`; after opening the target and before `MarkRunningAsync`, call `recovery.RecoverAsync(claim, run, target, leaseLost.Token)`, then pass the returned checkpoint's `LastStableKey` to `OpenKeysetAsync`. Update the Task 3 worker tests to supply the coordinator and assert the recovered key is used.
 
 ```csharp
 // src/DataPitcher.Infrastructure/Worker/RecoveryCoordinator.cs
@@ -423,9 +422,9 @@ Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --fil
 
 Expected: `Passed: 4. Failed: 0.` The source resumes after stable key 700, a seal mismatch and non-resumable interruption never start a source session, and an unrepairable mutation remains quarantined.
 
-5. - [ ] **Commit recovery and target journal coordination.**
+5. - [ ] **Commit recovery, target journal coordination, and worker wiring.**
 
-Run: `git add src/DataPitcher.Infrastructure/Worker/RecoveryCoordinator.cs tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs tests/DataPitcher.UnitTests/Worker/RecoveryCoordinatorTests.cs && git commit -m "feat: recover from target checkpoints and journals"`
+Run: `git add src/DataPitcher.Infrastructure/Worker/RecoveryCoordinator.cs src/DataPitcher.Infrastructure/Worker/JobWorker.cs tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs tests/DataPitcher.UnitTests/Worker/JobWorkerTests.cs tests/DataPitcher.UnitTests/Worker/RecoveryCoordinatorTests.cs && git commit -m "feat: recover from target checkpoints and journals"`
 
 ### Task 5: Honor pause, resume, cancellation, and atomic SCC boundaries
 
@@ -442,7 +441,7 @@ Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --fil
 
 Expected: test failure reports that a prefetched unit was applied after `Pausing`, because the normal worker has not yet discarded it at the committed boundary.
 
-3. - [ ] **Complete boundary handling without changing writer ownership.** After every successful `ApplyAsync`, check `Cancelling` before `Pausing`; cancellation calls both sessions’ `DiscardUncommittedAsync` with the linked token, then `MarkCancelledAsync`. Pause calls only the source discard method after the current successful commit, letting `await using` close its reader/connection. Require provider `ApplyAsync` to delete or mark reclaimable its own staging rows in the same fenced target transaction as business apply/checkpoint, so pause persists no payload. On resume, `JobStore.RequestResumeAsync` changes only `Paused -> Queued`; the next claim goes through target recovery and calls `OpenKeysetAsync(run, checkpoint.LastStableKey, token)`. Do not branch inside an atomic component: it is one `TransferUnit`, so the existing post-`ApplyAsync` boundary is the only pause observation point.
+3. - [ ] **Introduce pause and cancellation boundary handling in `RunClaimAsync` from the failing test, without changing writer ownership.** After every successful `ApplyAsync`, check `Cancelling` before `Pausing`; cancellation calls both sessions’ `DiscardUncommittedAsync` with the linked token, then `MarkCancelledAsync`. Pause calls only the source discard method after the current successful commit, letting `await using` close its reader/connection. Require provider `ApplyAsync` to delete or mark reclaimable its own staging rows in the same fenced target transaction as business apply/checkpoint, so pause persists no payload. On resume, the authorized operator-intent request `JobStore.RequestResumeAsync` changes only `Paused -> Queued` without a lease because paused jobs have no owner; the next claim goes through target recovery and calls `OpenKeysetAsync(run, checkpoint.LastStableKey, token)`. Do not branch inside an atomic component: it is one `TransferUnit`, so the existing post-`ApplyAsync` boundary is the only pause observation point.
 
 4. - [ ] **Run the focused boundary tests and confirm all session cleanup and resume semantics.**
 
@@ -522,4 +521,4 @@ Covered: hosted background ownership outside HTTP; exclusive idempotent claim be
 
 Deferred: provider-native bulk writers, source-reader SQL, target checkpoint DDL and conditional SQL implementation, target staging DDL, physical bounded pipeline implementation, provider catalog repair queries, Docker-backed SQL Server/PostgreSQL proof, verification execution, API pause/resume/cancel endpoints, and DI composition. Those future implementations must satisfy the contracts here and add real-provider evidence; this slice neither implements nor substitutes them.
 
-Consistency checked: types and method names are introduced before use—Task 1 defines `TransferRun`, `TargetCheckpoint`, `TransferUnit`, `IJobControl`, `ITargetRunSession`, `ITransferReadSession`, `IControlCheckpointMirror`, `IWorkerFaults`, and `IWorkerDelay`; Task 2 implements the mirror/control path; Task 3 introduces `LeaseRenewer`, `JobWorker`, and `WorkerTestSupport`; Task 4 introduces `RecoveryCoordinator`; later tasks use exactly `OpenKeysetAsync`, `AcquireFenceReadCheckpointAndJournalAsync`, `RepairMutationsAsync`, `ApplyAsync`, `OverwriteAsync`, `TryClaimNextAsync`, `PrepareAsync`, `MarkRunningAsync`, `MarkPausedAsync`, `MarkCancelledAsync`, and `MarkFailedAsync`. C# examples avoid keyword-named pattern variables, target-typed `new()` as a `params` argument, unmapped LINQ to DB columns, and xUnit analyzer-violating assertions.
+Consistency checked: types and method names are introduced before use—Task 1 defines `TransferRun`, `TargetCheckpoint`, `TransferUnit`, `IJobControl`, `ITargetRunSession`, `ITransferReadSession`, `IControlCheckpointMirror`, `IWorkerFaults`, and `IWorkerDelay`; Task 2 implements the mirror/control path; Task 3 introduces `LeaseRenewer`, `JobWorker`, and `WorkerTestSupport` for the normal uninterrupted path only; Task 4 introduces `RecoveryCoordinator` and then wires it into `JobWorker`; later tasks use exactly `OpenKeysetAsync`, `AcquireFenceReadCheckpointAndJournalAsync`, `RepairMutationsAsync`, `ApplyAsync`, `OverwriteAsync`, `TryClaimNextAsync`, `PrepareAsync`, `MarkRunningAsync`, `MarkPausedAsync`, `MarkCancelledAsync`, and `MarkFailedAsync`. C# examples avoid keyword-named pattern variables, target-typed `new()` as a `params` argument, unmapped LINQ to DB columns, and xUnit analyzer-violating assertions.
