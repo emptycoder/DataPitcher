@@ -1,3 +1,4 @@
+using DataPitcher.Providers.SqlServer;
 using Microsoft.Data.SqlClient;
 
 namespace DataPitcher.Providers.SqlServer.IntegrationTests;
@@ -20,7 +21,9 @@ public sealed class SqlServerWireCommandRecorder : IAsyncDisposable
             $"CREATE EVENT SESSION [{recorder._name}] ON SERVER " +
             "ADD EVENT sqlserver.rpc_completed(ACTION(sqlserver.sql_text) " +
             "WHERE (object_name <> N'sp_reset_connection' AND " +
-            $"[sqlserver].[like_i_sql_unicode_string]([sqlserver].[sql_text],N'%{tag}%'))) " +
+            $"[sqlserver].[like_i_sql_unicode_string]([sqlserver].[sql_text],N'%{tag}%') AND NOT [sqlserver].[like_i_sql_unicode_string]([sqlserver].[sql_text],N'CREATE EVENT SESSION%'))), " +
+            "ADD EVENT sqlserver.sql_batch_completed(ACTION(sqlserver.sql_text) " +
+            $"WHERE ([sqlserver].[like_i_sql_unicode_string]([sqlserver].[sql_text],N'%{tag}%') AND NOT [sqlserver].[like_i_sql_unicode_string]([sqlserver].[sql_text],N'CREATE EVENT SESSION%'))) " +
             "ADD TARGET package0.ring_buffer; " +
             $"ALTER EVENT SESSION [{recorder._name}] ON SERVER STATE=START;");
         return recorder;
@@ -47,6 +50,12 @@ public sealed class SqlServerWireCommandRecorder : IAsyncDisposable
     }
 
     public async Task<int> Count(string tag) => (await SqlTextsAsync()).Count(x => x.Contains(tag, StringComparison.Ordinal));
+
+    public async Task<int> Count(string tag, string table) =>
+        (await SqlTextsAsync()).Count(text => text.Contains(tag, StringComparison.Ordinal) && text.Contains(SqlServerIdentifier.Quote(table), StringComparison.Ordinal));
+
+    public async Task<bool> AnyContainsLargeInListAsync(int threshold) =>
+        (await SqlTextsAsync()).Any(text => text.Split(" IN (", StringSplitOptions.None).Skip(1).Any(part => part.Split(')')[0].Split(',').Length > threshold));
 
     private async Task ExecuteAsync(string sql)
     {

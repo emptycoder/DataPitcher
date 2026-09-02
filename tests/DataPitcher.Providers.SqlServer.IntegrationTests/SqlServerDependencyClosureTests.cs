@@ -107,6 +107,30 @@ internal sealed class SqlServerClosureScenario : IAsyncDisposable
         new SqlServerSchemaSnapshot([], []),
         new Dictionary<TableDefinition, StableKeySelection>()));
 
+    public async Task CreateBatchChainAsync(int count)
+    {
+        await BothAsync("CREATE TABLE dbo.batch_parent (id int NOT NULL PRIMARY KEY); CREATE TABLE dbo.batch_child (id int NOT NULL PRIMARY KEY,pid int NOT NULL REFERENCES dbo.batch_parent(id))");
+        var parents = string.Join(",", Enumerable.Range(1, count).Select(id => $"({id})"));
+        var children = string.Join(",", Enumerable.Range(1, count).Select(id => $"({id},{id})"));
+        await SourceAsync($"INSERT dbo.batch_parent VALUES {parents}; INSERT dbo.batch_child VALUES {children}");
+    }
+
+    public async Task<ClosureResult> RunBatchAsync()
+    {
+        var (source, target) = await CatalogsAsync();
+        var child = source.Table("batch_child").Definition;
+        var parent = source.Table("batch_parent").Definition;
+        var relationship = new ClosureRelationship(Fk(source, child, parent));
+        var selections = new Dictionary<TableDefinition, StableKeySelection>
+        {
+            [child] = StableKeySelector.Select(child, null),
+            [parent] = StableKeySelector.Select(parent, null),
+        };
+        var roots = Enumerable.Range(1, 40).Select(id => new ClosureRoot(child, [Key(id)], RootConflictPolicy.FailOnConflict));
+        await using var store = new SqlServerClosureStore(_scope.SourceConnectionString, _scope.TargetConnectionString, source, target, selections);
+        return await new DependencyClosure(store).ComputeAsync(new ClosureRequest(roots, [relationship], selections), CancellationToken.None);
+    }
+
     public ValueTask DisposeAsync() => _scope.DisposeAsync();
 
     private static StableKey Key(int id) => new([new KeyComponent("id", id)]);
