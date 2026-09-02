@@ -1,5 +1,8 @@
 using System.Globalization;
+using LinqToDB;
+using LinqToDB.Async;
 using LinqToDB.Data;
+using DataPitcher.Infrastructure.Persistence;
 using DataPitcher.Infrastructure.Storage;
 using DataPitcher.Infrastructure.Time;
 
@@ -7,6 +10,15 @@ namespace DataPitcher.Infrastructure.Leasing;
 
 public sealed class LeaseStore(ControlDatabase database, IClock clock)
 {
+    internal async Task<LeaseGrant?> AcquireAsync(Guid jobId, string ownerId, TimeSpan ttl, CancellationToken cancellationToken)
+    {
+        var now = clock.UtcNow; var expires = now.Add(ttl); Validate(ownerId, ttl);
+        using var db = database.Open();
+        var affected = await db.ExecuteAsync("UPDATE JobLeases SET OwnerId = @ownerId, ExpiresUtc = @expiresUtc, FenceToken = FenceToken + 1 WHERE JobId = @jobId AND (OwnerId IS NULL OR ExpiresUtc <= @nowUtc)", cancellationToken, Parameters(jobId, ownerId, null, now, expires));
+        if (affected != 1) return null;
+        var row = await db.GetTable<JobLeaseRow>().Where(row => row.JobId == jobId.ToString()).SingleAsync(cancellationToken);
+        return new(jobId, ownerId, row.FenceToken, expires, RenewAfter(now, ttl));
+    }
     public LeaseGrant? Acquire(Guid jobId, string ownerId, TimeSpan ttl)
     {
         var now = clock.UtcNow; var expires = now.Add(ttl); Validate(ownerId, ttl);

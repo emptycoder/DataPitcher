@@ -6,7 +6,7 @@ namespace DataPitcher.Infrastructure.Migrations;
 
 public sealed class ControlDatabaseMigrator(ControlDatabase database, IClock clock)
 {
-    private static readonly (int Version, string Resource)[] Scripts = [(1, "DataPitcher.Infrastructure.Migrations.0001-initial.sql")];
+    private static readonly (int Version, string Resource)[] Scripts = [(1, "DataPitcher.Infrastructure.Migrations.0001-initial.sql"), (2, "DataPitcher.Infrastructure.Migrations.0002-job-recovery.sql")];
     static ControlDatabaseMigrator()
     {
         foreach (var script in Scripts)
