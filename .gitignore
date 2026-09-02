@@ -1,1 +1,5 @@
 .worktrees/
+
+# .NET build output
+bin/
+obj/

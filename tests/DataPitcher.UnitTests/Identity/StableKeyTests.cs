@@ -33,4 +33,9 @@ public sealed class StableKeyTests
         keys.Sort();
         Assert.Equal([new StableKey([new("A", null)]), new StableKey([new("A", 1)]), new StableKey([new("A", 2)]), new StableKey([new("B", 0)])], keys);
     }
+
+    [Fact] public void StableKey_WhenComponentListIsEmpty_IsRejected()
+    {
+        Assert.Throws<ArgumentException>(() => new StableKey(Array.Empty<KeyComponent>()));
+    }
 }
