@@ -1,3 +1,5 @@
+using DataPitcher.Api.Endpoints;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddProblemDetails();
@@ -10,6 +12,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" })).AllowAnonymous();
+EndpointGroups.Map(app);
 
 app.Run();
 
