@@ -8,86 +8,118 @@ and know exactly where to pick up — no other context required.
 
 ## Status
 
-**Slice 1 (Domain Spine) is COMPLETE.** Slices 2 through 11 are **NOT started**.
-The provider-independent domain model exists and is fully tested. No database
-code, no API code, and no frontend code exists anywhere in this repository yet.
+**Nine slices are COMPLETE:**
 
-## Environment
+1. The domain spine — provider-independent schema model, dependency graph, SCC
+   condensation, and demand-driven closure algorithm.
+2. The PostgreSQL closure store — a real-database implementation of
+   `IClosureStore` against PostgreSQL.
+3. The control database with job state machine and fence-token leases.
+4. The provider-neutral authorization model.
+5. The selection query AST and SQL generation.
+6. Transfer plan construction, canonical hashing and sealing.
+7. Row-cycle detection and cycle strategy selection.
+8. The SQL Server closure store — the same `IClosureStore` contract implemented
+   against SQL Server.
+9. The bounded transfer pipeline.
 
-- Repository: `/Users/yaroslavsanko/Repositories/DataPitcher`, git initialised, branch `main`.
-- Work branch: `architecture/foundation`, checked out in worktree
-  `.worktrees/architecture-foundation` (git-ignored, not part of `main`'s tree).
-- .NET SDK 10.0.400 — available.
-- Node — available.
-- Docker Engine 29.3.1 is running: arm64 Apple Silicon, 10 CPUs, 7.65 GiB RAM
-  available to the VM.
-- `docker` CLI is not on `PATH` (binary is in the Docker Desktop bundle), which
-  affects shell-out tooling but not Testcontainers.
-- Testcontainers .NET smoke-test path is verified: `postgres:17-alpine` (native
-  arm64) and `mcr.microsoft.com/mssql/server:2022-latest` (amd64 image, running
-  under emulation) both become ready quickly and executed real queries.
-
-## What Slice 1 delivered
-
-Eight tasks, executed test-first per `docs/plans/2026-09-02-slice-1-domain-spine.md`:
-
-1. **Solution scaffold** — `DataPitcher.sln`, `DataPitcher.Core`, `DataPitcher.UnitTests`, `Directory.Build.props`, `global.json`, building and testing green with zero tests collected.
-2. **`StableKey` value type** — composite key with binary and ordinal-ordering semantics, giving deterministic, locale-independent comparison and hashing across composite column values.
-3. **Schema model with stable-key selection** — table, column, foreign key and unique-constraint definitions, plus the logic that selects which constraint on a table serves as its stable key.
-4. **Dependency graph** — child-to-parent edges built from foreign keys, with bidirectional adjacency for traversal in both directions.
-5. **Tarjan strongly connected components** — with condensation of cycles into single nodes and a transfer-ordered topological layering of the condensed graph.
-6. **Closure store abstraction** — the `IClosureStore` interface plus an in-memory fake implementation, giving a seam for the algorithm to be tested without any real database.
-7. **Demand-driven, target-aware closure algorithm** — computes the exact-set closure of rows to transfer, pruning subtrees already satisfied in the target when the relevant foreign key is enforced and trusted.
-8. **Architecture tests, coverage gate scripts, and a CI workflow** — enforcing dependency-direction rules and a 100% coverage bar on every future change.
+**What does NOT yet exist:** transfer execution against a real database,
+verification, the job worker and recovery, ASP.NET authentication wiring, the
+Minimal API, and the entire frontend. None of these have any code in this
+repository yet. Everything shipped so far is planning, modeling, and read-path
+infrastructure — no data has ever actually moved from a source database to a
+target database through this codebase.
 
 ## Verified quality gates
 
-- `dotnet test DataPitcher.sln`: **118 unit tests + 3 architecture tests = 121 tests, 0 failing.**
+- `scripts/test-all.sh` exits 0 with **645 tests**: 557 unit, 5 architecture,
+  43 PostgreSQL integration, 40 SQL Server integration.
+- Merged coverage is **100% line, 100% branch, 100% method**.
 - `dotnet build`: clean, **zero warnings**, under warnings-as-errors.
-- `./scripts/test-all.sh`: **100% line coverage, 100% branch coverage, 103 of 103 methods covered**, gate script exits 0.
-- This gate is known to work, not merely assumed to: it was observed **FAILING at 96.42%** coverage before the final equality-contract tests were added, and passed only after those tests closed the gap. That failure-then-pass sequence is the evidence the gate actually enforces something.
-- Updated suite is **122 tests** including a Testcontainers smoke test; coverage is still
-  **100% line, 100% branch, and 100% method**; `scripts/test-all.sh` now
-  requires Docker.
+- The full gate takes about **310 seconds**, dominated by the SQL Server lane
+  running under binary translation on this arm64 host.
+- The gate is enforced only in `scripts/test-all.sh`, which merges each
+  project's coverage report with ReportGenerator rather than summing per-project
+  numbers — a project at less than 100% cannot hide behind another project's
+  surplus.
+- There is exactly **one** documented coverage exclusion in the whole project:
+  a source-generated regex matcher, excluded as generated code. It is the only
+  exclusion anywhere in the project; the 100 percent figure above is not
+  padded by additional undisclosed exclusions.
 
-## Evidence from independent review
+## The central validation
 
-Every one of the eight tasks was reviewed by an agent that did not write it, and every review found real defects. The most significant findings:
+All **31 closure behavioural tests** pass, with unchanged assertions, against
+**both real PostgreSQL and real SQL Server** — the same test bodies exercising
+two different `IClosureStore` implementations. Probe batching is proven at the
+wire on both providers: 40 keys requested in one generation produce **exactly
+2 probe commands**, not 40, confirming batching is real rather than a paper
+claim. This matters because a naive closure store would issue one probe per
+key, and at scale that difference is the gap between a usable tool and one
+that saturates the source database with round trips.
 
-- Binary stable keys were unconstructible as originally implemented.
-- String-based key ordering depended on machine locale rather than being deterministic.
-- A nullable unique constraint was initially accepted as a valid row identity.
-- A zero-column unique constraint would have collapsed every row in a table to a single shared identity.
-- The dependency graph did not canonicalise edge endpoints, risking duplicate/divergent edge representations.
-- Topological layers were inverted relative to transfer order.
-- Graph output was not order-invariant, risking nondeterministic transfer ordering across runs.
-- Closure root ordering could silently suppress the default safety blocker under certain input orderings.
-- The closure relationship type lacked value equality — undetected, this would have destroyed exact-set minimality the first time a real provider slice relied on set deduplication.
+## Environment
 
-Separately, a differential test ran **25,000 randomly generated schemas** through this implementation and an independently written reference implementation of the same closure semantics, and found **zero extra rows and zero missing rows** across all of them.
+- Docker Engine 29.3.1, arm64 Apple Silicon.
+- The `docker` CLI is **not** on `PATH`; its binary lives inside the Docker
+  Desktop application bundle. This affects shell-out tooling but not
+  Testcontainers.
+- PostgreSQL runs as a **native arm64** image, ready in about **1 second**.
+- SQL Server has **no native arm64 image** and runs under binary translation,
+  ready in about **8 seconds**, using about **1.08 GiB** at readiness. Two
+  containers together use **2.28 GiB** of a **7.65 GiB** allocation.
+- Concurrent Docker load from several agents running container tests at once
+  has previously produced pre-login handshake failures. These looked like
+  product defects on first read but were reproduced as resource contention,
+  not a code bug — worth remembering before chasing a similar symptom again.
+  If the two upcoming worktrees both run the Docker-backed integration lanes
+  at the same time, expect the same class of flaky handshake symptom and
+  check contention before suspecting the newly written code.
 
-## Blockers
+## Notable findings so far
 
-**Resolved blocker:** container-based testing was previously blocked by external Docker availability and is now lifted and verified. Testcontainers now boots PostgreSQL (`postgres:17-alpine`) and SQL Server (`mcr.microsoft.com/mssql/server:2022-latest`) containers and executes real queries in one second-level startup path. Caveats remain: SQL Server is amd64-only and runs under emulation. Memory headroom for the full two-postgres/two-SQL Server container design has been measured, not estimated: a single SQL Server 2022 container uses 1.08 GiB at readiness, and two run simultaneously at 2.28 GiB total, 29.8 percent of the 7.65 GiB allocation, with headroom adequate. This is idle and light-load evidence, not a peak-load bound.
+Independent review and coverage-driven testing across the nine slices found
+real production defects, not stylistic nits, including:
+
+- A text-match operator that generated the wrong SQL pattern.
+- Binary stable keys that could not be constructed as originally implemented.
+- Key ordering that depended on machine locale rather than being deterministic.
+- A relationship type that carried no join columns at all — unimplementable
+  against any real database, caught before it reached a provider slice.
+
+(See prior slice review notes for the complete list per slice; this is not
+exhaustive.)
 
 ## Key decisions that must not be silently reversed
 
-1. A single demand-driven closure is used, not the specification's original two-phase candidate-then-final design (ADR 0004).
-2. Target-satisfied pruning requires the target foreign key to be both enforced and trusted; otherwise the row must be transferred rather than pruned (ADR 0004).
-3. The authoritative resume checkpoint lives in the target database inside the apply transaction; the control database mirror must never be consulted for correctness (ADR 0001).
-4. LINQ to DB is excluded from the transfer write path because its bulk copy silently degrades under some conditions and does not report which strategy it actually used (ADR 0005).
-5. StrictExact verification is blocked when triggers exist on a planned target table, and is unavailable at all for DirectFast (ADR 0002).
-6. Stable keys do **not** normalize CLR types; the type of each key component is taken as-is from the schema.
-7. Virtual stable keys are deferred — not implemented in Slice 1.
-8. A malformed schema degrades to a `Blocked` result rather than throwing an exception.
+1. A single demand-driven closure is used, not the specification's original
+   two-phase candidate-then-final design (ADR 0004).
+2. Target-satisfied pruning requires the target foreign key to be both
+   enforced and trusted; otherwise the row must be transferred rather than
+   pruned (ADR 0004).
+3. The authoritative resume checkpoint lives in the target database inside the
+   apply transaction; the control database mirror must never be consulted for
+   correctness (ADR 0001).
+4. LINQ to DB is excluded from the transfer write path because its bulk copy
+   silently degrades under some conditions and does not report which strategy
+   it actually used (ADR 0005).
+5. StrictExact verification is blocked when triggers exist on a planned target
+   table, and is unavailable at all for DirectFast (ADR 0002).
+6. Stable keys do **not** normalize CLR types; the type of each key component
+   is taken as-is from the schema.
+7. Virtual stable keys remain deferred.
+8. A malformed schema degrades to a `Blocked` result rather than throwing an
+   exception.
 9. Topological layer index 0 is the parents, ordered in transfer order.
-10. Graph and closure output is canonically ordered using ordinal comparison, so results are deterministic across runs.
-11. Overlapping closure roots with differing conflict policies are rejected rather than silently resolved.
+10. Graph and closure output is canonically ordered using ordinal comparison,
+    so results are deterministic across runs.
+11. Overlapping closure roots with differing conflict policies are rejected
+    rather than silently resolved.
 
 ## Exact next executable action
 
-Begin **Slice 2: the control database and job state machine**, as required by
-`docs/roadmap.md` (the next unblocked executable slice). Then execute
-`docs/plans/2026-09-02-slice-2-postgresql-closure-store.md` to implement a
-PostgreSQL-backed closure store so Slice 1's thirty-one closure behavioural tests can
-be re-run unchanged against a real database.
+Execute the two plans now ready, in parallel isolated worktrees so that
+concurrent builds on each stream cannot corrupt the other's build output:
+
+- `docs/plans/2026-09-02-slice-10-postgresql-transfer-execution.md`
+- `docs/plans/2026-09-02-slice-11-job-worker-and-recovery.md`
