@@ -516,6 +516,7 @@ Expected: compilation fails with `CS0246` because `JobStore` and `StartJobReques
 
 ```csharp
 using System.Globalization;
+using LinqToDB;
 using LinqToDB.Data;
 using DataPitcher.Core.Jobs;
 using DataPitcher.Infrastructure.Leasing;
@@ -551,7 +552,7 @@ public sealed class JobStore(ControlDatabase database, IClock clock)
     }
 
     public TransferJob Get(Guid jobId) => ToJob(database.Open().GetTable<JobRow>().Single(row => row.JobId == jobId.ToString()));
-    public IReadOnlyList<(JobState From, JobState To)> GetHistory(Guid jobId) => database.Open().GetTable<JobStateTransitionRow>().Where(row => row.JobId == jobId.ToString()).OrderBy(row => row.OccurredUtc).Select(row => (Enum.Parse<JobState>(row.FromState), Enum.Parse<JobState>(row.ToState))).ToArray();
+    public IReadOnlyList<(JobState From, JobState To)> GetHistory(Guid jobId) => database.Open().GetTable<JobStateTransitionRow>().Where(row => row.JobId == jobId.ToString()).OrderBy(row => row.OccurredUtc).Select(row => new { row.FromState, row.ToState }).AsEnumerable().Select(row => (Enum.Parse<JobState>(row.FromState), Enum.Parse<JobState>(row.ToState))).ToArray();
     private static void PersistTransition(LinqToDB.Data.DataConnection db, JobRow row, JobState from, JobState to, string now) { db.Execute("UPDATE Jobs SET State = @toState, UpdatedUtc = @nowUtc WHERE JobId = @jobId AND State = @fromState", new DataParameter("toState", to.ToString()), new DataParameter("nowUtc", now), new DataParameter("jobId", row.JobId), new DataParameter("fromState", from.ToString())); row.State = to.ToString(); row.UpdatedUtc = now; PersistHistory(db, Guid.Parse(row.JobId), from, to, now); }
     private static void PersistHistory(LinqToDB.Data.DataConnection db, Guid jobId, JobState from, JobState to, string now) => db.Insert(new JobStateTransitionRow { TransitionId = Guid.NewGuid().ToString(), JobId = jobId.ToString(), FromState = from.ToString(), ToState = to.ToString(), OccurredUtc = now });
     private static TransferJob ToJob(JobRow row) => new(Guid.Parse(row.JobId), Guid.Parse(row.RunId), Guid.Parse(row.PlanId), row.IdempotencyKey, Enum.Parse<JobState>(row.State));
