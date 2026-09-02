@@ -32,6 +32,8 @@ public sealed class PostgreSqlCommandRecorder : ILoggerFactory, ILogger
             message.Contains(tag, StringComparison.Ordinal) &&
             (table is null || message.Contains(PostgreSqlIdentifier.Qualified(table.Schema, table.Name), StringComparison.Ordinal)));
 
+    public bool AnyContains(string value) => _messages.Any(message => message.Contains(value, StringComparison.Ordinal));
+
     public bool AnyContainsLargeInList(int threshold) =>
         _messages.Any(message => ContainsLargeInList(message, threshold));
 

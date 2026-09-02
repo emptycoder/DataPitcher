@@ -47,4 +47,21 @@ public sealed class PostgreSqlCatalogReaderTests : IClassFixture<PostgreSqlClosu
         Assert.Equal(typeof(byte[]), table.Column("payload").ClrType);
         Assert.True(table.Column("calculated").IsGenerated);
     }
+
+    [Fact]
+    public async Task ReadAsync_UsesThreeTaggedMetadataCommandsRegardlessOfAddedTableCount()
+    {
+        var recorder = new PostgreSqlCommandRecorder();
+        await using var scope = await _fixture.CreateScopeAsync(recorder);
+
+        await new PostgreSqlCatalogReader(scope.Target).ReadAsync(scope.Schema, CancellationToken.None);
+        var initialCommandCount = recorder.Count("DataPitcher.Catalog");
+        for (var index = 0; index < 50; index++)
+            await scope.ExecuteTargetAsync($"CREATE TABLE added_{index} (id integer PRIMARY KEY)");
+        await new PostgreSqlCatalogReader(scope.Target).ReadAsync(scope.Schema, CancellationToken.None);
+
+        Assert.Equal(3, initialCommandCount);
+        Assert.Equal(3, recorder.Count("DataPitcher.Catalog") - initialCommandCount);
+        Assert.False(recorder.AnyContains("COUNT(*)"));
+    }
 }

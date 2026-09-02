@@ -26,7 +26,7 @@ public sealed class PostgreSqlSchemaSnapshot
 public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
 {
     private const string ColumnsSql =
-        "SELECT c.relname, a.attname, t.typname, NOT a.attnotnull, a.attgenerated <> '' " +
+        "/* DataPitcher.Catalog.Columns */ SELECT c.relname, a.attname, t.typname, NOT a.attnotnull, a.attgenerated <> '' " +
         "FROM pg_class c " +
         "JOIN pg_namespace n ON n.oid = c.relnamespace " +
         "JOIN pg_attribute a ON a.attrelid = c.oid " +
@@ -35,7 +35,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         "ORDER BY c.relname, a.attnum";
 
     private const string KeysSql =
-        "SELECT c.relname, con.conname, con.contype::text, array_agg(a.attname ORDER BY k.ordinality) " +
+        "/* DataPitcher.Catalog.Keys */ SELECT c.relname, con.conname, con.contype::text, array_agg(a.attname ORDER BY k.ordinality) " +
         "FROM pg_constraint con " +
         "JOIN pg_class c ON c.oid = con.conrelid " +
         "JOIN pg_namespace n ON n.oid = c.relnamespace " +
@@ -45,7 +45,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         "GROUP BY c.relname, con.conname, con.contype";
 
     private const string ForeignKeysSql =
-        "SELECT con.conname, c.relname, p.relname, " +
+        "/* DataPitcher.Catalog.ForeignKeys */ SELECT con.conname, c.relname, p.relname, " +
         "array_agg(ca.attname ORDER BY ck.ordinality), array_agg(pa.attname ORDER BY ck.ordinality), " +
         "COALESCE((SELECT bool_and(tr.tgenabled <> 'D') FROM pg_trigger tr WHERE tr.tgconstraint = con.oid), true), " +
         "con.convalidated " +
@@ -68,7 +68,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
             x => x.Key,
             x => new TableDefinition(schema, x.Key, x.Value, keys[x.Key].Primary, keys[x.Key].Unique),
             StringComparer.Ordinal);
-        var tables = definitions.Values.Select(x => new PostgreSqlTable(x)).ToArray();
+        var tables = definitions.Values.OrderBy(x => x.Name, StringComparer.Ordinal).Select(x => new PostgreSqlTable(x)).ToArray();
         var foreignKeys = await ReadForeignKeysAsync(schema, definitions, ct);
         return new PostgreSqlSchemaSnapshot(tables, foreignKeys);
     }
@@ -100,7 +100,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
             var table = reader.GetString(0);
             var constraint = new UniqueConstraint(reader.GetString(1), reader.GetFieldValue<string[]>(3));
             var entry = keys[table];
-            keys[table] = reader.GetString(2) == "p"
+            keys[table] = string.Equals(reader.GetString(2), "p", StringComparison.Ordinal)
                 ? (constraint, entry.Item2)
                 : (entry.Item1, [.. entry.Item2, constraint]);
         }

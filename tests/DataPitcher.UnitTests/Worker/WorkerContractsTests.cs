@@ -1,4 +1,5 @@
 using DataPitcher.Core.Identity;
+using DataPitcher.Core.Plans;
 using DataPitcher.Infrastructure.Time;
 using DataPitcher.Infrastructure.Worker;
 using Xunit;
@@ -80,7 +81,7 @@ public sealed class WorkerContractsTests
     [Fact]
     public void TransferRun_WhenSealed_PreservesItsIdentityAndResumeCapability()
     {
-        var run = new TransferRun(Guid.NewGuid(), Guid.NewGuid(), "seal", true);
+        var run = new TransferRun(Guid.NewGuid(), Guid.NewGuid(), "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast);
 
         Assert.NotEqual(Guid.Empty, run.JobId); Assert.NotEqual(Guid.Empty, run.RunId); Assert.Equal("seal", run.ManifestSealHash); Assert.True(run.SupportsDurableResume);
     }

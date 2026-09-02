@@ -67,7 +67,7 @@ public sealed class SqlServerCatalogReader(string connectionString)
             x => x.Key,
             x => new TableDefinition(schema, x.Key, x.Value.Select(c => new ColumnDefinition(c.Name, c.ClrType, c.IsNullable, c.IsGenerated)).ToArray(), keys[x.Key].Primary, keys[x.Key].Unique),
             StringComparer.Ordinal);
-        var tables = definitions.Values.Select(d => new SqlServerTable(d, columns[d.Name]));
+        var tables = definitions.Values.OrderBy(d => d.Name, StringComparer.Ordinal).Select(d => new SqlServerTable(d, columns[d.Name]));
         var foreignKeys = await ReadForeignKeysAsync(schema, definitions, ct);
         return new SqlServerSchemaSnapshot(tables, foreignKeys);
     }
@@ -100,7 +100,8 @@ public sealed class SqlServerCatalogReader(string connectionString)
         var groups = new List<(string Table, string Name, string Type, List<string> Columns)>();
         while (await rows.ReadAsync(ct))
         {
-            var group = groups.LastOrDefault(x => string.Equals(x.Table, rows.GetString(0), StringComparison.Ordinal) && string.Equals(x.Name, rows.GetString(1), StringComparison.Ordinal));
+            var group = groups.LastOrDefault(x => string.Equals(x.Table, rows.GetString(0), StringComparison.Ordinal) &&
+                string.Equals(x.Name, rows.GetString(1), StringComparison.Ordinal));
             if (group.Columns is null)
             {
                 group = (rows.GetString(0), rows.GetString(1), rows.GetString(2).TrimEnd(), []);
