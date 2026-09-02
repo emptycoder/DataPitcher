@@ -181,8 +181,8 @@ public sealed class PostgreSqlTargetCheckpointStoreTests : IClassFixture<Postgre
     [Fact]
     public async Task AdvanceAsync_WhenNewerWorkerOwnsTheFence_ThrowsWithoutAdvancing()
     {
-        await using var scope = await _fixture.CreateScopeAsync(); var store = new PostgreSqlTargetCheckpointStore(scope.Target); var stale = PostgreSqlTransferTestData.Context();
-        await store.InitializeAsync(stale, CancellationToken.None); await store.InitializeAsync(PostgreSqlTransferTestData.Context(2), CancellationToken.None);
+        await using var scope = await _fixture.CreateScopeAsync(); var store = new PostgreSqlTargetCheckpointStore(scope.Target); var stale = PostgreSqlTransferTestData.Context(); var current = stale with { FenceToken = 2 };
+        await store.InitializeAsync(stale, CancellationToken.None); await store.InitializeAsync(current, CancellationToken.None);
         await using var connection = await scope.Target.OpenConnectionAsync(); await using var transaction = await connection.BeginTransactionAsync();
         await Assert.ThrowsAsync<PostgreSqlFenceLostException>(() => store.AdvanceAsync(connection, transaction, stale, PostgreSqlTransferTestData.Table(scope.Schema), PostgreSqlTransferTestData.Batch(0, (1, "a")), 1, 1, 0, CancellationToken.None));
         await transaction.RollbackAsync(); Assert.Equal(2, (await store.ReadAsync(stale.JobId, stale.RunId, CancellationToken.None))!.FenceToken);
@@ -369,7 +369,7 @@ public sealed class PostgreSqlTransferRecoveryTests : IClassFixture<PostgreSqlCl
     public async Task ExecuteAsync_WhenWorkerFenceIsStale_RollsBackBusinessRowsDeterministically()
     {
         await using var scope = await _fixture.CreateScopeAsync(); await scope.ExecuteTargetAsync("CREATE TABLE transfer_rows (id integer PRIMARY KEY, code text NOT NULL);");
-        var stale = PostgreSqlTransferTestData.Context(); var executor = new PostgreSqlTransferExecutor(scope.Target, new RecordingMirror(), new PassBarrier()); await executor.InitializeAsync(stale, CancellationToken.None); await executor.InitializeAsync(PostgreSqlTransferTestData.Context(2), CancellationToken.None);
+        var stale = PostgreSqlTransferTestData.Context(); var current = stale with { FenceToken = 2 }; var executor = new PostgreSqlTransferExecutor(scope.Target, new RecordingMirror(), new PassBarrier()); await executor.InitializeAsync(stale, CancellationToken.None); await executor.InitializeAsync(current, CancellationToken.None);
         await Assert.ThrowsAsync<PostgreSqlFenceLostException>(() => executor.ExecuteAsync(stale, PostgreSqlTransferTestData.Table(scope.Schema), PostgreSqlTransferTestData.Batch(0, (1, "one")), CancellationToken.None));
         Assert.Equal(0L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM transfer_rows"));
     }
