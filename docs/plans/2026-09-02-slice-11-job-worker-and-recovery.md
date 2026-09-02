@@ -266,7 +266,7 @@ Run: `git add src/DataPitcher.Core/Jobs/JobState.cs src/DataPitcher.Infrastructu
 ### Task 3: Implement lease renewal and the hosted worker’s normal run
 
 **Files:**
-- Create: `src/DataPitcher.Infrastructure/Worker/LeaseRenewer.cs`, `src/DataPitcher.Infrastructure/Worker/JobWorker.cs`, `tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs`, `tests/DataPitcher.UnitTests/Worker/JobWorkerTests.cs`
+- Create: `src/DataPitcher.Infrastructure/Worker/LeaseRenewer.cs`, `src/DataPitcher.Infrastructure/Worker/JobWorker.cs` (normal uninterrupted path only; no recovery dependency), `tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs`, `tests/DataPitcher.UnitTests/Worker/JobWorkerTests.cs`
 - Modify: `src/DataPitcher.Infrastructure/DataPitcher.Infrastructure.csproj`
 - Test: `tests/DataPitcher.UnitTests/Worker/JobWorkerTests.cs`
 
@@ -316,7 +316,7 @@ namespace DataPitcher.Infrastructure.Worker;
 
 public sealed class JobWorker(
     IJobControl jobs, IJobRunCatalog catalog, ITargetRunSessionFactory targets,
-    ITransferReadSessionFactory sources, RecoveryCoordinator recovery, LeaseRenewer renewer,
+    ITransferReadSessionFactory sources, LeaseRenewer renewer,
     IControlCheckpointMirror mirror, IWorkerFaults faults, IWorkerDelay delay, IClock clock,
     string ownerId, TimeSpan leaseTtl, TimeSpan pollInterval) : BackgroundService
 {
@@ -340,9 +340,8 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
         await jobs.PrepareAsync(claim, leaseLost.Token);
         var run = await catalog.LoadAsync(claim.Job, leaseLost.Token);
         await using var target = await targets.OpenAsync(run, leaseLost.Token);
-        var recovered = await recovery.RecoverAsync(claim, run, target, leaseLost.Token);
         await jobs.MarkRunningAsync(claim.Lease, leaseLost.Token);
-        await using var source = await sources.OpenKeysetAsync(run, recovered.LastStableKey, leaseLost.Token);
+        await using var source = await sources.OpenKeysetAsync(run, null, leaseLost.Token);
         for (TransferUnit? unit; (unit = await source.ReadNextAsync(leaseLost.Token)) is not null;)
         {
             await faults.HitAsync(TransferFaultPoint.BeforeTargetCommit, leaseLost.Token);
@@ -369,7 +368,7 @@ Task 6 adds the command-aware cancellation and classified-failure catches around
 
 Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --filter "FullyQualifiedName~JobWorkerTests"`
 
-Expected: `Passed: 2. Failed: 0.` No test contains `Thread.Sleep` or `Task.Delay`; the gate makes renewal deterministic and confirms all sessions are worker-owned and disposed.
+Expected: `Passed: 2. Failed: 0.` No test contains `Thread.Sleep` or `Task.Delay`; the gate makes renewal deterministic and confirms all sessions are worker-owned and disposed. The normal worker opens the source from `null`; target checkpoint recovery and keyset resumption are introduced and wired in Task 4.
 
 5. - [ ] **Commit hosted normal orchestration.**
 
@@ -379,7 +378,7 @@ Run: `git add src/DataPitcher.Infrastructure/DataPitcher.Infrastructure.csproj s
 
 **Files:**
 - Create: `src/DataPitcher.Infrastructure/Worker/RecoveryCoordinator.cs`, `tests/DataPitcher.UnitTests/Worker/RecoveryCoordinatorTests.cs`
-- Modify: `tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs`
+- Modify: `src/DataPitcher.Infrastructure/Worker/JobWorker.cs`, `tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs`, `tests/DataPitcher.UnitTests/Worker/JobWorkerTests.cs`
 - Test: `tests/DataPitcher.UnitTests/Worker/RecoveryCoordinatorTests.cs`
 
 1. - [ ] **Write failing target-authority and repair tests.** Use a target fake with checkpoint batch 7/key 700 and a stale SQLite mirror at batch 4. Assert recovery opens with the newer SQLite lease token, calls the target fence/checkpoint operation before mirror overwrite, opens the source later with key 700, and never queries the mirror. Test mismatched target manifest hash throws `ManifestSealMismatchException`; a run with `SupportsDurableResume == false` throws `NonResumableInterruptedException`. Test repair of a disabled trigger changes its journal entry to `Repaired`; test an unrepaired untrusted constraint calls `QuarantineAsync` and keeps its state `Quarantined`.
@@ -390,7 +389,7 @@ Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --fil
 
 Expected: compilation fails with `CS0246` because `RecoveryCoordinator` does not exist.
 
-3. - [ ] **Implement target-first recovery and journal repair.** `AcquireFenceReadCheckpointAndJournalAsync` is a provider contract with a strict implementation rule: in a target transaction, create the initial `(job_id, run_id)` checkpoint if absent; otherwise compare the stored seal ordinally, reject mismatch, advance its fence only when stored token is lower, read the checkpoint, and commit. It must not accept an equal or lower stale token. Its implementation writes the target mutation journal entry in the same target transaction as each durable mutation, records repair completion only after catalog verification, and preserves a quarantined record.
+3. - [ ] **Implement target-first recovery and journal repair, then wire it into the worker.** `AcquireFenceReadCheckpointAndJournalAsync` is a provider contract with a strict implementation rule: in a target transaction, create the initial `(job_id, run_id)` checkpoint if absent; otherwise compare the stored seal ordinally, reject mismatch, advance its fence only when stored token is lower, read the checkpoint, and commit. It must not accept an equal or lower stale token. Its implementation writes the target mutation journal entry in the same target transaction as each durable mutation, records repair completion only after catalog verification, and preserves a quarantined record. Add `RecoveryCoordinator recovery` to `JobWorker` after `sources`; after opening the target and before `MarkRunningAsync`, call `recovery.RecoverAsync(claim, run, target, leaseLost.Token)`, then pass the returned checkpoint's `LastStableKey` to `OpenKeysetAsync`. Update the Task 3 worker tests to supply the coordinator and assert the recovered key is used.
 
 ```csharp
 // src/DataPitcher.Infrastructure/Worker/RecoveryCoordinator.cs
@@ -427,9 +426,9 @@ Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --fil
 
 Expected: `Passed: 4. Failed: 0.` The source resumes after stable key 700, a seal mismatch and non-resumable interruption never start a source session, and an unrepairable mutation remains quarantined.
 
-5. - [ ] **Commit recovery and target journal coordination.**
+5. - [ ] **Commit recovery, target journal coordination, and worker wiring.**
 
-Run: `git add src/DataPitcher.Infrastructure/Worker/RecoveryCoordinator.cs tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs tests/DataPitcher.UnitTests/Worker/RecoveryCoordinatorTests.cs && git commit -m "feat: recover from target checkpoints and journals"`
+Run: `git add src/DataPitcher.Infrastructure/Worker/RecoveryCoordinator.cs src/DataPitcher.Infrastructure/Worker/JobWorker.cs tests/DataPitcher.UnitTests/Worker/WorkerTestSupport.cs tests/DataPitcher.UnitTests/Worker/JobWorkerTests.cs tests/DataPitcher.UnitTests/Worker/RecoveryCoordinatorTests.cs && git commit -m "feat: recover from target checkpoints and journals"`
 
 ### Task 5: Honor pause, resume, cancellation, and atomic SCC boundaries
 
@@ -526,4 +525,4 @@ Covered: hosted background ownership outside HTTP; exclusive idempotent claim be
 
 Deferred: provider-native bulk writers, source-reader SQL, target checkpoint DDL and conditional SQL implementation, target staging DDL, physical bounded pipeline implementation, provider catalog repair queries, Docker-backed SQL Server/PostgreSQL proof, verification execution, API pause/resume/cancel endpoints, and DI composition. Those future implementations must satisfy the contracts here and add real-provider evidence; this slice neither implements nor substitutes them.
 
-Consistency checked: types and method names are introduced before use—Task 1 defines `TransferRun`, `TargetCheckpoint`, `TransferUnit`, `IJobControl`, `ITargetRunSession`, `ITransferReadSession`, `IControlCheckpointMirror`, `IWorkerFaults`, and `IWorkerDelay`; Task 2 implements the mirror/control path; Task 3 introduces `LeaseRenewer`, `JobWorker`, and `WorkerTestSupport`; Task 4 introduces `RecoveryCoordinator`; later tasks use exactly `OpenKeysetAsync`, `AcquireFenceReadCheckpointAndJournalAsync`, `RepairMutationsAsync`, `ApplyAsync`, `OverwriteAsync`, `TryClaimNextAsync`, `PrepareAsync`, `MarkRunningAsync`, `MarkPausedAsync`, `MarkCancelledAsync`, and `MarkFailedAsync`. C# examples avoid keyword-named pattern variables, target-typed `new()` as a `params` argument, unmapped LINQ to DB columns, and xUnit analyzer-violating assertions.
+Consistency checked: types and method names are introduced before use—Task 1 defines `TransferRun`, `TargetCheckpoint`, `TransferUnit`, `IJobControl`, `ITargetRunSession`, `ITransferReadSession`, `IControlCheckpointMirror`, `IWorkerFaults`, and `IWorkerDelay`; Task 2 implements the mirror/control path; Task 3 introduces `LeaseRenewer`, `JobWorker`, and `WorkerTestSupport` for the normal uninterrupted path only; Task 4 introduces `RecoveryCoordinator` and then wires it into `JobWorker`; later tasks use exactly `OpenKeysetAsync`, `AcquireFenceReadCheckpointAndJournalAsync`, `RepairMutationsAsync`, `ApplyAsync`, `OverwriteAsync`, `TryClaimNextAsync`, `PrepareAsync`, `MarkRunningAsync`, `MarkPausedAsync`, `MarkCancelledAsync`, and `MarkFailedAsync`. C# examples avoid keyword-named pattern variables, target-typed `new()` as a `params` argument, unmapped LINQ to DB columns, and xUnit analyzer-violating assertions.
