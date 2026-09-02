@@ -300,6 +300,10 @@ public sealed record Permission
 {
     private Permission(string value) => Value = value;
     public string Value { get; }
+}
+
+public static class Permissions
+{
     public static Permission ConnectionsRead { get; } = new("Connections.Read"); public static Permission ConnectionsWrite { get; } = new("Connections.Write");
     public static Permission SchemaRead { get; } = new("Schema.Read"); public static Permission SchemaWrite { get; } = new("Schema.Write");
     public static Permission SelectionsRead { get; } = new("Selections.Read"); public static Permission SelectionsWrite { get; } = new("Selections.Write"); public static Permission SelectionsRawSql { get; } = new("Selections.RawSql");
