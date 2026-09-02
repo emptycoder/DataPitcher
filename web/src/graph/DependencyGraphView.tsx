@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo } from 'react';
-import { ReactFlow, type Edge, type Node, type Viewport } from '@xyflow/react';
+import { ReactFlow, type Edge, type Node, type NodeChange, type Viewport } from '@xyflow/react';
 import { GraphDetails } from './GraphDetails';
 import { GraphLegend } from './GraphLegend';
 import { GraphNode, type GraphNodeData } from './GraphNode';
@@ -21,6 +21,7 @@ export type DependencyGraphViewProps = Readonly<{
   onExpandDependants: (tableId: string) => void;
   onViewportChange: (viewport: Readonly<{ x: number; y: number; zoom: number }>) => void;
   onPinnedPositionChange: (itemId: string, position: LayoutPosition) => void;
+  onMeasure: (itemId: string, size: Readonly<{ width: number; height: number }>) => void;
   onRelayout: () => void;
 }>;
 
@@ -65,6 +66,7 @@ export function DependencyGraphView({
   onExpandDependants,
   onViewportChange,
   onPinnedPositionChange,
+  onMeasure,
   onRelayout,
 }: DependencyGraphViewProps) {
   const nodes = useMemo<GraphFlowNode[]>(() => items.map((item) => {
@@ -72,7 +74,7 @@ export function DependencyGraphView({
     return {
       id: item.id,
       type: 'dependency',
-      position: pinnedPositions[item.id] ?? positions[item.id]!,
+      position: pinnedPositions[item.id] ?? positions[item.id] ?? { x: 0, y: 0 },
       data: {
         itemId: item.id,
         table,
@@ -103,6 +105,12 @@ export function DependencyGraphView({
   const handleNodeClick = useCallback((_event: unknown, node: GraphFlowNode) => onFocus(node.id), [onFocus]);
   const handleNodeDragStop = useCallback((_event: unknown, node: GraphFlowNode) => onPinnedPositionChange(node.id, node.position), [onPinnedPositionChange]);
   const handleMoveEnd = useCallback((_event: unknown, viewport: Viewport) => onViewportChange(viewport), [onViewportChange]);
+  const handleNodesChange = useCallback((changes: NodeChange<GraphFlowNode>[]) => {
+    for (const change of changes) {
+      if (change.type !== 'dimensions' || !change.dimensions) continue;
+      onMeasure(change.id, change.dimensions);
+    }
+  }, [onMeasure]);
 
   return (
     <section aria-label="Schema dependency graph">
@@ -120,6 +128,7 @@ export function DependencyGraphView({
         onNodeClick={handleNodeClick}
         onNodeDragStop={handleNodeDragStop}
         onMoveEnd={handleMoveEnd}
+        onNodesChange={handleNodesChange}
       />
       <GraphDetails table={focusedTable} onExpandDependencies={onExpandDependencies} onExpandDependants={onExpandDependants} />
     </section>

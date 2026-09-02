@@ -15,6 +15,7 @@ type CapturedFlowProps = Readonly<{
   onNodeClick: (event: unknown, node: Readonly<{ id: string }>) => void;
   onNodeDragStop: (event: unknown, node: Readonly<{ id: string; position: Readonly<{ x: number; y: number }> }>) => void;
   onMoveEnd: (event: unknown, viewport: Readonly<{ x: number; y: number; zoom: number }>) => void;
+  onNodesChange: (changes: readonly unknown[]) => void;
 }>;
 
 const flow = vi.hoisted(() => ({ props: undefined as unknown }));
@@ -83,6 +84,7 @@ function viewProps(overrides: Partial<React.ComponentProps<typeof DependencyGrap
     onExpandDependants: vi.fn(),
     onViewportChange: vi.fn(),
     onPinnedPositionChange: vi.fn(),
+    onMeasure: vi.fn(),
     onRelayout: vi.fn(),
     ...overrides,
   };
@@ -138,16 +140,19 @@ it('enables culling and forwards graph interaction callbacks without relayout', 
   const onExpandDependants = vi.fn();
   const onViewportChange = vi.fn();
   const onPinnedPositionChange = vi.fn();
+  const onMeasure = vi.fn();
   const onRelayout = vi.fn();
-  render(<DependencyGraphView {...viewProps({ onFocus, onExpandDependencies, onExpandDependants, onViewportChange, onPinnedPositionChange, onRelayout })} />);
+  render(<DependencyGraphView {...viewProps({ positions: {}, onFocus, onExpandDependencies, onExpandDependants, onViewportChange, onPinnedPositionChange, onMeasure, onRelayout })} />);
 
   expect(capturedFlow().onlyRenderVisibleElements).toBe(true);
   expect(capturedFlow().fitView).toBe(false);
   expect(capturedFlow().nodes.find((node) => node.id === 'orders')?.position).toEqual({ x: 300, y: 400 });
+  expect(capturedFlow().nodes.find((node) => node.id === 'customers')?.position).toEqual({ x: 0, y: 0 });
   act(() => {
     capturedFlow().onNodeClick({}, { id: 'customers' });
     capturedFlow().onNodeDragStop({}, { id: 'orders', position: { x: 320, y: 420 } });
     capturedFlow().onMoveEnd({}, { x: 10, y: 20, zoom: 2 });
+    capturedFlow().onNodesChange([{ id: 'orders', type: 'position' }, { id: 'orders', type: 'dimensions', dimensions: { width: 200, height: 80 } }]);
   });
   fireEvent.mouseEnter(screen.getByTestId('react-flow'));
   fireEvent.focus(screen.getByRole('button', { name: /Root selected sales\.orders/ }));
@@ -159,6 +164,7 @@ it('enables culling and forwards graph interaction callbacks without relayout', 
   expect(onExpandDependants).toHaveBeenCalledWith('orders');
   expect(onPinnedPositionChange).toHaveBeenCalledWith('orders', { x: 320, y: 420 });
   expect(onViewportChange).toHaveBeenCalledWith({ x: 10, y: 20, zoom: 2 });
+  expect(onMeasure).toHaveBeenCalledWith('orders', { width: 200, height: 80 });
   expect(onRelayout).not.toHaveBeenCalled();
   expect(screen.getByRole('button', { name: 'Relayout' })).toBeVisible();
 });

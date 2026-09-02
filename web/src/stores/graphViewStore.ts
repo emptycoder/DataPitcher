@@ -67,3 +67,8 @@ export const useIsGraphTableExpanded = (tableId: string) => useGraphViewState((s
 export const useIsSchemaCollapsed = (schemaId: string) => useGraphViewState((state) => state.collapsedSchemaIds.has(schemaId));
 export const useIsComponentCollapsed = (componentId: string) => useGraphViewState((state) => state.collapsedComponentIds.has(componentId));
 export const usePinnedGraphPosition = (tableId: string) => useGraphViewState((state) => state.pinnedPositions.get(tableId));
+export const useGraphSelectedTableIds = () => useGraphViewState((state) => state.selectedTableIds);
+export const useGraphExpandedTableIds = () => useGraphViewState((state) => state.expandedTableIds);
+export const useCollapsedGraphSchemaIds = () => useGraphViewState((state) => state.collapsedSchemaIds);
+export const useCollapsedGraphComponentIds = () => useGraphViewState((state) => state.collapsedComponentIds);
+export const useGraphPinnedPositions = () => useGraphViewState((state) => state.pinnedPositions);
