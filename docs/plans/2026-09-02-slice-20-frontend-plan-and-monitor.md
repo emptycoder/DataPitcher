@@ -12,7 +12,7 @@
 
 ## File Structure
 
-- `web/openapi/datapitcher.openapi.json`, `web/src/api/generated/{client.ts,permissions.zod.ts}` — single contract and committed, coverage-excluded Orval output.
+- `web/openapi/datapitcher.openapi.json`, `web/src/api/generated/{client.ts,permissions.zod.ts,jobEventPayloadSchema.ts}` — single contract, committed coverage-excluded Orval output, and the adjacent hand-written streamed-event schema.
 - `web/src/features/plans/{planReviewApi.ts,planReviewModel.ts,PlanReviewView.tsx,planReviewQuery.ts,PlanReviewScreen.tsx}` — validated transport, pure approval policy/export, rendering, and Query binding.
 - `web/src/features/jobs/{eventStreamParser.ts,jobReducer.ts,jobEventTransport.ts,jobApi.ts,jobMonitor.ts,TransferMonitorView.tsx}` — pure SSE semantics, injected transport, canonical refetch, cache binding, and outcome rendering.
 - `web/src/test/planFixtures.ts` and same-directory tests — safe wire fixtures and complete same-task coverage.
@@ -41,7 +41,7 @@ This correction supersedes stale fragments below: `JobEventPayload` requires the
 
 Use the names emitted by `npm --prefix web run generate:api`, not names inferred from component schemas or operation descriptions. In the current generated output they are `PlanReviewResponse`, `PlanInclusionPathResponse`, `StartPlanJobResponse`, `JobResponse`, and `JobEventsResponse`. `InclusionPathResponse`, `OperationReceiptResponse`, and `JobEventPayloadResponse` are not generated symbols and must not be imported, recreated in generated output, or induced by generator configuration changes.
 
-`JobEventsResponse` is `zod.unknown()` because the route returns `text/event-stream`; it is not a validator for individual `data:` frames. The current generator does not emit a runtime schema for the unreferenced `JobEventPayload` component. Do not hand-edit the generated files. This blocks Task 5's generated-payload-validation requirement until a separately approved source-contract or generator-supported solution is specified.
+`JobEventsResponse` is `zod.unknown()` because the route returns `text/event-stream`; it is not a validator for individual `data:` frames. The generator cannot infer the schema of a `data:` frame from that streaming content type and does not emit the unreferenced `JobEventPayload` component. Do not hand-edit generated files. Instead, Task 5 hand-writes `JobEventPayloadSchema` in `web/src/api/generated/jobEventPayloadSchema.ts` beside the generated output, with the exact PascalCase wire properties and lowercase state enum. Its tests must accept a real frame and reject malformed payloads before reduction, so stream-contract drift remains visible and no unvalidated event reaches the Query cache.
 
 ## Tasks
 
@@ -53,7 +53,7 @@ Use the names emitted by `npm --prefix web run generate:api`, not names inferred
 - Modify: `src/DataPitcher.Api/Contracts/{ApiContracts.cs,IDataPitcherApplication.cs}`, `src/DataPitcher.Api/Endpoints/EndpointGroups.cs`, `tests/DataPitcher.Api.IntegrationTests/ApiWebApplicationFactory.cs`, `web/openapi/datapitcher.openapi.json`, `web/src/api/generated/client.ts`, `web/src/api/generated/permissions.zod.ts`
 - Test: `web/src/features/plans/planReviewApi.test.ts`
 
-1. - [ ] **Write the failing adapter test and safe wire fixture.** Create `web/src/test/planFixtures.ts` with `export const planId = '11111111-1111-1111-1111-111111111111';` and this complete response value, which has no token, connection string, raw selection parameter, or source-row payload.
+1. - [ ] **Write the failing adapter test and safe wire fixture.** Create `web/src/test/planFixtures.ts` with `export const planId = '11111111-1111-4111-8111-111111111111';` and this complete response value, which has no token, connection string, raw selection parameter, or source-row payload.
 
    ```ts
    export const reviewWire = {
@@ -77,7 +77,7 @@ Use the names emitted by `npm --prefix web run generate:api`, not names inferred
      blockers: [],
    };
    export const inclusionPathWire = { table: 'sales.Orders', stableKey: 'Id=42', rootSelection: 'Open orders', steps: [{ relationship: 'Root selection', from: 'sales.Orders', to: 'sales.Orders', reason: 'Selected as a root row.' }] };
-    export const jobWire = { jobId: '22222222-2222-2222-2222-222222222222', planId, state: 'Running', rowsTransferred: 3, bytesTransferred: 1024 };
+     export const jobWire = { jobId: '22222222-2222-4222-8222-222222222222', planId, state: 'Running', rowsTransferred: 3, bytesTransferred: 1024 };
     ```
 
     Before this frontend test, add the failing `PlanReviewEndpointTests.cs` integration test described in the corrected dependency section and run `dotnet test tests/DataPitcher.Api.IntegrationTests/DataPitcher.Api.IntegrationTests.csproj`; it must fail because the two routes do not exist.
@@ -104,7 +104,7 @@ Use the names emitted by `npm --prefix web run generate:api`, not names inferred
      expect(request).toHaveBeenCalledWith(getPlanInclusionPathUrl(planId), expect.objectContaining({ method: 'POST', body: JSON.stringify({ table: 'sales.Orders', stableKey: 'Id=42' }) }));
    });
    it('starts with an in-memory token and rejects an absent token', async () => {
-     const request = vi.fn(async () => new Response(JSON.stringify({ operationId: '33333333-3333-3333-3333-333333333333', state: 'queued', jobId: '22222222-2222-2222-2222-222222222222' }), { status: 202 }));
+      const request = vi.fn(async () => new Response(JSON.stringify({ operationId: '33333333-3333-4333-8333-333333333333', state: 'queued', jobId: '22222222-2222-4222-8222-222222222222' }), { status: 202 }));
      await expect(startPlanJob(planId, 'request-1', request, authentication, new AbortController().signal)).resolves.toMatchObject({ state: 'queued' });
      expect(request).toHaveBeenCalledWith(getStartPlanJobUrl(planId), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer memory-token', 'Idempotency-Key': 'request-1' }) }));
      await authentication.signOut(); await expect(fetchPlanReview(planId, request, authentication, new AbortController().signal)).rejects.toThrow('Not authenticated.');
@@ -309,7 +309,7 @@ Use the names emitted by `npm --prefix web run generate:api`, not names inferred
    import { inclusionPathWire, planId, reviewWire } from '../../test/planFixtures';
 
    it('puts validated review and path data in Query and queues the server-authorized start', async () => {
-     const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => new Response(JSON.stringify(init?.method === 'POST' && String(input).includes('inclusion-paths') ? inclusionPathWire : init?.method === 'POST' ? { operationId: '33333333-3333-3333-3333-333333333333', state: 'queued', jobId: '22222222-2222-2222-2222-222222222222' } : reviewWire), { status: init?.method === 'POST' && !String(input).includes('inclusion-paths') ? 202 : 200 }));
+      const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => new Response(JSON.stringify(init?.method === 'POST' && String(input).includes('inclusion-paths') ? inclusionPathWire : init?.method === 'POST' ? { operationId: '33333333-3333-4333-8333-333333333333', state: 'queued', jobId: '22222222-2222-4222-8222-222222222222' } : reviewWire), { status: init?.method === 'POST' && !String(input).includes('inclusion-paths') ? 202 : 200 }));
      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); const queued = vi.fn(); const exported = vi.fn();
      render(<QueryClientProvider client={client}><PlanReviewScreen planId={planId} request={request} authentication={createDevelopmentAuthenticationAdapter({ subjectId: 'operator-1', tenantId: 'tenant-1' }, 'memory-token')} createId={() => 'request-1'} onJobQueued={queued} onExport={exported} /></QueryClientProvider>);
      await screen.findByRole('heading', { name: 'Transfer plan version 4' });
@@ -363,9 +363,22 @@ Use the names emitted by `npm --prefix web run generate:api`, not names inferred
 
 5. - [ ] **Commit Query-owned plan review.** Run `git add web/src/features/plans/planReviewQuery.ts web/src/features/plans/PlanReviewScreen.tsx web/src/features/plans/PlanReviewScreen.test.tsx && git commit -m "feat: query plan review data"`.
 
-### Task 5: Blocked — emit a runtime schema for SSE payloads
+### Task 5: Parse stream frames and reduce verified job state purely
 
-Do not create the parser, reducer, or tests yet. The `JobEventPayload` component is not emitted as a Zod schema from the `text/event-stream` response, so this task cannot validate every `data:` payload at the trust boundary without violating the generated-schema rule. Do not handwrite a duplicate schema, edit generated output, or change generator configuration to manufacture a guessed name. Resume this task only with an approved source-contract or generator-supported payload-schema solution; retain the required lowercase state values and `VerificationFailed` failure outcome when it resumes.
+**Files:**
+- Create: `web/src/api/generated/jobEventPayloadSchema.ts`, `web/src/features/jobs/eventStreamParser.ts`, `web/src/features/jobs/jobReducer.ts`, `web/src/features/jobs/eventStreamParser.test.ts`, `web/src/features/jobs/jobReducer.test.ts`
+- Modify: `web/vite.config.ts`
+- Test: `web/src/features/jobs/eventStreamParser.test.ts`, `web/src/features/jobs/jobReducer.test.ts`
+
+1. - [ ] **Write failing parser, schema, and reducer tests.** The reducer test must first prove a well-formed lowercase event is accepted and an invalid payload is rejected by the hand-written `JobEventPayloadSchema` before it can be reduced. Retain the existing tests for chunk boundaries, comments, joined data, retries, duplicate and gap events, terminal states, and `verificationfailed` reporting failure rather than success.
+
+2. - [ ] **Run the missing pure-module tests.** Run `npm --prefix web test -- --run src/features/jobs/eventStreamParser.test.ts src/features/jobs/jobReducer.test.ts`; expect non-zero exit and `Failed to resolve import "./eventStreamParser"`.
+
+3. - [ ] **Implement the incremental parser, hand-written event schema, and reducer.** `TextDecoder` stays in the transport shell, leaving parser input deterministic. Put `JobEventPayloadSchema` beside, but not inside, the generated Orval files; it validates `State`, `RowsTransferred`, and `BytesTransferred` with all-lowercase job states. `parseJobStreamEvent` must parse with this schema before `reduceJobEvent` can return an accepted or terminal job. Narrow the generated coverage exclusion to the two generated files so the hand-written schema is measured.
+
+4. - [ ] **Run the pure tests and the coverage gate.** Run `npm --prefix web test -- --run src/features/jobs/eventStreamParser.test.ts src/features/jobs/jobReducer.test.ts && npm --prefix web run test:coverage`; expect exit 0 and all four coverage totals at 100%.
+
+5. - [ ] **Commit the SSE pure boundary.** Run `git add web/vite.config.ts web/src/api/generated/jobEventPayloadSchema.ts web/src/features/jobs/eventStreamParser.ts web/src/features/jobs/jobReducer.ts web/src/features/jobs/eventStreamParser.test.ts web/src/features/jobs/jobReducer.test.ts && git commit -m "feat: parse and reduce job events"`.
 
 ### Task 6: Consume authenticated SSE with deterministic reconnect and cleanup
 
