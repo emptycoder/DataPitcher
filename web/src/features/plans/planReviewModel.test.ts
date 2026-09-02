@@ -7,6 +7,9 @@ it('disables stale and failed-precondition starts with server-supplied reasons',
   const review = { ...reviewWire, seal: { status: 'invalidated', invalidationReasons: [{ code: 'target-schema', message: 'Target schema changed.' }] }, startPreconditions: [{ code: 'schemaValid', satisfied: false, message: 'Target schema validation failed.' }] };
   expect(startAvailability(review as never)).toEqual({ enabled: false, reasons: ['Target schema changed.', 'Target schema validation failed.'] });
 });
+it('enables Start only for a sealed plan with satisfied preconditions', () => {
+  expect(startAvailability(reviewWire as never)).toEqual({ enabled: true, reasons: [] });
+});
 it('exports only review-safe approval facts', () => {
   const exported = createSanitizedPlanExport(reviewWire as never);
   expect(exported).toContain('sales.Orders');
