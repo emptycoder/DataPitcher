@@ -387,6 +387,8 @@ Map `GET /api/jobs/{jobId:guid}/events`; accept only the `Last-Event-ID` header,
 
 ### Task 6: Generate protected OpenAPI and close the coverage gate
 
+> **Coverage ordering correction (2026-09-02):** Reconcile the existing coverage work, then map the OpenAPI document in this task, then close API and Infrastructure coverage. `MapOpenApi` is required before the OpenAPI assembly's coverable code can execute, so reaching 100 percent before this task is not possible.
+
 **Files:**
 - Create: `tests/DataPitcher.Api.IntegrationTests/OpenApiTests.cs`
 - Modify: `src/DataPitcher.Api/Program.cs`, `src/DataPitcher.Api/Endpoints/EndpointGroups.cs`, `src/DataPitcher.Api/Errors/ApiProblems.cs`, `scripts/test-unit.sh`
