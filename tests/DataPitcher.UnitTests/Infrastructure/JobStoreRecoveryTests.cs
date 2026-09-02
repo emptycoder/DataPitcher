@@ -3,6 +3,7 @@ using DataPitcher.Core.Jobs;
 using DataPitcher.Infrastructure.Checkpoints;
 using DataPitcher.Infrastructure.Persistence;
 using DataPitcher.Infrastructure.Worker;
+using LinqToDB;
 using LinqToDB.Data;
 using Xunit;
 
@@ -38,6 +39,59 @@ public sealed class JobStoreRecoveryTests
         var recovered = await store.TryClaimNextAsync("worker-b", ttl, CancellationToken.None);
 
         Assert.NotNull(recovered); Assert.True(recovered!.IsInterrupted); Assert.Equal(job.JobId, recovered.Job.JobId);
+    }
+
+    [Fact]
+    public async Task JobStore_WhenInterruptedClaimIsPrepared_RequeuesItBeforePreparing()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock); var ttl = TimeSpan.FromMinutes(1); var job = store.Start(new(Guid.NewGuid(), "start-recovery-prepare")).Job;
+        var first = (await store.TryClaimNextAsync("worker-a", ttl, CancellationToken.None))!;
+        await store.PrepareAsync(first, CancellationToken.None); await store.MarkRunningAsync(first.Lease, CancellationToken.None);
+        fixture.Clock.Advance(ttl.Add(TimeSpan.FromTicks(1)));
+        var interrupted = (await store.TryClaimNextAsync("worker-b", ttl, CancellationToken.None))!;
+
+        await store.PrepareAsync(interrupted, CancellationToken.None);
+
+        Assert.True(interrupted.IsInterrupted); Assert.Equal(JobState.Preparing, await store.GetStateAsync(job.JobId, CancellationToken.None)); Assert.Contains(store.GetHistory(job.JobId), transition => transition == (JobState.Running, JobState.Queued));
+    }
+
+    [Fact]
+    public async Task JobStore_WhenControlUpdateIsSuppressed_RejectsTheSupersededIntent()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock); var ttl = TimeSpan.FromMinutes(1); var job = store.Start(new(Guid.NewGuid(), "start-superseded-intent")).Job;
+        var claim = (await store.TryClaimNextAsync("worker-a", ttl, CancellationToken.None))!;
+        await store.PrepareAsync(claim, CancellationToken.None); await store.MarkRunningAsync(claim.Lease, CancellationToken.None);
+        using (var db = fixture.Database.Open()) db.Execute("CREATE TRIGGER SuppressControlIntent BEFORE UPDATE OF State ON Jobs BEGIN SELECT RAISE(IGNORE); END;");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => store.RequestPauseAsync(job.JobId, CancellationToken.None));
+
+        Assert.Equal("Job control intent was superseded.", exception.Message); Assert.Equal(JobState.Running, await store.GetStateAsync(job.JobId, CancellationToken.None)); Assert.DoesNotContain(store.GetHistory(job.JobId), transition => transition.To == JobState.Pausing);
+    }
+
+    [Fact]
+    public async Task JobStore_WhenWorkerLeaseExpires_RejectsTheWorkerTransition()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock); var ttl = TimeSpan.FromMinutes(1); var job = store.Start(new(Guid.NewGuid(), "start-stale-worker")).Job;
+        var claim = (await store.TryClaimNextAsync("worker-a", ttl, CancellationToken.None))!;
+        await store.PrepareAsync(claim, CancellationToken.None);
+        fixture.Clock.Advance(ttl.Add(TimeSpan.FromTicks(1)));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => store.MarkRunningAsync(claim.Lease, CancellationToken.None));
+
+        Assert.Equal("Worker no longer owns the job.", exception.Message); Assert.Equal(JobState.Preparing, await store.GetStateAsync(job.JobId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task JobStore_WhenLeaseReleaseIsSuperseded_RejectsTheWorkerTransition()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock); var ttl = TimeSpan.FromMinutes(1); var job = store.Start(new(Guid.NewGuid(), "start-superseded-release")).Job;
+        var claim = (await store.TryClaimNextAsync("worker-a", ttl, CancellationToken.None))!;
+        await store.PrepareAsync(claim, CancellationToken.None); await store.MarkRunningAsync(claim.Lease, CancellationToken.None); await store.RequestPauseAsync(job.JobId, CancellationToken.None);
+        using (var db = fixture.Database.Open()) db.Execute("CREATE TRIGGER SupersedeWorkerLease AFTER UPDATE OF State ON Jobs BEGIN UPDATE JobLeases SET OwnerId = 'worker-b', FenceToken = FenceToken + 1 WHERE JobId = NEW.JobId; END;");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => store.MarkPausedAsync(claim.Lease, CancellationToken.None));
+
+        Assert.Equal("Worker lease release was superseded.", exception.Message); Assert.Equal(JobState.Pausing, await store.GetStateAsync(job.JobId, CancellationToken.None));
     }
 
     [Fact]
@@ -80,6 +134,30 @@ public sealed class JobStoreRecoveryTests
 
         using var db = fixture.Database.Open();
         Assert.Equal(2, db.Query<long>("SELECT LastCommittedBatchSequence FROM BatchCheckpointMirrors WHERE JobId = @jobId AND RunId = @runId", new DataParameter("jobId", job.ToString()), new DataParameter("runId", run.ToString())).Single());
+    }
+
+    [Fact]
+    public async Task CheckpointMirrorStore_WhenTargetHasNoCommittedKey_PersistsANullDisplayKey()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var job = fixture.SeedJob(); var run = Guid.NewGuid(); var mirror = new CheckpointMirrorStore(fixture.Database);
+
+        await mirror.OverwriteAsync(new(job, run, 0, null, 0, "seal", 1), CancellationToken.None);
+
+        using var db = fixture.Database.Open();
+        Assert.Equal(1, db.Query<long>("SELECT COUNT(*) FROM BatchCheckpointMirrors WHERE JobId = @jobId AND RunId = @runId AND LastCommittedStableKey IS NULL", new DataParameter("jobId", job.ToString()), new DataParameter("runId", run.ToString())).Single());
+    }
+
+    [Fact]
+    public void BatchCheckpointMirrorRow_WhenPersisted_MapsEveryDerivedCheckpointValue()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var job = fixture.SeedJob();
+        var row = new BatchCheckpointMirrorRow { JobId = job.ToString(), RunId = Guid.NewGuid().ToString(), LastCommittedBatchSequence = 2, LastCommittedStableKey = "Id=2", CumulativeRowCount = 20, SealedManifestHash = "seal", FenceToken = 3, UpdatedUtc = fixture.Clock.UtcNow.ToString("O") };
+
+        using var db = fixture.Database.Open();
+        db.Insert(row);
+        var persisted = db.GetTable<BatchCheckpointMirrorRow>().Single();
+
+        Assert.Equal(row.JobId, persisted.JobId); Assert.Equal(row.RunId, persisted.RunId); Assert.Equal(row.LastCommittedBatchSequence, persisted.LastCommittedBatchSequence); Assert.Equal(row.LastCommittedStableKey, persisted.LastCommittedStableKey); Assert.Equal(row.CumulativeRowCount, persisted.CumulativeRowCount); Assert.Equal(row.SealedManifestHash, persisted.SealedManifestHash); Assert.Equal(row.FenceToken, persisted.FenceToken); Assert.Equal(row.UpdatedUtc, persisted.UpdatedUtc);
     }
 
     private static async Task<StartJobResult> StartAfterAsync(Task barrier, JobStore store, StartJobRequest request)
