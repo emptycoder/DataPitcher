@@ -21,7 +21,7 @@ public sealed class EntraProviderRegistration : IAuthProviderRegistration
     public void Register(AuthenticationBuilder builder)
     {
         builder.Services.AddKeyedSingleton<IExternalPrincipalNormalizer>(SchemeName, new EntraPrincipalNormalizer(options));
-        builder.AddMicrosoftIdentityWebApi(configuration, configuration.Path, SchemeName);
+        builder.AddMicrosoftIdentityWebApi(configuration, SchemeName);
         builder.Services.PostConfigure<JwtBearerOptions>(SchemeName, bearer => { bearer.MapInboundClaims = false; var prior = bearer.Events.OnTokenValidated; bearer.Events.OnTokenValidated = async context => { if (prior is not null) await prior(context); if (IsMultiTenant && (!Guid.TryParse(context.Principal?.FindFirst("tid")?.Value, out var tenant) || !options.AllowedTenantIds.Contains(tenant.ToString(), StringComparer.OrdinalIgnoreCase))) context.Fail("Tenant is not allowlisted."); }; });
     }
     private bool IsMultiTenant => StringComparer.Ordinal.Equals(options.TenantId, "organizations");
