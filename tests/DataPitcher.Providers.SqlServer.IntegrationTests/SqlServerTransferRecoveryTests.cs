@@ -92,6 +92,22 @@ public sealed class SqlServerTransferRecoveryTests(SqlServerClosureFixture fixtu
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenTheCommittedCheckpointIsRemoved_ThrowsWithoutWritingTheMirror()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteTargetAsync("CREATE TABLE dbo.transfer_rows (id int NOT NULL PRIMARY KEY, code nvarchar(64) NOT NULL);");
+        var context = SqlServerTransferTestData.Context();
+        var mirror = new RecordingMirror();
+        var executor = new SqlServerTransferExecutor(scope.TargetConnectionString, mirror, new PassBarrier());
+        await executor.InitializeAsync(context, CancellationToken.None);
+        await scope.ExecuteTargetAsync("CREATE TRIGGER [datapitcher].[remove_checkpoint_after_advance] ON [datapitcher].[transfer_checkpoints] AFTER UPDATE AS BEGIN SET NOCOUNT ON; DELETE [datapitcher].[transfer_checkpoints] WHERE job_id IN (SELECT job_id FROM inserted) AND run_id IN (SELECT run_id FROM inserted); END;");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteAsync(context, SqlServerTransferTestData.Table(), SqlServerTransferTestData.Batch(0, (1, "one")), CancellationToken.None));
+        Assert.Equal(1, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.transfer_rows"));
+        Assert.Equal(0, mirror.Writes);
+    }
+
+    [Fact]
     public async Task RecoverAsync_WhenTheRunWasNeverInitialized_ThrowsInvalidOperationException()
     {
         await using var scope = await fixture.CreateScopeAsync();

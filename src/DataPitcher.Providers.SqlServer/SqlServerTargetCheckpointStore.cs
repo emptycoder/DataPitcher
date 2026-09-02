@@ -18,7 +18,12 @@ public sealed class SqlServerTargetCheckpointStore(string targetConnectionString
             await ExecuteAsync(connection, transaction, "INSERT " + Name + " (job_id,run_id,last_batch_sequence,last_stable_key,cumulative_affected,cumulative_inserts,cumulative_updates,manifest_hash,fence_token) VALUES (@job,@run,-1,0x,0,0,0,@hash,@fence)", context, cancellationToken);
         else if (!StringComparer.Ordinal.Equals(existing.ManifestHash, context.ManifestHash)) throw new SqlServerManifestMismatchException();
         else if (existing.FenceToken > context.FenceToken) throw new SqlServerFenceLostException();
-        else if (existing.FenceToken < context.FenceToken && await ExecuteAsync(connection, transaction, "UPDATE " + Name + " SET fence_token=@fence WHERE job_id=@job AND run_id=@run AND manifest_hash=@hash AND fence_token<@fence", context, cancellationToken) != 1) throw new SqlServerFenceLostException();
+        else if (existing.FenceToken < context.FenceToken)
+        {
+            await ExecuteAsync(connection, transaction, "UPDATE " + Name + " SET fence_token=@fence WHERE job_id=@job AND run_id=@run AND manifest_hash=@hash AND fence_token<@fence", context, cancellationToken);
+            var advanced = await ReadAsync(connection, transaction, context.JobId, context.RunId, cancellationToken);
+            if (advanced is null || advanced.FenceToken != context.FenceToken) throw new SqlServerFenceLostException();
+        }
         await transaction.CommitAsync(cancellationToken);
     }
 

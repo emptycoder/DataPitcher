@@ -77,12 +77,39 @@ public sealed class SqlServerStrictExactTests(SqlServerClosureFixture fixture)
     }
 
     [Fact]
+    public async Task RealignAsync_WhenThePositiveIdentityIsBehindTheOccupiedMaximum_ReseedsIt()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteTargetAsync("CREATE TABLE dbo.sequence_rows (id bigint IDENTITY(1,1) PRIMARY KEY, code nvarchar(64) NOT NULL); SET IDENTITY_INSERT dbo.sequence_rows ON; INSERT dbo.sequence_rows (id,code) VALUES (10,N'ten'); SET IDENTITY_INSERT dbo.sequence_rows OFF; DBCC CHECKIDENT ('dbo.sequence_rows', RESEED, 0);");
+        await new SqlServerIdentityRealigner(scope.TargetConnectionString).RealignAsync(SequenceTable(), "id", CancellationToken.None);
+        Assert.Equal(11L, await scope.ScalarTargetAsync<long>("INSERT dbo.sequence_rows (code) OUTPUT INSERTED.id VALUES (N'reseeded')"));
+    }
+
+    [Fact]
+    public async Task RealignAsync_WhenAnUnissuedPositiveIdentityIsAlreadyAhead_DoesNotRewindIt()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteTargetAsync("CREATE TABLE dbo.sequence_rows (id bigint IDENTITY(100,1) PRIMARY KEY, code nvarchar(64) NOT NULL); SET IDENTITY_INSERT dbo.sequence_rows ON; INSERT dbo.sequence_rows (id,code) VALUES (10,N'ten'); SET IDENTITY_INSERT dbo.sequence_rows OFF;");
+        await new SqlServerIdentityRealigner(scope.TargetConnectionString).RealignAsync(SequenceTable(), "id", CancellationToken.None);
+        Assert.Equal(100L, await scope.ScalarTargetAsync<long>("INSERT dbo.sequence_rows (code) OUTPUT INSERTED.id VALUES (N'ahead')"));
+    }
+
+    [Fact]
     public async Task RealignAsync_WhenTheIdentityDecreases_AdvancesPastTheOccupiedMinimum()
     {
         await using var scope = await fixture.CreateScopeAsync();
         await scope.ExecuteTargetAsync("CREATE TABLE dbo.sequence_rows (id bigint IDENTITY(-1,-1) PRIMARY KEY, code nvarchar(64) NOT NULL); SET IDENTITY_INSERT dbo.sequence_rows ON; INSERT dbo.sequence_rows (id,code) VALUES (-10,N'ten'); SET IDENTITY_INSERT dbo.sequence_rows OFF;");
         await new SqlServerIdentityRealigner(scope.TargetConnectionString).RealignAsync(SequenceTable(), "id", CancellationToken.None);
         Assert.Equal(-11L, await scope.ScalarTargetAsync<long>("INSERT dbo.sequence_rows (code) OUTPUT INSERTED.id VALUES (N'next')"));
+    }
+
+    [Fact]
+    public async Task RealignAsync_WhenTheNegativeIdentityIsBehindTheOccupiedMinimum_ReseedsIt()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteTargetAsync("CREATE TABLE dbo.sequence_rows (id bigint IDENTITY(-1,-1) PRIMARY KEY, code nvarchar(64) NOT NULL); SET IDENTITY_INSERT dbo.sequence_rows ON; INSERT dbo.sequence_rows (id,code) VALUES (-10,N'ten'); SET IDENTITY_INSERT dbo.sequence_rows OFF; DBCC CHECKIDENT ('dbo.sequence_rows', RESEED, 0);");
+        await new SqlServerIdentityRealigner(scope.TargetConnectionString).RealignAsync(SequenceTable(), "id", CancellationToken.None);
+        Assert.Equal(-11L, await scope.ScalarTargetAsync<long>("INSERT dbo.sequence_rows (code) OUTPUT INSERTED.id VALUES (N'reseeded')"));
     }
 
     [Fact]

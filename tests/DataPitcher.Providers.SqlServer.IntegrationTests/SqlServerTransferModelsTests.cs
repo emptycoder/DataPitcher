@@ -89,6 +89,14 @@ public sealed class SqlServerTransferModelsTests(SqlServerClosureFixture fixture
     }
 
     [Fact]
+    public void StableKeyCodec_Encode_WhenABigIntComponentIsNotALong_RejectsTheInvalidKey()
+    {
+        var table = new SqlServerWriteTable(new TableAddress("dbo", "rows"), [new("id", "bigint", typeof(long), SqlDbType.BigInt, true, false, false, false, false, null)]);
+        var key = new StableKey([new KeyComponent("id", 7)]);
+        Assert.Throws<NotSupportedException>(() => SqlServerStableKeyCodec.Encode(key, table));
+    }
+
+    [Fact]
     public void StableKeyCodec_Encode_WhenTheProviderTypeIsUnsupported_ThrowsNotSupportedException()
     {
         var table = new SqlServerWriteTable(new TableAddress("dbo", "uid_key_rows"), [new("id", "uniqueidentifier", typeof(Guid), SqlDbType.UniqueIdentifier, true, false, false, false, false, null)]);
@@ -120,5 +128,14 @@ public sealed class SqlServerTransferModelsTests(SqlServerClosureFixture fixture
         await scope.ExecuteTargetAsync("CREATE TABLE dbo.transfer_rows (id int PRIMARY KEY, flag bit NOT NULL);");
         var error = await Assert.ThrowsAsync<NotSupportedException>(() => new SqlServerTransferSchemaReader(scope.TargetConnectionString).ReadAsync("dbo", "transfer_rows", ["id"], CancellationToken.None));
         Assert.Contains("bit", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReadAsync_WhenAColumnIsNvarcharMax_PreservesTheUnboundedStoreType()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteTargetAsync("CREATE TABLE dbo.transfer_rows (id int PRIMARY KEY, note nvarchar(max) NOT NULL);");
+        var table = await new SqlServerTransferSchemaReader(scope.TargetConnectionString).ReadAsync("dbo", "transfer_rows", ["id"], CancellationToken.None);
+        Assert.Equal("nvarchar(max)", table.Column("note").StoreType);
     }
 }

@@ -71,7 +71,7 @@ public sealed class SqlServerIdentityRealigner(string targetConnectionString)
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         var target = SqlServerIdentifier.Qualified(table.Target.Schema, table.Target.Name);
-        const string identitySql = "SELECT ic.last_value,ic.increment_value FROM sys.identity_columns ic WHERE ic.object_id=OBJECT_ID(@target) AND ic.name=@column";
+        const string identitySql = "SELECT ic.last_value,ic.increment_value,ic.seed_value FROM sys.identity_columns ic WHERE ic.object_id=OBJECT_ID(@target) AND ic.name=@column";
         await using var identity = new SqlCommand(identitySql, connection, transaction);
         identity.Parameters.AddWithValue("@target", target);
         identity.Parameters.AddWithValue("@column", column);
@@ -79,12 +79,15 @@ public sealed class SqlServerIdentityRealigner(string targetConnectionString)
         if (!await identityRows.ReadAsync(cancellationToken)) { await identityRows.CloseAsync(); await transaction.CommitAsync(cancellationToken); return; }
         var current = identityRows.IsDBNull(0) ? (long?)null : Convert.ToInt64(identityRows.GetValue(0), CultureInfo.InvariantCulture);
         var increment = Convert.ToInt64(identityRows.GetValue(1), CultureInfo.InvariantCulture);
+        var seed = Convert.ToInt64(identityRows.GetValue(2), CultureInfo.InvariantCulture);
         await identityRows.CloseAsync();
         var extremeSql = "SELECT " + (increment > 0 ? "MAX" : "MIN") + "(" + SqlServerIdentifier.Quote(column) + ") FROM " + target + " WITH (TABLOCKX,HOLDLOCK)";
         await using var extreme = new SqlCommand(extremeSql, connection, transaction);
-        if (await extreme.ExecuteScalarAsync(cancellationToken) is not object value || value is DBNull) { await transaction.CommitAsync(cancellationToken); return; }
+        var value = await extreme.ExecuteScalarAsync(cancellationToken);
+        if (value is DBNull) { await transaction.CommitAsync(cancellationToken); return; }
         var bound = Convert.ToInt64(value, CultureInfo.InvariantCulture);
-        var safe = current is not null && (increment > 0 ? current >= bound : current <= bound);
+        var position = current ?? checked(seed - increment);
+        var safe = increment > 0 ? position >= bound : position <= bound;
         if (safe) { await transaction.CommitAsync(cancellationToken); return; }
         await using var reseed = new SqlCommand("DBCC CHECKIDENT (N'" + target.Replace("'", "''", StringComparison.Ordinal) + "', RESEED, " + bound.ToString(CultureInfo.InvariantCulture) + ")", connection, transaction);
         await reseed.ExecuteNonQueryAsync(cancellationToken);

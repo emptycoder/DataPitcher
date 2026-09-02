@@ -66,4 +66,26 @@ public sealed class SqlServerTargetCheckpointStoreTests(SqlServerClosureFixture 
         await store.InitializeAsync(newer, CancellationToken.None);
         await Assert.ThrowsAsync<SqlServerFenceLostException>(() => store.InitializeAsync(older, CancellationToken.None));
     }
+
+    [Fact]
+    public async Task InitializeAsync_WhenTheCheckpointFenceUpdateDoesNotAdvance_ThrowsFenceLost()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        var store = new SqlServerTargetCheckpointStore(scope.TargetConnectionString);
+        var older = SqlServerTransferTestData.Context();
+        await store.InitializeAsync(older, CancellationToken.None);
+        await scope.ExecuteTargetAsync("CREATE TRIGGER [datapitcher].[suppress_checkpoint_fence] ON [datapitcher].[transfer_checkpoints] INSTEAD OF UPDATE AS RETURN;");
+        await Assert.ThrowsAsync<SqlServerFenceLostException>(() => store.InitializeAsync(older with { FenceToken = 2 }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenTheCheckpointFenceUpdateRemovesTheCheckpoint_ThrowsFenceLost()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        var store = new SqlServerTargetCheckpointStore(scope.TargetConnectionString);
+        var older = SqlServerTransferTestData.Context();
+        await store.InitializeAsync(older, CancellationToken.None);
+        await scope.ExecuteTargetAsync("CREATE TRIGGER [datapitcher].[remove_checkpoint_fence] ON [datapitcher].[transfer_checkpoints] INSTEAD OF UPDATE AS DELETE [datapitcher].[transfer_checkpoints] WHERE job_id IN (SELECT job_id FROM deleted) AND run_id IN (SELECT run_id FROM deleted);");
+        await Assert.ThrowsAsync<SqlServerFenceLostException>(() => store.InitializeAsync(older with { FenceToken = 2 }, CancellationToken.None));
+    }
 }
