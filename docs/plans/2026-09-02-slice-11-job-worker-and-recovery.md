@@ -350,12 +350,6 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
             var checkpoint = await target.ApplyAsync(run, claim.Lease, unit, leaseLost.Token);
             await faults.HitAsync(TransferFaultPoint.AfterTargetCommitBeforeControlMirror, leaseLost.Token);
             await mirror.OverwriteAsync(checkpoint, leaseLost.Token);
-            if (await jobs.GetStateAsync(claim.Job.JobId, leaseLost.Token) is JobState.Pausing)
-            {
-                await source.DiscardUncommittedAsync(leaseLost.Token);
-                await jobs.MarkPausedAsync(claim.Lease, leaseLost.Token);
-                return;
-            }
         }
         await jobs.MarkVerifyingAsync(claim.Lease, leaseLost.Token);
     }
@@ -364,7 +358,7 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
 }
 ```
 
-Task 6 adds the command-aware cancellation and classified-failure catches around this complete success path. The worker invokes no HTTP object and never exposes a session outside `RunClaimAsync`.
+Task 5 adds pause, resume, and cancellation boundary handling test-first, and Task 6 adds classified-failure catches around this complete success path. The worker invokes no HTTP object and never exposes a session outside `RunClaimAsync`.
 
 4. - [ ] **Run the normal worker suite and confirm clock-driven ownership.**
 
@@ -447,7 +441,7 @@ Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --fil
 
 Expected: test failure reports that a prefetched unit was applied after `Pausing`, because the normal worker has not yet discarded it at the committed boundary.
 
-3. - [ ] **Complete boundary handling without changing writer ownership.** After every successful `ApplyAsync`, check `Cancelling` before `Pausing`; cancellation calls both sessions’ `DiscardUncommittedAsync` with the linked token, then `MarkCancelledAsync`. Pause calls only the source discard method after the current successful commit, letting `await using` close its reader/connection. Require provider `ApplyAsync` to delete or mark reclaimable its own staging rows in the same fenced target transaction as business apply/checkpoint, so pause persists no payload. On resume, the authorized operator-intent request `JobStore.RequestResumeAsync` changes only `Paused -> Queued` without a lease because paused jobs have no owner; the next claim goes through target recovery and calls `OpenKeysetAsync(run, checkpoint.LastStableKey, token)`. Do not branch inside an atomic component: it is one `TransferUnit`, so the existing post-`ApplyAsync` boundary is the only pause observation point.
+3. - [ ] **Introduce pause and cancellation boundary handling in `RunClaimAsync` from the failing test, without changing writer ownership.** After every successful `ApplyAsync`, check `Cancelling` before `Pausing`; cancellation calls both sessions’ `DiscardUncommittedAsync` with the linked token, then `MarkCancelledAsync`. Pause calls only the source discard method after the current successful commit, letting `await using` close its reader/connection. Require provider `ApplyAsync` to delete or mark reclaimable its own staging rows in the same fenced target transaction as business apply/checkpoint, so pause persists no payload. On resume, the authorized operator-intent request `JobStore.RequestResumeAsync` changes only `Paused -> Queued` without a lease because paused jobs have no owner; the next claim goes through target recovery and calls `OpenKeysetAsync(run, checkpoint.LastStableKey, token)`. Do not branch inside an atomic component: it is one `TransferUnit`, so the existing post-`ApplyAsync` boundary is the only pause observation point.
 
 4. - [ ] **Run the focused boundary tests and confirm all session cleanup and resume semantics.**
 

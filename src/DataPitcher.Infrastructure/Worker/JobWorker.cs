@@ -1,4 +1,3 @@
-using DataPitcher.Core.Jobs;
 using DataPitcher.Infrastructure.Time;
 using Microsoft.Extensions.Hosting;
 
@@ -38,12 +37,6 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
             var checkpoint = await target.ApplyAsync(run, claim.Lease, unit, leaseLost.Token);
             await faults.HitAsync(TransferFaultPoint.AfterTargetCommitBeforeControlMirror, leaseLost.Token);
             await mirror.OverwriteAsync(checkpoint, leaseLost.Token);
-            if (await jobs.GetStateAsync(claim.Job.JobId, leaseLost.Token) is JobState.Pausing)
-            {
-                await source.DiscardUncommittedAsync(leaseLost.Token);
-                await jobs.MarkPausedAsync(claim.Lease, leaseLost.Token);
-                return;
-            }
         }
         await jobs.MarkVerifyingAsync(claim.Lease, leaseLost.Token);
     }
