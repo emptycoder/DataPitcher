@@ -278,7 +278,9 @@ Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --fil
 
 Expected: compilation fails with `CS0246` because `JobWorker` and `LeaseRenewer` are not defined.
 
-3. - [ ] **Add hosting support, the renewing loop, and the complete normal coordinator.** Add `Microsoft.Extensions.Hosting.Abstractions` version `10.0.11` to Infrastructure. `LeaseRenewer` must call `delay.UntilAsync(current.RenewAfterUtc, token)`, then `LeaseStore.RenewIfDue`; a null renewal cancels its linked lease-loss token. `JobWorker` must inherit `BackgroundService`, create a fresh linked token per claim, and await the renewer and run task before accepting another job.
+3. - [ ] **Add hosting support, the renewing loop, and the complete normal coordinator.** Add `Microsoft.Extensions.Hosting.Abstractions` version `10.0.11` to Infrastructure. `LeaseRenewer` must call `delay.UntilAsync(current.RenewAfterUtc, token)`, then the existing synchronous `LeaseStore.RenewIfDue`; a null renewal cancels its linked lease-loss token. `JobWorker` must inherit `BackgroundService`, create a fresh linked token per claim, and await the renewer and run task before accepting another job.
+
+`RenewIfDue` intentionally remains synchronous. The control database is in-process SQLite, and the store layer's `Start`, `TryTransition`, and `Get` APIs are synchronous; an async variant adds inconsistency without a network round trip to await.
 
 ```csharp
 // src/DataPitcher.Infrastructure/Worker/LeaseRenewer.cs
@@ -296,7 +298,7 @@ public sealed class LeaseRenewer(LeaseStore leases, IWorkerDelay delay)
             while (!stopToken.IsCancellationRequested)
             {
                 await delay.UntilAsync(current.RenewAfterUtc, stopToken);
-                var renewed = await leases.RenewIfDueAsync(current, ttl, stopToken);
+                var renewed = leases.RenewIfDue(current, ttl);
                 if (renewed is null) { leaseLost.Cancel(); return; }
                 current = renewed;
             }
