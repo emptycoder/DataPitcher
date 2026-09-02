@@ -68,7 +68,7 @@ Separately, a differential test ran **25,000 randomly generated schemas** throug
 
 ## Blockers
 
-**Resolved blocker:** container-based testing was previously blocked by external Docker availability and is now lifted and verified. Testcontainers now boots PostgreSQL (`postgres:17-alpine`) and SQL Server (`mcr.microsoft.com/mssql/server:2022-latest`) containers and executes real queries in one second-level startup path. Caveats remain: SQL Server is amd64-only and runs under emulation, and memory headroom is tight for the full two-postgres/two-SQL Server container design because each SQL Server container needs at least 2 GB.
+**Resolved blocker:** container-based testing was previously blocked by external Docker availability and is now lifted and verified. Testcontainers now boots PostgreSQL (`postgres:17-alpine`) and SQL Server (`mcr.microsoft.com/mssql/server:2022-latest`) containers and executes real queries in one second-level startup path. Caveats remain: SQL Server is amd64-only and runs under emulation. Memory headroom for the full two-postgres/two-SQL Server container design has been measured, not estimated: a single SQL Server 2022 container uses 1.08 GiB at readiness, and two run simultaneously at 2.28 GiB total, 29.8 percent of the 7.65 GiB allocation, with headroom adequate. This is idle and light-load evidence, not a peak-load bound.
 
 ## Key decisions that must not be silently reversed
 
