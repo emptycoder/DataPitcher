@@ -14,6 +14,22 @@
           }
         }
       }
+    },
+    "/api/plans/{planId}/schema-dependency-graph": {
+      "get": {
+        "operationId": "planSchemaDependencyGraph",
+        "parameters": [
+          { "name": "planId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plan schema dependency graph",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/PlanSchemaDependencyGraph" } }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -25,6 +41,37 @@
           "principalId": { "type": "string", "minLength": 1 },
           "tenantId": { "type": "string", "minLength": 1 },
           "permissions": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "PlanSchemaDependencyGraph": {
+        "type": "object",
+        "required": ["revision", "plannedTableIds", "tables", "relationships"],
+        "properties": {
+          "revision": { "type": "string" },
+          "plannedTableIds": { "type": "array", "items": { "type": "string" } },
+          "tables": { "type": "array", "items": { "$ref": "#/components/schemas/PlanSchemaDependencyGraphTable" } },
+          "relationships": { "type": "array", "items": { "$ref": "#/components/schemas/PlanSchemaDependencyGraphRelationship" } }
+        }
+      },
+      "PlanSchemaDependencyGraphTable": {
+        "type": "object",
+        "required": ["id", "schema", "name", "componentId", "state"],
+        "properties": {
+          "id": { "type": "string" },
+          "schema": { "type": "string" },
+          "name": { "type": "string" },
+          "componentId": { "type": "string" },
+          "state": { "type": "string", "enum": ["unselected", "root-selected", "required-dependency", "explicit-dependent", "target-satisfied", "blocked", "conflict", "cycle-member"] }
+        }
+      },
+      "PlanSchemaDependencyGraphRelationship": {
+        "type": "object",
+        "required": ["id", "name", "childTableId", "parentTableId"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "childTableId": { "type": "string" },
+          "parentTableId": { "type": "string" }
         }
       }
     }

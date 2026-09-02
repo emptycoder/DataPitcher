@@ -21,13 +21,14 @@
 - `web/src/stores/graphViewStore.ts`, `web/src/stores/graphViewStore.test.tsx` — private Zustand interaction state with primitive selectors and named actions.
 - `web/src/graph/presentation.ts`, `web/src/graph/GraphNode.tsx`, `web/src/graph/GraphLegend.tsx`, `web/src/graph/GraphDetails.tsx`, `web/src/graph/DependencyGraphView.tsx`, `web/src/graph/DependencyGraphView.test.tsx` — state presentation, keyboard-operable graph nodes, legend, details panel, React Flow adapter, and component contracts.
 - `web/src/graph/DependencyGraphScreen.tsx`, `web/src/graph/DependencyGraphScreen.test.tsx` — Query/layout/view composition with injected fetch, authentication, layout engine, cache, and scheduler.
+- `web/src/app/App.tsx`, `web/src/app/App.test.tsx` — application host route and navigation to the graph, with the route plan ID as the active-plan context.
 - `web/e2e/dependency-graph-worker.spec.ts`, `web/playwright.config.ts` — production-build worker smoke test outside the unit-coverage calculation.
 
 ## Scope and Deferrals
 
 This slice is only the schema dependency graph. It deliberately does not create the Selection Workbench, query editing or preview, plan-review controls, transfer start controls, or the SSE transfer monitor. Those features may set an active plan and mount `DependencyGraphScreen`, but this slice neither owns their state nor copies their payloads into Zustand.
 
-The graph’s input is the authenticated `GET /api/plans/{planId}/schema-dependency-graph` contract added to the frontend OpenAPI source. The API implementation must return this exact generated contract before the screen is wired into application navigation; no component may substitute an in-memory full-schema fixture or an unvalidated transport type. The response is topology only: opaque table and foreign-key identifiers, schema/table display names, a stable topology revision, a deterministic SCC presentation identifier, plan table states, plan table IDs, and child/parent edge endpoints. It contains no layout coordinates, connection strings, row values, or selection-query text. The API-side endpoint and the host’s active-plan navigation are integration prerequisites, not a reason to build a fake Selection Workbench here.
+The graph’s input is the authenticated `GET /api/plans/{planId}/schema-dependency-graph` contract added to the frontend OpenAPI source. The API implementation must return this exact generated contract; no component may substitute an in-memory full-schema fixture or an unvalidated transport type. The response is topology only: opaque table and foreign-key identifiers, schema/table display names, a stable topology revision, a deterministic SCC presentation identifier, plan table states, plan table IDs, and child/parent edge endpoints. It contains no layout coordinates, connection strings, row values, or selection-query text. The API-side endpoint is an integration prerequisite. This slice adds the application host route and navigation needed to compose the graph; its route plan ID is the active-plan context. It does not add a fake Selection Workbench or fabricate plan data.
 
 Do not render an entire schema by default. `onlyRenderVisibleElements` must be enabled, but it removes only **off-screen** elements: a fit-view that places every table on screen defeats culling entirely. The default is the plan subgraph—plan-selected tables plus their transitive outgoing parent dependencies—and other neighbours appear only after an operator focuses a visible table and explicitly expands its dependency or dependant neighbourhood. Schemas and multi-table SCCs are collapsible. The product target is no more than roughly 200 simultaneously visible nodes; the implementation refuses an expansion above that cap and asks the operator to focus/collapse first. Roughly 400–500 simple visible nodes remains the realistic soft frame-rate ceiling for pan, zoom, and drag, not a safe default or a reason to weaken the 200-node policy.
 
@@ -189,7 +190,7 @@ An edge is always `child -> parent`: `orders.customer_id -> customers.id` displa
 
 2. - [ ] **Run both tests and confirm their intended red failures.** Run `npm --prefix web test -- --run src/graph/layout.test.ts src/stores/graphViewStore.test.tsx`; expect non-zero exit and `Failed to resolve import "./layout"` plus `Failed to resolve import "./graphViewStore"`.
 
-3. - [ ] **Implement the disposable cache and private graph interaction store.** `layout.ts` exports `semanticLayoutKey({ revision, visibleItemIds, measuredSizes, optionsVersion })`, sorting every identifier and serializing only those four semantic inputs. It exports `createLayoutResultCache()` around a private `Map<string, LayoutResult>` with `get`, `set`, and `clear`, plus `createLayoutCoordinator(engine, cache, scheduler)`. The coordinator calls the injected scheduler only after a cache miss; it does not observe React render, object identity, viewport, hover, focus, highlight, theme, progress, or pinned positions. No clock or timer is needed; if a future debounce/expiry is added, inject its clock and scheduler rather than calling ambient browser timing APIs.
+3. - [ ] **Define the layout contracts, then implement the disposable cache and private graph interaction store.** `layout.ts` first exports `LayoutPosition` (`x`, `y`), `LayoutEdgeSection` (start point, bend points, end point), and `LayoutResult` (`key`, positions keyed by visible-item identity, and edge sections keyed by relationship identity). It also exports `LayoutEngine` with `layout(key, graph, sizes): Promise<LayoutResult>`, the generic injected `LayoutScheduler` function type, and `LayoutCoordinator` with `request(key, graph, sizes): Promise<LayoutResult>`, where `graph` is `VisibleSubgraph` and `sizes` is the measured item-size record. `semanticLayoutKey({ revision, visibleItemIds, measuredSizes, optionsVersion })` sorts every identifier and serializes only those four semantic inputs. `createLayoutResultCache()` owns a private `Map<string, LayoutResult>` with `get`, `set`, and `clear`; `createLayoutCoordinator(engine, cache, scheduler)` decides whether a request runs: it returns a cache hit without calling the scheduler or engine, schedules an engine call only on a miss, and rejects a result whose own key differs from the requested semantic key rather than rendering it as current. The scheduler controls when that approved work executes. The coordinator does not observe React render, object identity, viewport, hover, focus, highlight, theme, progress, or pinned positions. No clock or timer is needed; if a future debounce/expiry is added, inject its clock and scheduler rather than calling ambient browser timing APIs.
 
    `graphViewStore.ts` is a separate, non-persisted Zustand store. Store `viewport` as `{ x, y, zoom }`, one focused ID, selected-ID membership, expanded-table membership, collapsed-schema membership, collapsed-component membership, and pinned `{ x, y }` values. Export only named `graphViewActions` and selectors returning a primitive or an existing state value: `useGraphViewport`, `useGraphFocusedTableId`, `useIsGraphTableSelected`, `useIsGraphTableExpanded`, `useIsSchemaCollapsed`, `useIsComponentCollapsed`, and `usePinnedGraphPosition`. Do not export the underlying hook, a complete state object, a fresh array/object selector, a generic patch action, or persistence middleware. `setPinnedGraphPosition` changes coordinates for rendering but cannot change the layout key; `clearPinnedGraphPosition` restores ELK’s cached base position.
 
@@ -208,27 +209,29 @@ An edge is always `child -> parent`: `orders.customer_id -> customers.id` displa
 
 2. - [ ] **Run the adapter test and confirm its intended red failure.** Run `npm --prefix web test -- --run src/graph/elkLayout.test.ts`; expect non-zero exit and `Failed to resolve import "./elkLayout"`.
 
-3. - [ ] **Implement the pure conversion and thin worker adapter.** Use this complete core; `toElkGraph` and `fromElkLayout` are pure and own all conversion coverage, while the constructor is the only vendor shell.
+3. - [ ] **Implement the pure conversion and thin worker adapter.** Use this complete core; `toElkGraph` and `fromElkLayout` are pure and own all conversion coverage, while the constructor is the only vendor shell. `fromElkLayout(key, result)` converts returned ELK child `id`, `x`, and `y` values into the `LayoutResult` positions record and each returned edge's sections into the `LayoutResult` edge-sections record, retaining the supplied semantic key. The adapter's `layout(key, graph, sizes)` returns `fromElkLayout(key, await elk.layout(toElkGraph(graph, sizes)))`.
 
    ```ts
    import ELK from 'elkjs/lib/elk-api.js';
    import ElkWorker from 'elkjs/lib/elk-worker.min.js?worker';
-   import type { ElkNode } from 'elkjs/lib/elk-api.js';
+    import type { ElkNode } from 'elkjs/lib/elk-api.js';
+    import type { LayoutResult } from './layout';
    import type { VisibleSubgraph } from './model';
 
    export const layoutOptions = { version: 'dependency-graph-v1', 'elk.algorithm': 'layered', 'elk.direction': 'RIGHT',
      'elk.edgeRouting': 'ORTHOGONAL', 'elk.spacing.nodeNode': '40', 'elk.layered.spacing.nodeNodeBetweenLayers': '80',
      'elk.layered.cycleBreaking.strategy': 'GREEDY' } as const;
 
-   export function toElkGraph(graph: VisibleSubgraph, sizes: Readonly<Record<string, { width: number; height: number }>>): ElkNode {
-     return { id: 'root', layoutOptions, children: graph.items.map((item) => ({ id: item.id, width: sizes[item.id]!.width, height: sizes[item.id]!.height })),
-      edges: graph.relationships.map((edge) => ({ id: edge.id, sources: [edge.childItemId], targets: [edge.parentItemId] })) };
-   }
-   export function createElkLayoutAdapter() {
-     const elk = new ELK({ workerFactory: () => new ElkWorker() });
-     return { layout: async (graph: VisibleSubgraph, sizes: Readonly<Record<string, { width: number; height: number }>>) => elk.layout(toElkGraph(graph, sizes)),
-       dispose: () => elk.terminateWorker() };
-   }
+    export function toElkGraph(graph: VisibleSubgraph, sizes: Readonly<Record<string, { width: number; height: number }>>): ElkNode {
+      return { id: 'root', layoutOptions, children: graph.items.map((item) => ({ id: item.id, width: sizes[item.id]!.width, height: sizes[item.id]!.height })),
+       edges: graph.relationships.map((edge) => ({ id: edge.id, sources: [edge.childItemId], targets: [edge.parentItemId] })) };
+    }
+    export function fromElkLayout(key: string, result: ElkNode): LayoutResult { /* map ELK child coordinates and edge sections into the layout contract */ }
+    export function createElkLayoutAdapter() {
+      const elk = new ELK({ workerFactory: () => new ElkWorker() });
+      return { layout: async (key: string, graph: VisibleSubgraph, sizes: Readonly<Record<string, { width: number; height: number }>>) => fromElkLayout(key, await elk.layout(toElkGraph(graph, sizes))),
+        dispose: () => elk.terminateWorker() };
+    }
    ```
 
    Do not import `elkjs/lib/elk.bundled.js`, create a hand-rolled layout worker, build a filesystem path from `import.meta.url`, or move ELK work into a React render. `elk-api.js` is ELK’s worker-oriented entry and Vite’s `?worker` import turns `elk-worker.min.js` into a real browser Worker factory. Retain ELK’s default node placement strategy; no incremental layout is introduced. The screen requests full layout only on a semantic key cache miss caused by topology revision, visible membership, measured dimensions, options version, or an explicit Relayout command.
@@ -262,18 +265,20 @@ An edge is always `child -> parent`: `orders.customer_id -> customers.id` displa
 
 **Files:**
 - Create: `web/src/graph/DependencyGraphScreen.tsx`, `web/src/graph/DependencyGraphScreen.test.tsx`, `web/playwright.config.ts`, `web/e2e/dependency-graph-worker.spec.ts`
-- Modify: none
+- Modify: `web/src/app/App.tsx`, `web/src/app/App.test.tsx`
 - Test: `web/src/graph/DependencyGraphScreen.test.tsx`, `web/e2e/dependency-graph-worker.spec.ts`
 
 1. - [ ] **Write the failing composition test.** Create `DependencyGraphScreen.test.tsx` with a QueryClient wrapper, injected `RequestFunction`, development authentication adapter, immediate layout scheduler, in-memory `createLayoutResultCache`, and mocked ELK adapter. Assert a valid topology appears as the default orders/customers graph; assert an equivalent refetch hits the same semantic cache key; change each permitted trigger (revision, expanded membership, measured size, options version, explicit relayout) one at a time and assert one new layout; then invoke every prohibited trigger and assert no new layout. Assert missing plan context renders an accessible `Choose a transfer plan to view its dependencies.` empty state without making a request.
 
 2. - [ ] **Run the composition test and confirm its intended red failure.** Run `npm --prefix web test -- --run src/graph/DependencyGraphScreen.test.tsx`; expect non-zero exit and `Failed to resolve import "./DependencyGraphScreen"`.
 
-3. - [ ] **Implement the thin composition screen and browser smoke.** `DependencyGraphScreen` accepts `planId: string | null`, injected request/authentication, injected layout adapter/cache/scheduler, and no server payload prop. For a plan ID it uses `useQuery(planDependencyGraphQueryOptions(...))`, passes the validated result into `deriveVisibleSubgraph`, obtains measured node sizes through the React Flow measurement adapter, calculates the semantic key, and asks the coordinator exactly once per key miss. It uses graph-view named primitive selectors/actions for focus, selection, collapse, expansion, viewport, and pins. It clears the disposable layout cache when `planId` changes or unmounts, and disposes the ELK adapter on unmount. It does not persist or mutate Query topology.
+3. - [ ] **Implement the thin composition screen, application host route, and browser smoke.** `DependencyGraphScreen` accepts `planId: string | null`, injected request/authentication, injected layout adapter/cache/scheduler, and no server payload prop. For a plan ID it uses `useQuery(planDependencyGraphQueryOptions(...))`, passes the validated result into `deriveVisibleSubgraph`, obtains measured node sizes through the React Flow measurement adapter, calculates the semantic key, and asks the coordinator exactly once per key miss. It uses graph-view named primitive selectors/actions for focus, selection, collapse, expansion, viewport, and pins. It clears the disposable layout cache when `planId` changes or unmounts, and disposes the ELK adapter on unmount. It does not persist or mutate Query topology. `App` hosts a graph route and navigation; no-plan routing renders the accessible empty state, and the route’s optional plan ID supplies the only active-plan context. It does not hardcode a plan or invent plan content.
 
    Add a Playwright config that starts `npm --prefix web run build && npm --prefix web exec vite preview -- --host 127.0.0.1 --port 4173`. The smoke spec intercepts the generated graph endpoint with the same minimal valid topology, opens the graph host route supplied by application composition, waits for the `orders depends on customers` edge label, and asserts that the worker-backed layout gives two distinct node positions. It must not use `import.meta.url` to construct filesystem paths; read the Vite manifest only through the test runner’s configured project path if an asset assertion is necessary. This is the required production-build integration check for ELK’s browserified worker, not a substitute for the mocked unit adapter tests.
 
 4. - [ ] **Run all frontend checks and the production smoke.** Run `scripts/test-frontend.sh && npm --prefix web run build && npm --prefix web exec playwright test e2e/dependency-graph-worker.spec.ts`; expect exit 0, four 100% Vitest totals for handwritten `src` modules, and a browser assertion that the minified ELK worker laid out the intercepted topology.
+
+   **External blocker (2026-09-02):** Chromium is not installed in this environment, so the Playwright smoke cannot run here. Provisioning Chromium for Playwright 1.62.1 will unblock it. Vitest collects only `src/**/*.test.{ts,tsx}` and explicitly excludes `e2e/**`, so this browser-only spec cannot enter the unit coverage gate.
 
 5. - [ ] **Commit the composed screen and smoke test.** Run `git add web/src/graph/DependencyGraphScreen.tsx web/src/graph/DependencyGraphScreen.test.tsx web/playwright.config.ts web/e2e/dependency-graph-worker.spec.ts && git commit -m "feat: compose dependency graph screen"`.
 
@@ -284,4 +289,4 @@ An edge is always `child -> parent`: `orders.customer_id -> customers.id` displa
 - [ ] Confirm the visible default is selected plan tables plus transitive outgoing parents, explicit neighbour expansion is required for all other nodes, schema/SCC collapse works, the 200-node cap is enforced, and culling is documented as off-screen-only. Confirm no default full schema or full-schema fit-view exists and the 400–500 number is stated only as a soft degradation ceiling.
 - [ ] Confirm every edge is child-to-parent in generated contract, pure derivation, ELK sources/targets, arrow marker, legend, keyboard movement, details text, and tests. Confirm all eight node states use text, icon, badge, and border rather than colour alone; controls and details are reachable by role/name and keyboard.
 - [ ] Confirm ELK imports `elkjs/lib/elk-api.js` and `elkjs/lib/elk-worker.min.js?worker`, never `elk.bundled.js`; options specify layered/right/orthogonal/greedy cycle breaking; and the coordinator’s only relayout triggers are topology revision, visible membership, measured size profile, options version, explicit relayout, or cache miss caused by one of them. Confirm the production worker smoke remains required.
-- [ ] Confirm Selection Workbench, plan review, transfer monitor, relationship editing, incremental layout, unrestricted full-schema rendering, and API endpoint implementation/navigation composition beyond the defined contract are deferred. Re-read all TypeScript and TSX fragments for strict-mode coherence and symbol-name consistency: generated names are `getPlanSchemaDependencyGraphUrl` and `PlanSchemaDependencyGraphResponse`; later tasks use only types and functions defined in an earlier task or their own task.
+- [ ] Confirm Selection Workbench, plan review, transfer monitor, relationship editing, incremental layout, unrestricted full-schema rendering, and API endpoint implementation beyond the defined contract are deferred. Re-read all TypeScript and TSX fragments for strict-mode coherence and symbol-name consistency: generated names are `getPlanSchemaDependencyGraphUrl` and `PlanSchemaDependencyGraphResponse`; later tasks use only types and functions defined in an earlier task or their own task.
