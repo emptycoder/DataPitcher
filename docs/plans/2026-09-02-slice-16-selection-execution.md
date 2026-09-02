@@ -193,8 +193,8 @@ Selection execution does not reuse closure staging tables: closure staging needs
       private static readonly HashSet<string> Forbidden = new(StringComparer.OrdinalIgnoreCase) { "ALTER", "ANALYZE", "CALL", "COMMIT", "COPY", "CREATE", "DECLARE", "DELETE", "DO", "DROP", "EXEC", "EXECUTE", "GRANT", "INSERT", "LOCK", "MERGE", "REVOKE", "ROLLBACK", "SET", "TRUNCATE", "UPDATE", "USE", "VACUUM" };
       public static void Validate(RawSqlDialect dialect, string sql)
       {
-          if (dialect == RawSqlDialect.SqlServer && sql.Split('\n').Any(IsGoLine)) throw new RawSqlValidationException("SQL Server batch separators are not allowed.");
-          var tokens = Tokens(sql); if (tokens.Count == 0 || (!EqualsToken(tokens[0], "SELECT") && !EqualsToken(tokens[0], "WITH"))) throw new RawSqlValidationException("Raw SQL must start with SELECT or WITH.");
+          var tokens = Tokens(sql); if (dialect == RawSqlDialect.SqlServer && tokens.Any(token => EqualsToken(token, "GO"))) throw new RawSqlValidationException("SQL Server batch separators are not allowed.");
+          if (tokens.Count == 0 || (!EqualsToken(tokens[0], "SELECT") && !EqualsToken(tokens[0], "WITH"))) throw new RawSqlValidationException("Raw SQL must start with SELECT or WITH.");
           var separators = tokens.Select((token, index) => (token, index)).Where(pair => pair.token == ";").ToArray(); if (separators.Length > 1 || separators.Length == 1 && separators[0].index != tokens.Count - 1) throw new RawSqlValidationException("Raw SQL may contain only one statement.");
           foreach (var token in tokens.Where(token => token != ";")) { if (Forbidden.Contains(token)) throw new RawSqlValidationException("Raw SQL contains a data-modifying token: " + token.ToUpperInvariant() + "."); if (EqualsToken(token, "INTO")) throw new RawSqlValidationException("Raw SQL contains a data-modifying token: INTO."); }
       }
