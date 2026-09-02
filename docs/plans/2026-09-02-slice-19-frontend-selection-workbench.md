@@ -52,14 +52,16 @@ Preview and count are different actions. Preview shows bounded server-returned r
    it('edits a typed nested AST without SQL text', () => {
      const nested = { kind: 'not' as const, term: { kind: 'or' as const, terms: [
        { kind: 'between' as const, column: { alias: 'o', name: 'created', valueKind: 'date' as const }, lower: { kind: 'date' as const, value: '2026-09-01' }, upper: { kind: 'date' as const, value: '2026-09-02' } },
-       { kind: 'exists' as const, tableId: 'sales.lines', alias: 'l', correlations: [{ outer: { alias: 'o', name: 'id', valueKind: 'int' as const }, innerColumn: 'order_id' }], predicate: { kind: 'text' as const, match: 'contains', column: { alias: 'l', name: 'sku', valueKind: 'string' as const }, value: { kind: 'string' as const, value: 'A' } }, negated: false },
+       { kind: 'exists' as const, tableId: 'sales.lines', alias: 'l', correlations: [{ outer: { alias: 'o', name: 'id', valueKind: 'int' as const }, innerColumn: 'order_id' }], predicate: { kind: 'text' as const, match: 'contains' as const, column: { alias: 'l', name: 'sku', valueKind: 'string' as const }, value: { kind: 'string' as const, value: 'A' } }, negated: false },
      ] } };
      expect(replacePredicate(selection, nested).predicate).toEqual(nested);
      expect(addJoin(selection, { kind: 'foreignKey', fromAlias: 'o', alias: 'c', foreignKeyId: 'fk_orders_customer', direction: 'forward' }).joins).toHaveLength(1);
      expect(operatorsFor('string')).toEqual(['equal', 'notEqual', 'in', 'isNull', 'isNotNull', 'contains', 'startsWith', 'endsWith']);
      expect(operatorsFor('date')).toEqual(['equal', 'notEqual', 'between', 'isNull', 'isNotNull', 'dateRange']);
    });
-   ```
+    ```
+
+   Keep each constrained operator literal narrow in the fixture (for example, `match: 'contains' as const`), rather than widening the AST union. This preserves the union that prevents invalid operators from reaching server SQL generation.
 
 2. - [ ] **Run the focused test and confirm the intended red failure.** Run `npm --prefix web test -- --run src/features/selections/selectionAst.test.ts`; expect non-zero exit and `Failed to resolve import "./selectionAst"`.
 
