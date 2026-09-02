@@ -189,7 +189,7 @@ An edge is always `child -> parent`: `orders.customer_id -> customers.id` displa
 
 2. - [ ] **Run both tests and confirm their intended red failures.** Run `npm --prefix web test -- --run src/graph/layout.test.ts src/stores/graphViewStore.test.tsx`; expect non-zero exit and `Failed to resolve import "./layout"` plus `Failed to resolve import "./graphViewStore"`.
 
-3. - [ ] **Implement the disposable cache and private graph interaction store.** `layout.ts` exports `semanticLayoutKey({ revision, visibleItemIds, measuredSizes, optionsVersion })`, sorting every identifier and serializing only those four semantic inputs. It exports `createLayoutResultCache()` around a private `Map<string, LayoutResult>` with `get`, `set`, and `clear`, plus `createLayoutCoordinator(engine, cache, scheduler)`. The coordinator calls the injected scheduler only after a cache miss; it does not observe React render, object identity, viewport, hover, focus, highlight, theme, progress, or pinned positions. No clock or timer is needed; if a future debounce/expiry is added, inject its clock and scheduler rather than calling ambient browser timing APIs.
+3. - [ ] **Define the layout contracts, then implement the disposable cache and private graph interaction store.** `layout.ts` first exports `LayoutPosition` (`x`, `y`), `LayoutEdgeSection` (start point, bend points, end point), and `LayoutResult` (`key`, positions keyed by visible-item identity, and edge sections keyed by relationship identity). It also exports `LayoutEngine` with `layout(key, graph, sizes): Promise<LayoutResult>`, the generic injected `LayoutScheduler` function type, and `LayoutCoordinator` with `request(key, graph, sizes): Promise<LayoutResult>`, where `graph` is `VisibleSubgraph` and `sizes` is the measured item-size record. `semanticLayoutKey({ revision, visibleItemIds, measuredSizes, optionsVersion })` sorts every identifier and serializes only those four semantic inputs. `createLayoutResultCache()` owns a private `Map<string, LayoutResult>` with `get`, `set`, and `clear`; `createLayoutCoordinator(engine, cache, scheduler)` decides whether a request runs: it returns a cache hit without calling the scheduler or engine, schedules an engine call only on a miss, and rejects a result whose own key differs from the requested semantic key rather than rendering it as current. The scheduler controls when that approved work executes. The coordinator does not observe React render, object identity, viewport, hover, focus, highlight, theme, progress, or pinned positions. No clock or timer is needed; if a future debounce/expiry is added, inject its clock and scheduler rather than calling ambient browser timing APIs.
 
    `graphViewStore.ts` is a separate, non-persisted Zustand store. Store `viewport` as `{ x, y, zoom }`, one focused ID, selected-ID membership, expanded-table membership, collapsed-schema membership, collapsed-component membership, and pinned `{ x, y }` values. Export only named `graphViewActions` and selectors returning a primitive or an existing state value: `useGraphViewport`, `useGraphFocusedTableId`, `useIsGraphTableSelected`, `useIsGraphTableExpanded`, `useIsSchemaCollapsed`, `useIsComponentCollapsed`, and `usePinnedGraphPosition`. Do not export the underlying hook, a complete state object, a fresh array/object selector, a generic patch action, or persistence middleware. `setPinnedGraphPosition` changes coordinates for rendering but cannot change the layout key; `clearPinnedGraphPosition` restores ELK’s cached base position.
 
@@ -208,27 +208,29 @@ An edge is always `child -> parent`: `orders.customer_id -> customers.id` displa
 
 2. - [ ] **Run the adapter test and confirm its intended red failure.** Run `npm --prefix web test -- --run src/graph/elkLayout.test.ts`; expect non-zero exit and `Failed to resolve import "./elkLayout"`.
 
-3. - [ ] **Implement the pure conversion and thin worker adapter.** Use this complete core; `toElkGraph` and `fromElkLayout` are pure and own all conversion coverage, while the constructor is the only vendor shell.
+3. - [ ] **Implement the pure conversion and thin worker adapter.** Use this complete core; `toElkGraph` and `fromElkLayout` are pure and own all conversion coverage, while the constructor is the only vendor shell. `fromElkLayout(key, result)` converts returned ELK child `id`, `x`, and `y` values into the `LayoutResult` positions record and each returned edge's sections into the `LayoutResult` edge-sections record, retaining the supplied semantic key. The adapter's `layout(key, graph, sizes)` returns `fromElkLayout(key, await elk.layout(toElkGraph(graph, sizes)))`.
 
    ```ts
    import ELK from 'elkjs/lib/elk-api.js';
    import ElkWorker from 'elkjs/lib/elk-worker.min.js?worker';
-   import type { ElkNode } from 'elkjs/lib/elk-api.js';
+    import type { ElkNode } from 'elkjs/lib/elk-api.js';
+    import type { LayoutResult } from './layout';
    import type { VisibleSubgraph } from './model';
 
    export const layoutOptions = { version: 'dependency-graph-v1', 'elk.algorithm': 'layered', 'elk.direction': 'RIGHT',
      'elk.edgeRouting': 'ORTHOGONAL', 'elk.spacing.nodeNode': '40', 'elk.layered.spacing.nodeNodeBetweenLayers': '80',
      'elk.layered.cycleBreaking.strategy': 'GREEDY' } as const;
 
-   export function toElkGraph(graph: VisibleSubgraph, sizes: Readonly<Record<string, { width: number; height: number }>>): ElkNode {
-     return { id: 'root', layoutOptions, children: graph.items.map((item) => ({ id: item.id, width: sizes[item.id]!.width, height: sizes[item.id]!.height })),
-      edges: graph.relationships.map((edge) => ({ id: edge.id, sources: [edge.childItemId], targets: [edge.parentItemId] })) };
-   }
-   export function createElkLayoutAdapter() {
-     const elk = new ELK({ workerFactory: () => new ElkWorker() });
-     return { layout: async (graph: VisibleSubgraph, sizes: Readonly<Record<string, { width: number; height: number }>>) => elk.layout(toElkGraph(graph, sizes)),
-       dispose: () => elk.terminateWorker() };
-   }
+    export function toElkGraph(graph: VisibleSubgraph, sizes: Readonly<Record<string, { width: number; height: number }>>): ElkNode {
+      return { id: 'root', layoutOptions, children: graph.items.map((item) => ({ id: item.id, width: sizes[item.id]!.width, height: sizes[item.id]!.height })),
+       edges: graph.relationships.map((edge) => ({ id: edge.id, sources: [edge.childItemId], targets: [edge.parentItemId] })) };
+    }
+    export function fromElkLayout(key: string, result: ElkNode): LayoutResult { /* map ELK child coordinates and edge sections into the layout contract */ }
+    export function createElkLayoutAdapter() {
+      const elk = new ELK({ workerFactory: () => new ElkWorker() });
+      return { layout: async (key: string, graph: VisibleSubgraph, sizes: Readonly<Record<string, { width: number; height: number }>>) => fromElkLayout(key, await elk.layout(toElkGraph(graph, sizes))),
+        dispose: () => elk.terminateWorker() };
+    }
    ```
 
    Do not import `elkjs/lib/elk.bundled.js`, create a hand-rolled layout worker, build a filesystem path from `import.meta.url`, or move ELK work into a React render. `elk-api.js` is ELK’s worker-oriented entry and Vite’s `?worker` import turns `elk-worker.min.js` into a real browser Worker factory. Retain ELK’s default node placement strategy; no incremental layout is introduced. The screen requests full layout only on a semantic key cache miss caused by topology revision, visible membership, measured dimensions, options version, or an explicit Relayout command.
