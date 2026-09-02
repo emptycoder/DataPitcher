@@ -33,4 +33,29 @@ public sealed class ForeignKeyDefinition
     public IReadOnlyList<string> ParentColumns { get; }
     public bool IsEnforced { get; }
     public bool IsTrusted { get; }
+
+    public override bool Equals(object? obj) =>
+        obj is ForeignKeyDefinition other &&
+        Name == other.Name &&
+        ChildTable.Equals(other.ChildTable) &&
+        ParentTable.Equals(other.ParentTable) &&
+        ChildColumns.SequenceEqual(other.ChildColumns) &&
+        ParentColumns.SequenceEqual(other.ParentColumns) &&
+        IsEnforced == other.IsEnforced &&
+        IsTrusted == other.IsTrusted;
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Name);
+        hash.Add(ChildTable);
+        hash.Add(ParentTable);
+        foreach (var column in ChildColumns)
+            hash.Add(column);
+        foreach (var column in ParentColumns)
+            hash.Add(column);
+        hash.Add(IsEnforced);
+        hash.Add(IsTrusted);
+        return hash.ToHashCode();
+    }
 }

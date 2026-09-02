@@ -9,14 +9,25 @@ public sealed class DependencyGraph
 
     public DependencyGraph(IEnumerable<TableDefinition> tables, IEnumerable<ForeignKeyDefinition> foreignKeys)
     {
-        var tableList = tables.Distinct().ToArray();
+        var tableList = tables.ToArray();
+        var canonicalTables = tableList.ToDictionary(x => x);
         var dependencies = tableList.ToDictionary(x => x, _ => new List<ForeignKeyDefinition>());
         var dependents = tableList.ToDictionary(x => x, _ => new List<ForeignKeyDefinition>());
 
-        foreach (var foreignKey in foreignKeys.ToArray())
+        foreach (var foreignKey in foreignKeys)
         {
-            dependencies[foreignKey.ChildTable].Add(foreignKey);
-            dependents[foreignKey.ParentTable].Add(foreignKey);
+            var childTable = canonicalTables[foreignKey.ChildTable];
+            var parentTable = canonicalTables[foreignKey.ParentTable];
+            var canonicalForeignKey = new ForeignKeyDefinition(
+                foreignKey.Name,
+                childTable,
+                parentTable,
+                foreignKey.ChildColumns,
+                foreignKey.ParentColumns,
+                foreignKey.IsEnforced,
+                foreignKey.IsTrusted);
+            dependencies[childTable].Add(canonicalForeignKey);
+            dependents[parentTable].Add(canonicalForeignKey);
         }
 
         Tables = Array.AsReadOnly(tableList);
