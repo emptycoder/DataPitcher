@@ -58,13 +58,18 @@ public static class TarjanScc
             }
             while (!ReferenceEquals(member, table));
 
-            result.Add(new Scc(result.Count, members));
+            result.Add(new Scc(result.Count, members.OrderBy(QualifiedName, StringComparer.Ordinal)));
         }
 
         foreach (var table in graph.Tables)
             if (!indices.ContainsKey(table))
                 Visit(table);
 
-        return Array.AsReadOnly(result.ToArray());
+        return Array.AsReadOnly(result
+            .OrderBy(component => QualifiedName(component.Tables[0]), StringComparer.Ordinal)
+            .Select((component, id) => new Scc(id, component.Tables))
+            .ToArray());
     }
+
+    private static string QualifiedName(TableDefinition table) => $"{table.Schema}.{table.Name}";
 }

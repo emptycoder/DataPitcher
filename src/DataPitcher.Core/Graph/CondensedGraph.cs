@@ -12,9 +12,11 @@ public sealed class CondensedGraph
             .ToDictionary(x => x.table, x => x.Id);
         Edges = Array.AsReadOnly(graph.Tables
             .SelectMany(graph.DependenciesOf)
-            .Select(foreignKey => new CondensedEdge(owner[foreignKey.ChildTable], owner[foreignKey.ParentTable]))
+            .Select(foreignKey => new CondensedEdge(owner[foreignKey.ParentTable], owner[foreignKey.ChildTable]))
             .Where(edge => edge.From != edge.To)
             .Distinct()
+            .OrderBy(edge => edge.From)
+            .ThenBy(edge => edge.To)
             .ToArray());
     }
 
@@ -25,16 +27,18 @@ public sealed class CondensedGraph
     {
         var seen = 0;
         var pending = Components.ToDictionary(component => component.Id, _ => 0);
+        var outgoing = Edges.GroupBy(edge => edge.From).ToDictionary(group => group.Key, group => group.ToArray());
         foreach (var edge in Edges)
             pending[edge.To]++;
 
-        var queue = new Queue<int>(pending.Where(x => x.Value == 0).Select(x => x.Key));
+        var queue = new Queue<int>(pending.Where(x => x.Value == 0).Select(x => x.Key).OrderBy(id => id));
         while (queue.TryDequeue(out var id))
         {
             seen++;
-            foreach (var edge in Edges.Where(x => x.From == id))
-                if (--pending[edge.To] == 0)
-                    queue.Enqueue(edge.To);
+            if (outgoing.TryGetValue(id, out var edges))
+                foreach (var edge in edges)
+                    if (--pending[edge.To] == 0)
+                        queue.Enqueue(edge.To);
         }
 
         return seen == Components.Count;
@@ -43,18 +47,20 @@ public sealed class CondensedGraph
     public IReadOnlyList<IReadOnlyList<int>> TopologicalLayers()
     {
         var pending = Components.ToDictionary(component => component.Id, _ => 0);
+        var outgoing = Edges.GroupBy(edge => edge.From).ToDictionary(group => group.Key, group => group.ToArray());
         foreach (var edge in Edges)
             pending[edge.To]++;
 
         var layers = new List<IReadOnlyList<int>>();
-        var next = pending.Where(x => x.Value == 0).Select(x => x.Key).ToArray();
+        var next = pending.Where(x => x.Value == 0).Select(x => x.Key).OrderBy(id => id).ToArray();
         while (next.Length > 0)
         {
             layers.Add(Array.AsReadOnly(next));
             next = next
-                .SelectMany(id => Edges.Where(edge => edge.From == id))
+                .SelectMany(id => outgoing.TryGetValue(id, out var edges) ? edges : Array.Empty<CondensedEdge>())
                 .Where(edge => --pending[edge.To] == 0)
                 .Select(edge => edge.To)
+                .OrderBy(id => id)
                 .ToArray();
         }
 
