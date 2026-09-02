@@ -290,7 +290,7 @@ public sealed class PermissionAndRoleBundleTests
 
 - [ ] **Step 2: Run the Core tests and confirm they fail for the missing authorization namespace.** Run: `dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --filter "FullyQualifiedName~PermissionAndRoleBundleTests"`. Expected: compilation fails with CS0234, `The type or namespace name 'Authorization' does not exist in the namespace 'DataPitcher.Core'`.
 
-- [ ] **Step 3: Implement the closed vocabulary, immutable set, and exact bundles in Core.** Write the following complete production code:
+- [ ] **Step 3: Implement the closed vocabulary, immutable set, and exact bundles in Core.** `Permission` has an `internal` constructor: arbitrary strings cannot become permissions outside the assembly, while the vocabulary class in the same assembly can construct the canonical set. `public` would not express that boundary. Write the following complete production code:
 
 ```csharp
 // src/DataPitcher.Core/Authorization/Permission.cs
@@ -298,8 +298,12 @@ namespace DataPitcher.Core.Authorization;
 
 public sealed record Permission
 {
-    private Permission(string value) => Value = value;
+    internal Permission(string value) => Value = value;
     public string Value { get; }
+}
+
+public static class Permissions
+{
     public static Permission ConnectionsRead { get; } = new("Connections.Read"); public static Permission ConnectionsWrite { get; } = new("Connections.Write");
     public static Permission SchemaRead { get; } = new("Schema.Read"); public static Permission SchemaWrite { get; } = new("Schema.Write");
     public static Permission SelectionsRead { get; } = new("Selections.Read"); public static Permission SelectionsWrite { get; } = new("Selections.Write"); public static Permission SelectionsRawSql { get; } = new("Selections.RawSql");
