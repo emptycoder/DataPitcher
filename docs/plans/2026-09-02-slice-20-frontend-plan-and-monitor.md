@@ -37,6 +37,12 @@ SSE is a separate wire format: its payload property names are `State`, `RowsTran
 
 This correction supersedes stale fragments below: `JobEventPayload` requires the three PascalCase properties and its enum contains lowercase state values; the `Job` schema permits both its existing PascalCase REST states and lowercase event-applied states. The reducer reads `event.payload.State`, `event.payload.RowsTransferred`, and `event.payload.BytesTransferred`. The coverage command for this endpoint task is `dotnet test tests/DataPitcher.Api.IntegrationTests/DataPitcher.Api.IntegrationTests.csproj --collect:"XPlat Code Coverage" --results-directory artifacts/slice-20-api-coverage -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover`.
 
+### Generator symbol-name rule
+
+Use the names emitted by `npm --prefix web run generate:api`, not names inferred from component schemas or operation descriptions. In the current generated output they are `PlanReviewResponse`, `PlanInclusionPathResponse`, `StartPlanJobResponse`, `JobResponse`, and `JobEventsResponse`. `InclusionPathResponse`, `OperationReceiptResponse`, and `JobEventPayloadResponse` are not generated symbols and must not be imported, recreated in generated output, or induced by generator configuration changes.
+
+`JobEventsResponse` is `zod.unknown()` because the route returns `text/event-stream`; it is not a validator for individual `data:` frames. The current generator does not emit a runtime schema for the unreferenced `JobEventPayload` component. Do not hand-edit the generated files. This blocks Task 5's generated-payload-validation requirement until a separately approved source-contract or generator-supported solution is specified.
+
 ## Tasks
 
 ### Task 1: Generate validated review and monitoring transport contracts
@@ -118,7 +124,7 @@ This correction supersedes stale fragments below: `JobEventPayload` requires the
    ```ts
    import type { AuthenticationAdapter } from '../../auth/authAdapter';
    import { getPlanInclusionPathUrl, getPlanReviewUrl, getStartPlanJobUrl } from '../../api/generated/client';
-   import { InclusionPathResponse, OperationReceiptResponse, PlanReviewResponse } from '../../api/generated/permissions.zod';
+    import { PlanInclusionPathResponse, PlanReviewResponse, StartPlanJobResponse } from '../../api/generated/permissions.zod';
    import { parseJson } from '../../api/parseJson';
 
    export type RequestFunction = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -132,14 +138,14 @@ This correction supersedes stale fragments below: `JobEventPayload` requires the
      return parseJson(await request(getPlanReviewUrl(planId), { headers: await authorization(authentication), signal }), PlanReviewResponse);
    }
    export async function fetchInclusionPath(planId: string, body: InclusionRequest, request: RequestFunction, authentication: AuthenticationAdapter, signal: AbortSignal) {
-     return parseJson(await request(getPlanInclusionPathUrl(planId), { method: 'POST', headers: { ...await authorization(authentication), 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal }), InclusionPathResponse);
+      return parseJson(await request(getPlanInclusionPathUrl(planId), { method: 'POST', headers: { ...await authorization(authentication), 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal }), PlanInclusionPathResponse);
    }
    export async function startPlanJob(planId: string, idempotencyKey: string, request: RequestFunction, authentication: AuthenticationAdapter, signal: AbortSignal) {
-     return parseJson(await request(getStartPlanJobUrl(planId), { method: 'POST', headers: { ...await authorization(authentication), 'Idempotency-Key': idempotencyKey }, signal }), OperationReceiptResponse);
+      return parseJson(await request(getStartPlanJobUrl(planId), { method: 'POST', headers: { ...await authorization(authentication), 'Idempotency-Key': idempotencyKey }, signal }), StartPlanJobResponse);
    }
    ```
 
-   Run `npm --prefix web run generate:api` so Orval writes both generated artifacts. Keep existing pins. The emitted Zod values are `PlanReviewResponse`, `InclusionPathResponse`, `OperationReceiptResponse`, `JobResponse`, and `JobEventPayloadResponse`.
+    Run `npm --prefix web run generate:api` so Orval writes both generated artifacts. Keep existing pins. The emitted Zod values are `PlanReviewResponse`, `PlanInclusionPathResponse`, `StartPlanJobResponse`, `JobResponse`, and `JobEventsResponse`; the last is `zod.unknown()` for the raw stream response, not a payload validator.
 
 4. - [ ] **Run the transport test and typecheck.** Run `npm --prefix web run typecheck && npm --prefix web test -- --run src/features/plans/planReviewApi.test.ts`; expect exit 0 with three passing tests.
 
@@ -255,9 +261,9 @@ This correction supersedes stale fragments below: `JobEventPayload` requires the
    import type { InclusionRequest } from './planReviewApi';
    import { createSanitizedPlanExport, planTableStateLabel, startAvailability, type PlanReview } from './planReviewModel';
    import type { z } from 'zod';
-   import { InclusionPathResponse } from '../../api/generated/permissions.zod';
+    import { PlanInclusionPathResponse } from '../../api/generated/permissions.zod';
 
-   type InclusionPath = z.infer<typeof InclusionPathResponse>;
+    type InclusionPath = z.infer<typeof PlanInclusionPathResponse>;
    type Props = { review: PlanReview; path: InclusionPath | null; pathLoading: boolean; onInspect: (request: InclusionRequest) => void; onExport: (value: string) => void; onStart: () => void };
    export function PlanReviewView({ review, path, pathLoading, onInspect, onExport, onStart }: Props) {
      const [stableKey, setStableKey] = useState('');
@@ -357,80 +363,9 @@ This correction supersedes stale fragments below: `JobEventPayload` requires the
 
 5. - [ ] **Commit Query-owned plan review.** Run `git add web/src/features/plans/planReviewQuery.ts web/src/features/plans/PlanReviewScreen.tsx web/src/features/plans/PlanReviewScreen.test.tsx && git commit -m "feat: query plan review data"`.
 
-### Task 5: Parse stream frames and reduce verified job state purely
+### Task 5: Blocked — emit a runtime schema for SSE payloads
 
-**Files:**
-- Create: `web/src/features/jobs/eventStreamParser.ts`, `web/src/features/jobs/jobReducer.ts`, `web/src/features/jobs/eventStreamParser.test.ts`, `web/src/features/jobs/jobReducer.test.ts`
-- Modify: none
-- Test: `web/src/features/jobs/eventStreamParser.test.ts`, `web/src/features/jobs/jobReducer.test.ts`
-
-1. - [ ] **Write failing parser and reducer tests.** Create the two test files with this complete code.
-
-   ```ts
-   // web/src/features/jobs/eventStreamParser.test.ts
-   import { expect, it } from 'vitest';
-   import { EventStreamParser } from './eventStreamParser';
-   it('preserves chunk boundaries, ignores comments, joins data, dispatches blank lines, and reads retry', () => {
-     const parser = new EventStreamParser();
-      expect(parser.push(': ping\nid: 1\nevent: progress\ndata: {"State":"running",\n')).toEqual([]);
-      expect(parser.push('data: "RowsTransferred":4,"BytesTransferred":10}\nretry: 250\n\n')).toEqual([{ kind: 'retry', milliseconds: 250 }, { kind: 'event', id: '1', event: 'progress', data: '{"State":"running",\n"RowsTransferred":4,"BytesTransferred":10}' }]);
-     expect(parser.push('event\nretry: no\n\n')).toEqual([]);
-   });
-   ```
-
-   ```ts
-   // web/src/features/jobs/jobReducer.test.ts
-   import { expect, it } from 'vitest';
-   import { parseJobStreamEvent, reduceJobEvent, transferOutcome } from './jobReducer';
-   import { jobWire } from '../../test/planFixtures';
-   it('validates the stream payload before accepting an adjacent sequence', () => {
-      const event = parseJobStreamEvent({ kind: 'event', id: '1', event: 'state', data: '{"State":"verificationfailed","RowsTransferred":9,"BytesTransferred":40}' });
-      expect(reduceJobEvent(jobWire as never, 0, event)).toMatchObject({ kind: 'terminal', job: { state: 'verificationfailed' }, watermark: 1 });
-     expect(() => parseJobStreamEvent({ kind: 'event', id: 'x', event: 'state', data: '{}' })).toThrow('Invalid job event sequence.');
-   });
-   it('discards duplicates, refetches gaps, and never calls verification failure success', () => {
-      const event = parseJobStreamEvent({ kind: 'event', id: '3', event: 'state', data: '{"State":"succeeded","RowsTransferred":9,"BytesTransferred":40}' });
-     expect(reduceJobEvent(jobWire as never, 3, event).kind).toBe('duplicate');
-     expect(reduceJobEvent(jobWire as never, 1, event).kind).toBe('gap');
-     expect(() => parseJobStreamEvent({ kind: 'retry', milliseconds: 1 })).toThrow('Invalid job event sequence.');
-      expect(transferOutcome('verificationfailed')).toEqual({ tone: 'failure', text: 'Bulk copy completed, but verification failed. The transfer was not successful.' });
-      expect(transferOutcome('succeeded').tone).toBe('success');
-      expect(transferOutcome('queued').tone).toBe('progress');
-   });
-   ```
-
-2. - [ ] **Run the missing pure-module tests.** Run `npm --prefix web test -- --run src/features/jobs/eventStreamParser.test.ts src/features/jobs/jobReducer.test.ts`; expect non-zero exit and `Failed to resolve import "./eventStreamParser"`.
-
-3. - [ ] **Implement the incremental parser and reducer.** Create both modules. `TextDecoder` stays in the transport shell, leaving parser input deterministic.
-
-   ```ts
-   // web/src/features/jobs/eventStreamParser.ts
-   export type StreamRecord = Readonly<{ kind: 'event'; id: string; event: string; data: string }> | Readonly<{ kind: 'retry'; milliseconds: number }>;
-   export class EventStreamParser {
-     private buffer = ''; private id = ''; private event = 'message'; private data: string[] = [];
-     push(chunk: string) { const records: StreamRecord[] = []; this.buffer += chunk; let newline = this.buffer.indexOf('\n'); while (newline >= 0) { const line = this.buffer.slice(0, newline).replace(/\r$/, ''); this.buffer = this.buffer.slice(newline + 1); if (line === '') { if (this.data.length) records.push({ kind: 'event', id: this.id, event: this.event, data: this.data.join('\n') }); this.event = 'message'; this.data = []; } else if (!line.startsWith(':')) { const colon = line.indexOf(':'); const field = colon < 0 ? line : line.slice(0, colon); const value = (colon < 0 ? '' : line.slice(colon + 1)).replace(/^ /, ''); if (field === 'id') this.id = value; else if (field === 'event') this.event = value; else if (field === 'data') this.data.push(value); else if (field === 'retry' && /^\d+$/.test(value)) records.push({ kind: 'retry', milliseconds: Number(value) }); } newline = this.buffer.indexOf('\n'); } return records; }
-   }
-   ```
-
-   ```ts
-   // web/src/features/jobs/jobReducer.ts
-   import { z } from 'zod';
-   import { JobEventPayloadResponse, JobResponse } from '../../api/generated/permissions.zod';
-   import type { StreamRecord } from './eventStreamParser';
-   export type Job = z.infer<typeof JobResponse>; export type JobStreamEvent = Readonly<{ sequence: number; event: string; payload: z.infer<typeof JobEventPayloadResponse> }>;
-   export function parseJobStreamEvent(record: StreamRecord): JobStreamEvent { if (record.kind !== 'event' || !/^\d+$/.test(record.id)) throw new Error('Invalid job event sequence.'); return { sequence: Number(record.id), event: record.event, payload: JobEventPayloadResponse.parse(JSON.parse(record.data)) }; }
-   export function reduceJobEvent(job: Job, watermark: number, event: JobStreamEvent) {
-     if (event.sequence <= watermark) return { kind: 'duplicate' as const, job, watermark };
-     if (event.sequence !== watermark + 1) return { kind: 'gap' as const, job, watermark };
-     const next = { ...job, state: event.payload.state, rowsTransferred: event.payload.rowsTransferred, bytesTransferred: event.payload.bytesTransferred };
-      return { kind: ['succeeded', 'failed', 'verificationfailed', 'cancelled'].includes(next.state) ? 'terminal' as const : 'accepted' as const, job: next, watermark: event.sequence };
-   }
-    export function transferOutcome(state: Job['state']) { return state === 'succeeded' ? { tone: 'success' as const, text: 'Verification passed. Transfer succeeded.' } : state === 'verificationfailed' ? { tone: 'failure' as const, text: 'Bulk copy completed, but verification failed. The transfer was not successful.' } : { tone: 'progress' as const, text: state }; }
-   ```
-
-4. - [ ] **Run the pure tests and the coverage gate.** Run `npm --prefix web test -- --run src/features/jobs/eventStreamParser.test.ts src/features/jobs/jobReducer.test.ts && npm --prefix web run test:coverage`; expect exit 0 and all four coverage totals at 100%.
-
-5. - [ ] **Commit the SSE pure boundary.** Run `git add web/src/features/jobs/eventStreamParser.ts web/src/features/jobs/jobReducer.ts web/src/features/jobs/eventStreamParser.test.ts web/src/features/jobs/jobReducer.test.ts && git commit -m "feat: parse and reduce job events"`.
+Do not create the parser, reducer, or tests yet. The `JobEventPayload` component is not emitted as a Zod schema from the `text/event-stream` response, so this task cannot validate every `data:` payload at the trust boundary without violating the generated-schema rule. Do not handwrite a duplicate schema, edit generated output, or change generator configuration to manufacture a guessed name. Resume this task only with an approved source-contract or generator-supported payload-schema solution; retain the required lowercase state values and `VerificationFailed` failure outcome when it resumes.
 
 ### Task 6: Consume authenticated SSE with deterministic reconnect and cleanup
 
@@ -575,4 +510,4 @@ This correction supersedes stale fragments below: `JobEventPayload` requires the
 - [ ] Confirm happy-dom Vitest 4 `coverage.include` reports 100% all four ways in every same-task gate; no handwritten module is deferred.
 - [ ] Confirm review covers totals/bytes, mapping/grid/order, eight states, paths, risks, sealing/invalidation, export, and the `TargetSatisfied` non-refresh/upsert warning. Start is advisory; server rechecks it.
 - [ ] Confirm no token enters Zustand, storage, URL, key, export, or log; jobs stay in Query. Confirm validated SSE handles watermark/gap/401/403/terminal/cleanup, and `VerificationFailed` never displays success or exceeds ADR 0002.
-- [ ] Confirm `PlanReviewResponse`, `InclusionPathResponse`, `OperationReceiptResponse`, `JobResponse`, `JobEventPayloadResponse`, and all five URL helpers; defer graph, Selection Workbench, routing, and unrelated screens.
+- [ ] Confirm `PlanReviewResponse`, `PlanInclusionPathResponse`, `StartPlanJobResponse`, `JobResponse`, `JobEventsResponse`, and all five URL helpers; defer graph, Selection Workbench, routing, and unrelated screens. Do not mistake `JobEventsResponse` for a payload validator.
