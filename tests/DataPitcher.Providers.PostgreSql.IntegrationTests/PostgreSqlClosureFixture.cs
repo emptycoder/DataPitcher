@@ -21,10 +21,10 @@ public sealed class PostgreSqlClosureFixture : IAsyncLifetime
         await _target.DisposeAsync();
     }
 
-    public async Task<PostgreSqlClosureScope> CreateScopeAsync(PostgreSqlCommandRecorder? targetRecorder = null)
+    public async Task<PostgreSqlClosureScope> CreateScopeAsync(PostgreSqlCommandRecorder? targetRecorder = null, PostgreSqlCommandRecorder? sourceRecorder = null)
     {
         var schema = "dp_" + Guid.NewGuid().ToString("N");
-        var source = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(_source.GetConnectionString()) { SearchPath = schema }.ConnectionString);
+        var source = CreateSourceDataSource(schema, sourceRecorder);
         var target = CreateTargetDataSource(schema, targetRecorder);
         await PostgreSqlClosureScope.CreateAsync(source, schema, false);
         await PostgreSqlClosureScope.CreateAsync(target, schema, true);
@@ -34,6 +34,16 @@ public sealed class PostgreSqlClosureFixture : IAsyncLifetime
     private NpgsqlDataSource CreateTargetDataSource(string schema, PostgreSqlCommandRecorder? recorder)
     {
         var connectionString = new NpgsqlConnectionStringBuilder(_target.GetConnectionString()) { SearchPath = schema }.ConnectionString;
+        if (recorder is null)
+            return NpgsqlDataSource.Create(connectionString);
+        var builder = new NpgsqlDataSourceBuilder(connectionString);
+        builder.UseLoggerFactory(recorder);
+        return builder.Build();
+    }
+
+    private NpgsqlDataSource CreateSourceDataSource(string schema, PostgreSqlCommandRecorder? recorder)
+    {
+        var connectionString = new NpgsqlConnectionStringBuilder(_source.GetConnectionString()) { SearchPath = schema }.ConnectionString;
         if (recorder is null)
             return NpgsqlDataSource.Create(connectionString);
         var builder = new NpgsqlDataSourceBuilder(connectionString);
