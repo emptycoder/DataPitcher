@@ -1,6 +1,7 @@
 namespace DataPitcher.Core.Graph;
 
-public sealed record CondensedEdge(int From, int To);
+/// <summary>Edges run from parent to child in transfer order, deliberately the inverse of dependency graph child-to-parent edges.</summary>
+public sealed record CondensedEdge(int Parent, int Child);
 
 public sealed class CondensedGraph
 {
@@ -13,10 +14,10 @@ public sealed class CondensedGraph
         Edges = Array.AsReadOnly(graph.Tables
             .SelectMany(graph.DependenciesOf)
             .Select(foreignKey => new CondensedEdge(owner[foreignKey.ParentTable], owner[foreignKey.ChildTable]))
-            .Where(edge => edge.From != edge.To)
+            .Where(edge => edge.Parent != edge.Child)
             .Distinct()
-            .OrderBy(edge => edge.From)
-            .ThenBy(edge => edge.To)
+            .OrderBy(edge => edge.Parent)
+            .ThenBy(edge => edge.Child)
             .ToArray());
     }
 
@@ -27,9 +28,9 @@ public sealed class CondensedGraph
     {
         var seen = 0;
         var pending = Components.ToDictionary(component => component.Id, _ => 0);
-        var outgoing = Edges.GroupBy(edge => edge.From).ToDictionary(group => group.Key, group => group.ToArray());
+        var outgoing = Edges.GroupBy(edge => edge.Parent).ToDictionary(group => group.Key, group => group.ToArray());
         foreach (var edge in Edges)
-            pending[edge.To]++;
+            pending[edge.Child]++;
 
         var queue = new Queue<int>(pending.Where(x => x.Value == 0).Select(x => x.Key).OrderBy(id => id));
         while (queue.TryDequeue(out var id))
@@ -37,8 +38,8 @@ public sealed class CondensedGraph
             seen++;
             if (outgoing.TryGetValue(id, out var edges))
                 foreach (var edge in edges)
-                    if (--pending[edge.To] == 0)
-                        queue.Enqueue(edge.To);
+                    if (--pending[edge.Child] == 0)
+                        queue.Enqueue(edge.Child);
         }
 
         return seen == Components.Count;
@@ -47,9 +48,9 @@ public sealed class CondensedGraph
     public IReadOnlyList<IReadOnlyList<int>> TopologicalLayers()
     {
         var pending = Components.ToDictionary(component => component.Id, _ => 0);
-        var outgoing = Edges.GroupBy(edge => edge.From).ToDictionary(group => group.Key, group => group.ToArray());
+        var outgoing = Edges.GroupBy(edge => edge.Parent).ToDictionary(group => group.Key, group => group.ToArray());
         foreach (var edge in Edges)
-            pending[edge.To]++;
+            pending[edge.Child]++;
 
         var layers = new List<IReadOnlyList<int>>();
         var next = pending.Where(x => x.Value == 0).Select(x => x.Key).OrderBy(id => id).ToArray();
@@ -58,8 +59,8 @@ public sealed class CondensedGraph
             layers.Add(Array.AsReadOnly(next));
             next = next
                 .SelectMany(id => outgoing.TryGetValue(id, out var edges) ? edges : Array.Empty<CondensedEdge>())
-                .Where(edge => --pending[edge.To] == 0)
-                .Select(edge => edge.To)
+                .Where(edge => --pending[edge.Child] == 0)
+                .Select(edge => edge.Child)
                 .OrderBy(id => id)
                 .ToArray();
         }
