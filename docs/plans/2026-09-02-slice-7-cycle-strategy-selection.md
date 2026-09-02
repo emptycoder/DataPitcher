@@ -215,7 +215,7 @@ public sealed class CycleStrategySelectorTests
     {
         var employees = T("Employees"); var manager = F("FK_Manager", employees, employees); var a = R(employees, 1); var b = R(employees, 2);
         var analyzer = new ScriptedAnalyzer(("", Cyclic(a, b)), ("FK_Manager", Ordered(a, b)));
-        var result = await new CycleStrategySelector(analyzer).SelectAsync(Request([a, b], [new(a, manager, b, RowReferenceState.Planned), new(b, manager, a, RowReferenceState.Planned)]), Capabilities(true, new(manager, true, false, false)), CancellationToken.None);
+        var result = await new CycleStrategySelector(analyzer).SelectAsync(Request([a, b], [new(a, manager, b, RowReferenceState.Planned), new(b, manager, a, RowReferenceState.Planned)]), Capabilities(true, new CycleEdgeCapability(manager, true, false, false)), CancellationToken.None);
         Assert.Equal(CycleStrategy.Deferred, result.Strategy); Assert.Equal([manager], result.CycleBreakingEdges); Assert.Equal(["", "FK_Manager"], analyzer.Calls);
     }
 
@@ -224,7 +224,7 @@ public sealed class CycleStrategySelectorTests
     {
         var aTable = T("A"); var bTable = T("B"); var ab = F("FK_A_B", aTable, bTable); var ba = F("FK_B_A", bTable, aTable); var a = R(aTable, 1); var b = R(bTable, 1);
         var analyzer = new ScriptedAnalyzer(("", Cyclic(a, b)), ("FK_A_B", Ordered(b, a)));
-        var result = await new CycleStrategySelector(analyzer).SelectAsync(Request([a, b], [new(a, ab, b, RowReferenceState.Planned), new(b, ba, a, RowReferenceState.Planned)]), Capabilities(false, new(ab, true, false, true)), CancellationToken.None);
+        var result = await new CycleStrategySelector(analyzer).SelectAsync(Request([a, b], [new(a, ab, b, RowReferenceState.Planned), new(b, ba, a, RowReferenceState.Planned)]), Capabilities(false, new CycleEdgeCapability(ab, true, false, true)), CancellationToken.None);
         Assert.Equal(CycleStrategy.ConstraintSuspension, result.Strategy); Assert.Equal([ab], result.CycleBreakingEdges);
     }
 
@@ -233,7 +233,7 @@ public sealed class CycleStrategySelectorTests
     {
         var aTable = T("A"); var bTable = T("B"); var ab = F("FK_A_B", aTable, bTable); var ba = F("FK_B_A", bTable, aTable); var a = R(aTable, 1); var b = R(bTable, 1);
         var analyzer = new ScriptedAnalyzer(("", Cyclic(a, b)), ("FK_A_B", Ordered(b, a)));
-        var result = await new CycleStrategySelector(analyzer).SelectAsync(Request([a, b], [new(a, ab, b, RowReferenceState.Planned), new(b, ba, a, RowReferenceState.Planned)]), Capabilities(false, new(ab, false, true, false)), CancellationToken.None);
+        var result = await new CycleStrategySelector(analyzer).SelectAsync(Request([a, b], [new(a, ab, b, RowReferenceState.Planned), new(b, ba, a, RowReferenceState.Planned)]), Capabilities(false, new CycleEdgeCapability(ab, false, true, false)), CancellationToken.None);
         Assert.Equal(CycleStrategy.NullableTwoPhase, result.Strategy); Assert.Equal([ab], result.CycleBreakingEdges);
     }
 
@@ -242,7 +242,7 @@ public sealed class CycleStrategySelectorTests
     {
         var aTable = T("A"); var bTable = T("B"); var ab = F("FK_A_B", aTable, bTable); var ba = F("FK_B_A", bTable, aTable); var bb = F("FK_B_B", bTable, bTable); var a = R(aTable, 1); var b = R(bTable, 1);
         var analyzer = new ScriptedAnalyzer(("", Cyclic(a, b)), ("FK_A_B", Cyclic(a, b)), ("FK_B_B", Cyclic(a, b)));
-        var result = await new CycleStrategySelector(analyzer).SelectAsync(Request([a, b], [new(a, ab, b, RowReferenceState.Planned), new(b, ba, a, RowReferenceState.Planned), new(b, bb, b, RowReferenceState.Planned)]), Capabilities(false, new(ab, false, true, false), new(bb, false, false, true)), CancellationToken.None);
+        var result = await new CycleStrategySelector(analyzer).SelectAsync(Request([a, b], [new(a, ab, b, RowReferenceState.Planned), new(b, ba, a, RowReferenceState.Planned), new(b, bb, b, RowReferenceState.Planned)]), Capabilities(false, new CycleEdgeCapability(ab, false, true, false), new CycleEdgeCapability(bb, false, false, true)), CancellationToken.None);
         Assert.Equal(CycleStrategy.Blocked, result.Strategy); Assert.True(result.MustBlockScc); Assert.Equal(["", "FK_A_B", "FK_B_B"], analyzer.Calls);
     }
 
