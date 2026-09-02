@@ -125,6 +125,18 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
         Assert.Equal(HttpStatusCode.Accepted, grantedResponse.StatusCode);
     }
 
+    [Fact]
+    public async Task ResourceAuthorization_WhenPermissionIsMissing_DoesNotReadResourceGrant()
+    {
+        var calls = _factory.Grants.JobAuthorizationCalls;
+        var context = new AuthorizationHandlerContext([new ResourcePermissionRequirement(Permissions.TransfersRead)], new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity()), new JobResource(Guid.NewGuid()));
+
+        await new ResourceAuthorizationHandler(_factory.Grants).HandleAsync(context);
+
+        Assert.False(context.HasSucceeded);
+        Assert.Equal(calls, _factory.Grants.JobAuthorizationCalls);
+    }
+
     [Theory]
     [InlineData("snapshot")]
     [InlineData("schema-scan")]

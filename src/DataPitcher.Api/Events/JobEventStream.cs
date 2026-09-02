@@ -6,6 +6,7 @@ using DataPitcher.Core.Authorization;
 using DataPitcher.Infrastructure.Events;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Mvc;
 
 namespace DataPitcher.Api.Events;
 
@@ -15,7 +16,7 @@ public static class JobEventStream
     {
         jobs.MapGet("/{jobId:guid}/events", StreamAsync)
             .RequireAuthorization(ApiPolicyNames.TransfersRead)
-            .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
+            .Produces<string>(StatusCodes.Status200OK, "text/event-stream")
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -25,9 +26,9 @@ public static class JobEventStream
 
     private static async Task<IResult> StreamAsync(
         Guid jobId, HttpRequest request, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService,
-        IJobEventReader reader, IJobEventSignal signal, IValidatedAccessTokenLifetime lifetime, CancellationToken cancellationToken)
+        IJobEventReader reader, IJobEventSignal signal, IValidatedAccessTokenLifetime lifetime, [FromHeader(Name = "Last-Event-ID")] string? lastEventIdHeader, CancellationToken cancellationToken)
     {
-        if (request.Query.Keys.Any(IsCredentialQueryKey) || !TryParseLastEventId(request, out var lastEventId))
+        if (request.Query.Keys.Any(IsCredentialQueryKey) || !TryParseLastEventId(lastEventIdHeader, out var lastEventId))
             return ApiProblemMapper.Result(new(ApiErrorClass.Validation, new(null, null, null, null, null)), context);
 
         var resource = new JobResource(jobId);
@@ -47,11 +48,11 @@ public static class JobEventStream
 
     private static bool IsCredentialQueryKey(string key) => key.Equals("access_token", StringComparison.OrdinalIgnoreCase) || key.Equals("token", StringComparison.OrdinalIgnoreCase) || key.Equals("authorization", StringComparison.OrdinalIgnoreCase);
 
-    private static bool TryParseLastEventId(HttpRequest request, out long? lastEventId)
+    private static bool TryParseLastEventId(string? header, out long? lastEventId)
     {
         lastEventId = null;
-        if (!request.Headers.TryGetValue("Last-Event-ID", out var values)) return true;
-        if (!long.TryParse(values.ToString(), out var value) || value < 0) return false;
+        if (header is null) return true;
+        if (!long.TryParse(header, out var value) || value < 0) return false;
         lastEventId = value;
         return true;
     }

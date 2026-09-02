@@ -94,7 +94,7 @@ public sealed class ApiAuthorizationMiddlewareResultHandler : IAuthorizationMidd
     {
         if (authorizeResult.Succeeded) { await next(context); return; }
         if (authorizeResult.Challenged) { await ApiAuthorizationResults.Unauthenticated(context).ExecuteAsync(context); return; }
-        if (authorizeResult.Forbidden) { await ApiAuthorizationResults.Forbidden(context).ExecuteAsync(context); return; }
+        await ApiAuthorizationResults.Forbidden(context).ExecuteAsync(context);
     }
 }
 

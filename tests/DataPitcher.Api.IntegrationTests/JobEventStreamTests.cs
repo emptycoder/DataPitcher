@@ -61,6 +61,49 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     }
 
     [Fact]
+    public async Task JobEventSignal_WhenEventWasAlreadyPublishedAfterCursor_DoesNotWait()
+    {
+        var jobId = Guid.NewGuid();
+        var signal = new JobEventSignal();
+        signal.Publish(new JobEvent(jobId, 1, "progress", new JobEventPayload("running", 10, 100), DateTimeOffset.UnixEpoch));
+
+        await signal.WaitAsync(jobId, 0, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task JobEventSignal_WhenPublishersRace_RetainsTheLatestNotification()
+    {
+        var jobId = Guid.NewGuid();
+        var signal = new JobEventSignal();
+        Parallel.For(1, 1025, eventId => signal.Publish(new JobEvent(jobId, eventId, "progress", new JobEventPayload("running", eventId, eventId), DateTimeOffset.UnixEpoch)));
+
+        await signal.WaitAsync(jobId, 1023, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task JobEventSignal_WhenPublishingRacesWithWait_DoesNotMissTheEvent()
+    {
+        for (var eventId = 1; eventId <= 128; eventId++)
+        {
+            var jobId = Guid.NewGuid();
+            var signal = new JobEventSignal();
+            using var gate = new Barrier(2);
+            var wait = Task.Run(async () =>
+            {
+                gate.SignalAndWait();
+                await signal.WaitAsync(jobId, 0, CancellationToken.None);
+            });
+            var publish = Task.Run(() =>
+            {
+                gate.SignalAndWait();
+                signal.Publish(new JobEvent(jobId, eventId, "progress", new JobEventPayload("running", eventId, eventId), DateTimeOffset.UnixEpoch));
+            });
+
+            await Task.WhenAll(wait, publish).WaitAsync(TimeSpan.FromSeconds(1));
+        }
+    }
+
+    [Fact]
     public async Task JobEvents_WhenReconnectedWithLastEventId_StreamsOnlyLaterFrame()
     {
         var jobId = Guid.NewGuid();
