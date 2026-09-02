@@ -8,7 +8,7 @@ and know exactly where to pick up — no other context required.
 
 ## Status
 
-**Nine slices are COMPLETE:**
+**Nine backend slices and the frontend foundation are COMPLETE:**
 
 1. The domain spine — provider-independent schema model, dependency graph, SCC
    condensation, and demand-driven closure algorithm.
@@ -22,30 +22,45 @@ and know exactly where to pick up — no other context required.
 8. The SQL Server closure store — the same `IClosureStore` contract implemented
    against SQL Server.
 9. The bounded transfer pipeline.
+10. The frontend foundation — strict Vite/React scaffold, a separately proven
+    100% Vitest coverage gate, narrow Zustand state ownership, an in-memory
+    authentication adapter, and generated OpenAPI client/Zod response validation
+    before Query caching.
 
 **What does NOT yet exist:** transfer execution against a real database,
 verification, the job worker and recovery, ASP.NET authentication wiring, the
-Minimal API, and the entire frontend. None of these have any code in this
-repository yet. Everything shipped so far is planning, modeling, and read-path
-infrastructure — no data has ever actually moved from a source database to a
-target database through this codebase.
+Minimal API, the frontend dependency graph, the Selection Workbench, plan
+review, and the transfer monitor. The latter four are separate later frontend
+slices; no data has ever moved from a source database to a target database
+through this codebase.
 
 ## Verified quality gates
 
 - `scripts/test-all.sh` exits 0 with **645 tests**: 557 unit, 5 architecture,
   43 PostgreSQL integration, 40 SQL Server integration.
 - Merged coverage is **100% line, 100% branch, 100% method**.
+- `scripts/test-frontend.sh` runs the separate strict TypeScript and Vitest V8
+  gate at **100% statements (63/63), branches (15/15), functions (36/36), and
+  lines (48/48)**; its deliberate sentinel deletion was observed to fail.
 - `dotnet build`: clean, **zero warnings**, under warnings-as-errors.
 - The full gate takes about **310 seconds**, dominated by the SQL Server lane
   running under binary translation on this arm64 host.
-- The gate is enforced only in `scripts/test-all.sh`, which merges each
+- The backend gate is enforced only in `scripts/test-all.sh`, which merges each
   project's coverage report with ReportGenerator rather than summing per-project
   numbers — a project at less than 100% cannot hide behind another project's
   surplus.
-- There is exactly **one** documented coverage exclusion in the whole project:
-  a source-generated regex matcher, excluded as generated code. It is the only
-  exclusion anywhere in the project; the 100 percent figure above is not
-  padded by additional undisclosed exclusions.
+- The backend's only coverage exclusion is a source-generated regex matcher.
+  The frontend's only exclusion is generated OpenAPI output, checked by
+  regeneration drift and runtime validation at the Query boundary.
+
+## Frontend foundation
+
+- Session identifiers remain in a private non-persisted Zustand store;
+  preferences use a separate injected-storage allowlist. Access tokens remain
+  only in the authentication adapter closure, never a store, browser storage,
+  or URL.
+- The generated client and Zod schema share one OpenAPI contract; every
+  permission response is parsed before it reaches TanStack Query.
 
 ## The central validation
 
