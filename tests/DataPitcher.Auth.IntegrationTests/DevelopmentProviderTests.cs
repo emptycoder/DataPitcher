@@ -75,6 +75,53 @@ public sealed class DevelopmentProviderTests
     }
 
     [Fact]
+    public void HostingExtensions_WhenConfiguredFallbackIsNotEnabled_RejectsComposition()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Authentication:Generic:Enabled"] = "true",
+            ["Authentication:Generic:SchemeName"] = "generic",
+            ["Authentication:Generic:ProviderInstance"] = "generic",
+            ["Authentication:Generic:Issuer"] = "https://issuer.test",
+            ["Authentication:Generic:Audience"] = "api",
+            ["Authentication:Generic:PrincipalKind"] = "User",
+            ["Authentication:FallbackScheme"] = "missing",
+        }).Build();
+        var exception = Assert.Throws<InvalidOperationException>(() => services.AddDataPitcherAuthenticationProviders(configuration, new TestEnvironment { EnvironmentName = "Test" }));
+        Assert.Equal("Authentication schemes must be non-empty, unique, and include the fallback.", exception.Message);
+    }
+
+    [Fact]
+    public void DevelopmentNormalizer_RejectsAValidatedTokenWithoutSubject()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Authentication:Development:Enabled"] = "true",
+            ["Authentication:Development:SchemeName"] = "development",
+            ["Authentication:Development:ProviderInstance"] = "development",
+            ["Authentication:Development:Issuer"] = "https://development.test",
+            ["Authentication:Development:Audience"] = "api",
+            ["Authentication:Development:SigningKey"] = "01234567890123456789012345678901",
+        }).Build();
+        services.AddDataPitcherAuthenticationProviders(configuration, new TestEnvironment { EnvironmentName = "Test" });
+        using var provider = services.BuildServiceProvider();
+        var normalizer = provider.GetRequiredKeyedService<IExternalPrincipalNormalizer>("development");
+        var exception = Assert.Throws<InvalidOperationException>(() => normalizer.Normalize(new ClaimsPrincipal(new ClaimsIdentity()), "https://development.test"));
+        Assert.Equal("Validated development token has no sub claim.", exception.Message);
+    }
+
+    [Fact]
+    public void HostingExtensions_WhenDevelopmentConfigurationIsMissing_RejectsItsEmptySigningKey()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Authentication:Development:Enabled"] = "true" }).Build();
+        var exception = Assert.Throws<ArgumentException>(() => services.AddDataPitcherAuthenticationProviders(configuration, new TestEnvironment { EnvironmentName = "Test" }));
+        Assert.Equal("Development signing key must be at least 32 bytes. (Parameter 'options')", exception.Message);
+    }
+
+    [Fact]
     public void HostingExtensions_WhenEntraIsEnabled_RegistersItsNormalizer()
     {
         var services = new ServiceCollection();

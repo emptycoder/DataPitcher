@@ -18,7 +18,7 @@ public static class DataPitcherAuthenticationHostingExtensions
         if (configuration.GetValue<bool>("Authentication:Entra:Enabled")) providers.Add(new EntraProviderRegistration(configuration.GetSection("Authentication:Entra")));
         if (configuration.GetValue<bool>("Authentication:Generic:Enabled")) providers.Add(new GenericOpenIdConnectProviderRegistration(configuration.GetSection("Authentication:Generic")));
 #if DEBUG
-        if (configuration.GetValue<bool>("Authentication:Development:Enabled")) providers.Add(new DevelopmentProviderRegistration(environment, configuration.GetSection("Authentication:Development").Get<DevelopmentProviderOptions>() ?? throw new InvalidOperationException("Development authentication configuration is required.")));
+        if (configuration.GetValue<bool>("Authentication:Development:Enabled")) providers.Add(new DevelopmentProviderRegistration(environment, configuration.GetSection("Authentication:Development").Get<DevelopmentProviderOptions>()!));
 #else
         if (configuration.GetValue<bool>("Authentication:Development:Enabled")) throw new InvalidOperationException("Development authentication cannot be enabled in a Release artifact.");
 #endif
