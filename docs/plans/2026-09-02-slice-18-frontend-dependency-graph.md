@@ -278,6 +278,8 @@ An edge is always `child -> parent`: `orders.customer_id -> customers.id` displa
 
 4. - [ ] **Run all frontend checks and the production smoke.** Run `scripts/test-frontend.sh && npm --prefix web run build && npm --prefix web exec playwright test e2e/dependency-graph-worker.spec.ts`; expect exit 0, four 100% Vitest totals for handwritten `src` modules, and a browser assertion that the minified ELK worker laid out the intercepted topology.
 
+   **External blocker (2026-09-02):** Chromium is not installed in this environment, so the Playwright smoke cannot run here. Provisioning Chromium for Playwright 1.62.1 will unblock it. Vitest collects only `src/**/*.test.{ts,tsx}` and explicitly excludes `e2e/**`, so this browser-only spec cannot enter the unit coverage gate.
+
 5. - [ ] **Commit the composed screen and smoke test.** Run `git add web/src/graph/DependencyGraphScreen.tsx web/src/graph/DependencyGraphScreen.test.tsx web/playwright.config.ts web/e2e/dependency-graph-worker.spec.ts && git commit -m "feat: compose dependency graph screen"`.
 
 ## Self-Review
