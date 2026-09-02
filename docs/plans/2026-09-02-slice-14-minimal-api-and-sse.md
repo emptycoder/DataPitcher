@@ -329,7 +329,7 @@ Do not serialize `ClaimsPrincipal`, exception data, stack traces, credentials, c
 
 4. - [ ] **Run the complete error suite and confirm it passes.** Run: `dotnet test tests/DataPitcher.Api.IntegrationTests/DataPitcher.Api.IntegrationTests.csproj --filter "FullyQualifiedName~ProblemDetailsTests"`. Expected: all 22 representative classes map to the exact asserted status/code pairs; correlation and typed resources appear; authorization failures are Problem Details; all sentinel redaction assertions pass.
 
-5. - [ ] **Commit safe error handling.** Run: `git add src/DataPitcher.Api/Errors/ApiProblems.cs src/DataPitcher.Api/Authorization/ApiAuthorization.cs src/DataPitcher.Api/Program.cs tests/DataPitcher.Api.IntegrationTests/ApiWebApplicationFactory.cs tests/DataPitcher.Api.IntegrationTests/ProblemDetailsTests.cs && git commit -m "feat: return safe API problem details"`.
+5. - [ ] **Commit safe error handling.** Run: `git add src/DataPitcher.Api/Errors/ApiProblems.cs src/DataPitcher.Api/Authorization/ApiAuthorization.cs src/DataPitcher.Api/Endpoints/EndpointGroups.cs src/DataPitcher.Api/Program.cs tests/DataPitcher.Api.IntegrationTests/ApiWebApplicationFactory.cs tests/DataPitcher.Api.IntegrationTests/ProblemDetailsTests.cs && git commit -m "feat: return safe API problem details"`.
 
 ### Task 5: Persist ordered job events and stream them with authenticated SSE
 
