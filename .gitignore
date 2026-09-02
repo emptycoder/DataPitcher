@@ -3,3 +3,4 @@
 # .NET build output
 bin/
 obj/
+artifacts/
