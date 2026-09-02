@@ -217,12 +217,13 @@ Use the names emitted by `npm --prefix web run generate:api`, not names inferred
 1. - [ ] **Write the failing accessible-review test.** Create `web/src/features/plans/PlanReviewView.test.tsx` with this complete body.
 
    ```tsx
-   import { expect, it, vi } from 'vitest';
-   import { fireEvent, render, screen } from '@testing-library/react';
+   import { afterEach, expect, it, vi } from 'vitest';
+   import { cleanup, fireEvent, render, screen } from '@testing-library/react';
    import { PlanReviewView } from './PlanReviewView';
    import { inclusionPathWire, reviewWire } from '../../test/planFixtures';
 
    const allStates = ['Root', 'RequiredDependency', 'ExplicitDependent', 'TargetSatisfied', 'Excluded', 'Blocked', 'Conflict', 'CycleMember'];
+   afterEach(cleanup);
    it('renders totals, every state, mappings, order, warnings, and the target-satisfied limitation', () => {
      const review = { ...reviewWire, tables: allStates.map((state, transferOrder) => ({ ...reviewWire.tables[0], state, transferOrder })) };
      render(<PlanReviewView review={review as never} path={null} pathLoading={false} onInspect={vi.fn()} onExport={vi.fn()} onStart={vi.fn()} />);
