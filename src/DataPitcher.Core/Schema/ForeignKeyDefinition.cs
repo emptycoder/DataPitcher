@@ -11,14 +11,17 @@ public sealed class ForeignKeyDefinition
         bool isEnforced,
         bool isTrusted)
     {
+        if (childColumns.Count == 0 || parentColumns.Count == 0)
+            throw new ArgumentException("Foreign-key child and parent column lists must not be empty.");
+
         if (childColumns.Count != parentColumns.Count)
             throw new ArgumentException("Foreign-key child and parent column counts must match.");
 
         Name = name;
         ChildTable = childTable;
         ParentTable = parentTable;
-        ChildColumns = childColumns;
-        ParentColumns = parentColumns;
+        ChildColumns = Array.AsReadOnly(childColumns.ToArray());
+        ParentColumns = Array.AsReadOnly(parentColumns.ToArray());
         IsEnforced = isEnforced;
         IsTrusted = isTrusted;
     }

@@ -22,7 +22,12 @@ public readonly record struct KeyComponent(string Column, object? Value)
 public sealed class StableKey : IEquatable<StableKey>, IComparable<StableKey>
 {
     private readonly KeyComponent[] _components;
-    public StableKey(IEnumerable<KeyComponent> components) => _components = components.ToArray();
+    public StableKey(IEnumerable<KeyComponent> components)
+    {
+        _components = components.ToArray();
+        if (_components.Length == 0)
+            throw new ArgumentException("Stable keys must include at least one component.");
+    }
     public IReadOnlyList<KeyComponent> Components => _components;
     public bool Equals(StableKey? other) => other is not null && _components.AsSpan().SequenceEqual(other._components);
     public override bool Equals(object? obj) => obj is StableKey other && Equals(other);

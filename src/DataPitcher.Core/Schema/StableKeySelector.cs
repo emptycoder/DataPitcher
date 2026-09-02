@@ -8,11 +8,16 @@ public sealed record StableKeySelection(UniqueConstraint? Constraint)
 
 public static class StableKeySelector
 {
-    public static StableKeySelection Select(TableDefinition table, string? selectedUniqueConstraint) =>
-        table.PrimaryKey is not null
-            ? new(table.PrimaryKey)
-            : table.UniqueConstraints.FirstOrDefault(x =>
-                StringComparer.Ordinal.Equals(x.Name, selectedUniqueConstraint)) is { } unique
-                ? new(unique)
-                : StableKeySelection.NoStableKey;
+    public static StableKeySelection Select(TableDefinition table, string? selectedUniqueConstraint)
+    {
+        if (table.PrimaryKey is not null)
+            return new(table.PrimaryKey);
+
+        var unique = table.UniqueConstraints.FirstOrDefault(x =>
+            StringComparer.Ordinal.Equals(x.Name, selectedUniqueConstraint));
+        return unique is not null && unique.Columns.All(column =>
+            table.Columns.FirstOrDefault(x => StringComparer.Ordinal.Equals(x.Name, column)) is { IsNullable: false })
+            ? new(unique)
+            : StableKeySelection.NoStableKey;
+    }
 }
