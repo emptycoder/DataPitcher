@@ -228,6 +228,8 @@ JobState.Running => [JobState.Pausing, JobState.Cancelling, JobState.Verifying, 
 JobState.Pausing => [JobState.Paused, JobState.Cancelling, JobState.Failed, JobState.Queued],
 ```
 
+The recovery requeues deliberately expand the exhaustive state-machine transition set: an interrupted active job must return to `Queued` so restart recovery can reclaim it rather than leaving it permanently unrecoverable.
+
 ```csharp
 // src/DataPitcher.Infrastructure/Checkpoints/CheckpointMirrorStore.cs
 using System.Globalization;

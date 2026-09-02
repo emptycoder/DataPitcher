@@ -11,9 +11,9 @@ public static class JobStateMachine
     {
         JobState.Draft => [JobState.Queued, JobState.Cancelling],
         JobState.Queued => [JobState.Preparing, JobState.Cancelling],
-        JobState.Preparing => [JobState.Running, JobState.Pausing, JobState.Cancelling, JobState.Failed],
-        JobState.Running => [JobState.Pausing, JobState.Cancelling, JobState.Verifying, JobState.Failed],
-        JobState.Pausing => [JobState.Paused, JobState.Cancelling, JobState.Failed],
+        JobState.Preparing => [JobState.Running, JobState.Pausing, JobState.Cancelling, JobState.Failed, JobState.Queued],
+        JobState.Running => [JobState.Pausing, JobState.Cancelling, JobState.Verifying, JobState.Failed, JobState.Queued],
+        JobState.Pausing => [JobState.Paused, JobState.Cancelling, JobState.Failed, JobState.Queued],
         JobState.Paused => [JobState.Queued, JobState.Cancelling],
         JobState.Cancelling => [JobState.Cancelled, JobState.Failed],
         JobState.Verifying => [JobState.Succeeded, JobState.Failed, JobState.VerificationFailed],
