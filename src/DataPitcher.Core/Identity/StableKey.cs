@@ -1,8 +1,23 @@
-using System.Globalization;
-
 namespace DataPitcher.Core.Identity;
 
-public readonly record struct KeyComponent(string Column, IComparable? Value);
+public readonly record struct KeyComponent(string Column, object? Value)
+{
+    public bool Equals(KeyComponent other) =>
+        StringComparer.Ordinal.Equals(Column, other.Column) &&
+        (Value is byte[] bytes && other.Value is byte[] otherBytes
+            ? bytes.AsSpan().SequenceEqual(otherBytes)
+            : EqualityComparer<object?>.Default.Equals(Value, other.Value));
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Column, StringComparer.Ordinal);
+        if (Value is byte[] bytes)
+            foreach (var value in bytes) hash.Add(value);
+        else hash.Add(Value);
+        return hash.ToHashCode();
+    }
+}
 
 public sealed class StableKey : IEquatable<StableKey>, IComparable<StableKey>
 {
@@ -26,13 +41,14 @@ public sealed class StableKey : IEquatable<StableKey>, IComparable<StableKey>
         }
         return _components.Length.CompareTo(other._components.Length);
     }
-    private static int CompareValues(IComparable? left, IComparable? right)
+    private static int CompareValues(object? left, object? right)
     {
         if (left is null) return right is null ? 0 : -1;
         if (right is null) return 1;
         var type = StringComparer.Ordinal.Compare(left.GetType().AssemblyQualifiedName, right.GetType().AssemblyQualifiedName);
         if (type != 0) return type;
-        var result = left.CompareTo(right);
-        return result != 0 ? result : StringComparer.Ordinal.Compare(Convert.ToString(left, CultureInfo.InvariantCulture), Convert.ToString(right, CultureInfo.InvariantCulture));
+        if (left is string leftString && right is string rightString) return StringComparer.Ordinal.Compare(leftString, rightString);
+        if (left is byte[] leftBytes && right is byte[] rightBytes) return leftBytes.AsSpan().SequenceCompareTo(rightBytes);
+        return ((IComparable)left).CompareTo(right);
     }
 }
