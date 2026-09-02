@@ -38,6 +38,10 @@ public sealed class PermissionAndRoleBundleTests
     }
 
     [Fact]
+    public void PermissionSet_WhenComparedWithAnUnrelatedObject_IsNotEqual() =>
+        Assert.False(new PermissionSet([Permissions.PlansSeal]).Equals((object)"not a permission set"));
+
+    [Fact]
     public void RoleBundles_WhenRoleIsUnknown_RejectsIt() =>
         Assert.Throws<ArgumentOutOfRangeException>(() => RoleBundles.For((Role)99));
 }

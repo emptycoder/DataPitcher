@@ -17,6 +17,18 @@ public sealed class ExternalPrincipalKeyTests
         Assert.NotEqual(key, new ExternalPrincipalKey("entra-prod", "https://login.example/tenant", "tenant-a", PrincipalKind.User, "object-b"));
     }
 
+    [Fact]
+    public void ExternalPrincipalKey_ExposesAllImmutableIdentityComponents()
+    {
+        var key = new ExternalPrincipalKey("entra-prod", "https://login.example/tenant", "tenant-a", PrincipalKind.ServicePrincipal, "object-a");
+
+        Assert.Equal("entra-prod", key.ProviderInstance);
+        Assert.Equal("https://login.example/tenant", key.ValidatedIssuer);
+        Assert.Equal("tenant-a", key.TenantId);
+        Assert.Equal(PrincipalKind.ServicePrincipal, key.PrincipalKind);
+        Assert.Equal("object-a", key.ImmutableSubject);
+    }
+
     [Theory]
     [InlineData("", "https://login.example/tenant", "subject")]
     [InlineData("provider", "not-an-issuer", "subject")]
