@@ -42,4 +42,29 @@ public sealed class PostgreSqlTargetCheckpointStoreTests : IClassFixture<Postgre
         await transaction.RollbackAsync();
         Assert.Equal(2, (await store.ReadAsync(stale.JobId, stale.RunId, CancellationToken.None))!.FenceToken);
     }
+
+    [Fact]
+    public async Task InitializeAsync_WhenManifestHashDiffersFromTheStoredCheckpoint_ThrowsWithoutChangingIt()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        var store = new PostgreSqlTargetCheckpointStore(scope.Target);
+        var context = PostgreSqlTransferTestData.Context();
+        await store.InitializeAsync(context, CancellationToken.None);
+        var resealed = context with { ManifestHash = "different-manifest-hash" };
+        await Assert.ThrowsAsync<PostgreSqlManifestMismatchException>(() => store.InitializeAsync(resealed, CancellationToken.None));
+        Assert.Equal("sealed-manifest-hash", (await store.ReadAsync(context.JobId, context.RunId, CancellationToken.None))!.ManifestHash);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_CalledTwiceWithTheSameFenceToken_IsIdempotent()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        var store = new PostgreSqlTargetCheckpointStore(scope.Target);
+        var context = PostgreSqlTransferTestData.Context();
+        await store.InitializeAsync(context, CancellationToken.None);
+        await store.InitializeAsync(context, CancellationToken.None);
+        var checkpoint = await store.ReadAsync(context.JobId, context.RunId, CancellationToken.None);
+        Assert.Equal(1, checkpoint!.FenceToken);
+        Assert.Equal(-1, checkpoint.LastBatchSequence);
+    }
 }

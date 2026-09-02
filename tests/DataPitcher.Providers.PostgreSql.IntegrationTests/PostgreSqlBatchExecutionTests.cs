@@ -59,4 +59,44 @@ public sealed class PostgreSqlBatchExecutionTests : IClassFixture<PostgreSqlClos
         await transaction.CommitAsync();
         Assert.Equal((long)affected, await scope.ScalarTargetAsync<long>($"SELECT count(*) FROM datapitcher.transfer_affected_keys WHERE job_id='{context.JobId}'"));
     }
+
+    [Fact]
+    public async Task StageAsync_WhenAColumnValueIsNull_WritesNullThroughBinaryCopy()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        await scope.ExecuteTargetAsync("CREATE TABLE transfer_rows (id integer PRIMARY KEY, code text NOT NULL, note text NULL);");
+        var table = new PostgreSqlWriteTable(new(scope.Schema, "transfer_rows"), [
+            new("id", "integer", NpgsqlTypes.NpgsqlDbType.Integer, true, false, false, false, null),
+            new("code", "text", NpgsqlTypes.NpgsqlDbType.Text, false, false, false, false, "C"),
+            new("note", "text", NpgsqlTypes.NpgsqlDbType.Text, false, false, false, false, "C")
+        ]);
+        var context = PostgreSqlTransferTestData.Context();
+        var batch = new PostgreSqlTransferBatch(0, [new(new DataPitcher.Core.Identity.StableKey([new("id", 1)]), new Dictionary<string, object?> { ["id"] = 1, ["code"] = "ok", ["note"] = null })], new([new("id", 1)]), PostgreSqlConflictPolicy.InsertOnly);
+        await using var connection = await scope.Target.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await new PostgreSqlBatchStageWriter().StageAsync(connection, transaction, context, table, batch, CancellationToken.None);
+        await new PostgreSqlBatchApplier().ApplyAsync(connection, transaction, context, table, batch, CancellationToken.None);
+        await transaction.CommitAsync();
+        Assert.True(await scope.ScalarTargetAsync<bool>("SELECT note IS NULL FROM transfer_rows WHERE id=1"));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_WhenAnIdentityAlwaysColumnIsPresent_InsertsExplicitValuesUsingOverridingSystemValue()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        await scope.ExecuteTargetAsync("CREATE TABLE identity_rows (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, code text NOT NULL);");
+        var table = new PostgreSqlWriteTable(new(scope.Schema, "identity_rows"), [
+            new("id", "bigint", NpgsqlTypes.NpgsqlDbType.Bigint, true, false, false, true, null),
+            new("code", "text", NpgsqlTypes.NpgsqlDbType.Text, false, false, false, false, "C")
+        ]);
+        var context = PostgreSqlTransferTestData.Context();
+        var batch = new PostgreSqlTransferBatch(0, [new(new DataPitcher.Core.Identity.StableKey([new("id", 100L)]), new Dictionary<string, object?> { ["id"] = 100L, ["code"] = "explicit" })], new([new("id", 100L)]), PostgreSqlConflictPolicy.InsertOnly);
+        await using var connection = await scope.Target.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await new PostgreSqlBatchStageWriter().StageAsync(connection, transaction, context, table, batch, CancellationToken.None);
+        var result = await new PostgreSqlBatchApplier().ApplyAsync(connection, transaction, context, table, batch, CancellationToken.None);
+        await transaction.CommitAsync();
+        Assert.Equal(1, result.Inserts);
+        Assert.Equal(100L, await scope.ScalarTargetAsync<long>("SELECT id FROM identity_rows"));
+    }
 }
