@@ -27,9 +27,9 @@
 - `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlDependencyClosureTests.cs` — real-engine copies of Slice 1’s first 31 behavioural fixtures with identical assertions.
 - `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlCommandRecorder.cs` — Npgsql execution-log recorder used to count emitted target probe commands.
 - `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlProbeBatchingTests.cs` — database-command batching proof.
-- `scripts/test-unit.sh` — Docker-free unit plus architecture tests and 100% coverage gate.
-- `scripts/test-postgres.sh` — PostgreSQL integration tests and the same 100% coverage gate for provider code.
-- `scripts/test-all.sh` — invokes both test lanes.
+- `scripts/test-unit.sh` — Docker-free unit plus architecture tests; collects and prints coverage for information only, no threshold gate.
+- `scripts/test-postgres.sh` — PostgreSQL integration tests, no coverage gate.
+- `scripts/test-all.sh` — the sole 100% line/branch/method coverage gate, run as a single pass over the whole solution.
 - `.github/workflows/ci.yml` — separate fast and Docker-backed jobs.
 - `docs/plans/2026-09-02-slice-2-postgresql-closure-store.md` — this plan.
 
@@ -41,64 +41,58 @@ ADR 0005 forbids LINQ to DB `BulkCopy` in this write path. Do not add LINQ to DB
 
 ### Task 1: Fast and slow test split
 
+**Why the coverage gate is aggregate-only:** Coverage is a property of the whole set of handwritten production code, not of any one test lane. `scripts/test-postgres.sh` runs only the integration project; today that project references no production code at all, so a gate on that lane alone instruments nothing and fails by construction (0/0 is reported as 0%, not 100%). Once provider code exists (Tasks 3–8), the unit lane still never exercises it — it requires a real database — and the integration lane never exercises the domain that the unit lane covers. No single lane can ever satisfy a 100% gate once both kinds of production code exist. The gate must therefore live only in `scripts/test-all.sh`, which runs the whole solution in one pass and sums coverage across every emitted report before computing the percentage. Do not add a per-lane coverage gate; if one is proposed later, point back to this note.
+
 **Files:**
-- Create: `scripts/test-unit.sh`, `scripts/test-postgres.sh`, `tests/scripts/test-unit-without-docker.sh`
+- Create: `scripts/test-unit.sh`, `scripts/test-postgres.sh`
 - Modify: `scripts/test-all.sh`, `.github/workflows/ci.yml`
-- Test: `tests/scripts/test-unit-without-docker.sh`
+- Test: `dotnet test DataPitcher.sln` (aggregate run via `scripts/test-all.sh`)
 
-- [ ] **Step 1: Write the failing Docker-free lane test.**
+- [ ] **Step 1: Write the failing missing-script check.**
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-DOCKER_HOST=unix:///definitely-not-a-docker-socket ./scripts/test-unit.sh
-```
+Run: `DOCKER_HOST=unix:///definitely-not-a-docker-socket ./scripts/test-unit.sh; echo "exit=$?"`
 
-- [ ] **Step 2: Run the lane test and confirm the intended failure.**
+Expected: exit 1 (not 127 — bash reports exit 1, not 127, for a missing command when it is invoked with a leading environment-variable assignment) with `./scripts/test-unit.sh: No such file or directory`.
 
-Run: `chmod +x tests/scripts/test-unit-without-docker.sh && tests/scripts/test-unit-without-docker.sh`
-
-Expected: exit 127 with `./scripts/test-unit.sh: No such file or directory`.
-
-- [ ] **Step 3: Create the scripts and split CI.**
+- [ ] **Step 2: Create the scripts and split CI.**
 
 ```bash
 #!/usr/bin/env bash
-# scripts/test-unit.sh
+# scripts/test-unit.sh — fast lane: unit + architecture tests only. Collects and
+# prints coverage for information; does NOT gate on it (see the aggregate-only
+# note above — this lane never sees provider code).
 set -euo pipefail
 rm -rf artifacts/unit-test-results
 dotnet build tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj
 dotnet build tests/DataPitcher.ArchitectureTests/DataPitcher.ArchitectureTests.csproj
 dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --no-build "$@" --collect:"XPlat Code Coverage" --results-directory artifacts/unit-test-results -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
 dotnet test tests/DataPitcher.ArchitectureTests/DataPitcher.ArchitectureTests.csproj --no-build
-report="$(find artifacts/unit-test-results -name coverage.opencover.xml -print -quit)"; test -n "$report"
-read -r sequence branch visited total < <(xmllint --xpath 'concat(/CoverageSession/Summary/@sequenceCoverage," ",/CoverageSession/Summary/@branchCoverage," ",/CoverageSession/Summary/@visitedMethods," ",/CoverageSession/Summary/@numMethods)' "$report")
-awk -v s="$sequence" -v b="$branch" -v v="$visited" -v t="$total" 'BEGIN { m=t==0?100:v/t*100; if(s!=100||b!=100||m!=100) { printf "Coverage is sequence=%s branch=%s method=%.2f%%\n",s,b,m; exit 1 } }'
+report="$(find artifacts/unit-test-results -name coverage.opencover.xml -print -quit)"
+if [ -n "$report" ]; then
+  read -r sequence branch visited total < <(xmllint --xpath 'concat(/CoverageSession/Summary/@sequenceCoverage," ",/CoverageSession/Summary/@branchCoverage," ",/CoverageSession/Summary/@visitedMethods," ",/CoverageSession/Summary/@numMethods)' "$report")
+  awk -v s="$sequence" -v b="$branch" -v v="$visited" -v t="$total" 'BEGIN { m=t==0?100:v/t*100; printf "Unit lane coverage (informational, not gated): line=%s%% branch=%s%% method=%.2f%%\n",s,b,m }'
+fi
 ```
 
 ```bash
 #!/usr/bin/env bash
-# scripts/test-postgres.sh
+# scripts/test-postgres.sh — integration lane only, no coverage collection or gate.
 set -euo pipefail
-rm -rf artifacts/postgres-test-results
 dotnet build tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj
-dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --no-build "$@" --collect:"XPlat Code Coverage" --results-directory artifacts/postgres-test-results -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
-report="$(find artifacts/postgres-test-results -name coverage.opencover.xml -print -quit)"; test -n "$report"
-read -r sequence branch visited total < <(xmllint --xpath 'concat(/CoverageSession/Summary/@sequenceCoverage," ",/CoverageSession/Summary/@branchCoverage," ",/CoverageSession/Summary/@visitedMethods," ",/CoverageSession/Summary/@numMethods)' "$report")
-awk -v s="$sequence" -v b="$branch" -v v="$visited" -v t="$total" 'BEGIN { m=t==0?100:v/t*100; if(s!=100||b!=100||m!=100) exit 1 }'
+dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --no-build "$@"
 ```
 
-Replace `scripts/test-all.sh` with `#!/usr/bin/env bash\nset -euo pipefail\n./scripts/test-unit.sh\n./scripts/test-postgres.sh`. Replace the workflow with `unit` running `./scripts/test-unit.sh` after `libxml2-utils`, and a separate `postgres` job running `./scripts/test-postgres.sh`; label its test step `Run PostgreSQL container integration tests`.
+Replace `scripts/test-all.sh` with a script that builds and runs `dotnet test DataPitcher.sln` once with coverage collection, then sums `numSequencePoints`/`visitedSequencePoints`, `numBranchPoints`/`visitedBranchPoints`, and `numMethods`/`visitedMethods` across every `coverage.opencover.xml` the solution-wide run emits (one per test project), and gates at 100% on the summed totals — not on any single report's own percentage. Summing raw counts, rather than averaging each report's own percentage, is what makes an all-zero report (an instrumented-nothing lane) a harmless no-op addition instead of a spurious 0%. Replace the workflow's unit job step label to drop "coverage gate" language (the unit lane no longer gates); keep it running `./scripts/test-unit.sh` after `libxml2-utils`, and keep the separate `postgres` job running `./scripts/test-postgres.sh` labelled `Run PostgreSQL container integration tests`.
 
-- [ ] **Step 4: Run the test and confirm Docker is not required.**
+- [ ] **Step 3: Run `scripts/test-all.sh` and confirm the aggregate gate passes.**
 
-Run: `tests/scripts/test-unit-without-docker.sh`
+Run: `./scripts/test-all.sh`
 
-Expected: exit 0, UnitTests and ArchitectureTests pass, and the coverage gate reports no failure while the deliberately invalid Docker socket is unused.
+Expected: exit 0; all three test assemblies run; reported aggregate coverage is line=100%, branch=100%, method=100%.
 
-- [ ] **Step 5: Commit the fast/slow split.**
+- [ ] **Step 4: Commit the fast/slow split.**
 
-Run: `git add scripts/test-unit.sh scripts/test-postgres.sh scripts/test-all.sh tests/scripts/test-unit-without-docker.sh .github/workflows/ci.yml && git commit -m "test: split unit and postgres lanes"`
+Run: `git add scripts/test-unit.sh scripts/test-postgres.sh scripts/test-all.sh .github/workflows/ci.yml && git commit -m "test: split unit and postgres lanes"`
 
 ### Task 2: A seeded PostgreSQL test database
 
