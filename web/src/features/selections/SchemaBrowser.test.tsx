@@ -33,6 +33,10 @@ it('renders searchable schema actions in an accessible desktop workbench', () =>
       onSelectionNameChange={onSelectionNameChange}
       onTabChange={onTabChange}
       rightRail={<p>Cart placeholder</p>}
+      selection={{ root: { tableId: 'sales.orders', alias: 'o', stableKey: ['id', 'tenant_id'] }, joins: [], predicate: null }}
+      schema={{ tables: [{ tableId: 'sales.orders', stableKey: ['id', 'tenant_id'], columns: [{ name: 'id', valueKind: 'int' }, { name: 'tenant_id', valueKind: 'guid' }] }], foreignKeys: [] }}
+      onVisualChange={vi.fn()}
+      onRequestSqlSnapshot={vi.fn()}
     />,
   );
 
