@@ -56,6 +56,21 @@ public sealed class SqlServerSelectionExecutionTests(SqlServerClosureFixture fix
     }
 
     [Fact]
+    public async Task PreviewAsync_WhenAColumnIsNull_PreservesTheNullWithoutMarkingItTruncated()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync("CREATE TABLE dbo.nullable_preview_orders (id int PRIMARY KEY, note nvarchar(max) NULL); INSERT dbo.nullable_preview_orders VALUES (1,NULL);");
+        var schema = await SchemaAsync(scope);
+        var table = schema.Table("nullable_preview_orders").Definition;
+
+        var preview = await Executor(scope, schema).PreviewAsync(Raw(table, "SELECT id AS [__datapitcher_key_0] FROM dbo.nullable_preview_orders"), 1, 256, 256, CancellationToken.None);
+
+        var cell = Assert.Single(preview.Rows).Values["note"];
+        Assert.Null(cell.Value);
+        Assert.False(cell.IsTruncated);
+    }
+
+    [Fact]
     public async Task ReadKeysAsync_WhenMoreThanTheMaximumWouldBeReturned_ThrowsInsteadOfReturningAPartialSet()
     {
         await using var scope = await fixture.CreateScopeAsync();
@@ -83,6 +98,16 @@ public sealed class SqlServerSelectionExecutionTests(SqlServerClosureFixture fix
         var orders = schema.Table("orders").Definition;
 
         await Assert.ThrowsAsync<RawSqlValidationException>(() => Executor(scope, schema).ValidateAsync(Raw(orders, "SELECT 7 AS not_a_key"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WhenRawSqlProjectsAnExtraColumn_RejectsTheResultShape()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        var schema = await SchemaAsync(scope);
+        var orders = schema.Table("orders").Definition;
+
+        await Assert.ThrowsAsync<RawSqlValidationException>(() => Executor(scope, schema).ValidateAsync(Raw(orders, "SELECT 7 AS [__datapitcher_key_0], 8 AS extra"), CancellationToken.None));
     }
 
     [Theory]
@@ -128,6 +153,19 @@ public sealed class SqlServerSelectionExecutionTests(SqlServerClosureFixture fix
         Assert.Single((await executor.ReadKeysAsync(raw, 100, CancellationToken.None)).Keys, key => key == new StableKey([new("order_id", 10)]));
         Assert.Single((await executor.PreviewAsync(raw, 200, 256, 256, CancellationToken.None)).Rows);
         Assert.Equal(1, await executor.CountAsync(raw, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenRawSqlStartsWithACte_ReturnsItsSelectedRows()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync("INSERT dbo.customers VALUES (1,N'c'); INSERT dbo.orders VALUES (10,1);");
+        var schema = await SchemaAsync(scope);
+        var orders = schema.Table("orders").Definition;
+
+        var preview = await Executor(scope, schema).PreviewAsync(Raw(orders, "WITH roots AS (SELECT order_id AS [__datapitcher_key_0] FROM dbo.orders) SELECT [__datapitcher_key_0] FROM roots"), 1, 256, 256, CancellationToken.None);
+
+        Assert.Single(preview.Rows, row => row.StableKey == new StableKey([new("order_id", 10)]));
     }
 
     [Fact]

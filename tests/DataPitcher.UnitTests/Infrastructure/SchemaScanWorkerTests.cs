@@ -136,6 +136,58 @@ public sealed class SchemaScanWorkerTests
     }
 
     [Fact]
+    public async Task ProcessNextAsync_WhenPersistedProfileIsInvalid_StoresTheFixedConnectionFailure()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-invalid", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+        var scan = await snapshots.QueueAsync(profile.ConnectionId, "scan-invalid-profile", CancellationToken.None);
+        using (var db = fixture.Database.Open()) db.Execute("UPDATE ConnectionProfiles SET SecretReferenceKind = 'invalid' WHERE ConnectionId = @connectionId", new DataParameter("connectionId", profile.ConnectionId.ToString()));
+        var worker = new SchemaScanWorker(snapshots, profiles, new Resolver(), new ConnectionProviderRegistry(new IConnectionProvider[] { new Provider(new ThrowingIntrospector()) }));
+
+        await worker.ProcessNextAsync(CancellationToken.None);
+
+        var failed = await snapshots.GetScanAsync(profile.ConnectionId, scan.ScanId, CancellationToken.None);
+        Assert.Equal(SchemaScanState.Failed, failed.State);
+        Assert.Equal("connection_failed", failed.FailureCode);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenStoppedBeforePolling_LeavesQueuedScansUntouched()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-stopped-worker", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+        var queued = await snapshots.QueueAsync(profile.ConnectionId, "scan-stopped-worker", CancellationToken.None);
+        var worker = new SchemaScanWorker(snapshots, profiles, new Resolver(), new ConnectionProviderRegistry(new IConnectionProvider[] { new Provider(new ThrowingIntrospector()) }));
+        using var stopped = new CancellationTokenSource();
+        stopped.Cancel();
+
+        await ExecuteAsync(worker, stopped.Token);
+
+        Assert.Equal(SchemaScanState.Queued, (await snapshots.GetScanAsync(profile.ConnectionId, queued.ScanId, CancellationToken.None)).State);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRunning_PollsAndCompletesQueuedScansUntilStopped()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-running-worker", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+        var queued = await snapshots.QueueAsync(profile.ConnectionId, "scan-running-worker", CancellationToken.None);
+        var worker = new SchemaScanWorker(snapshots, profiles, new Resolver(), new ConnectionProviderRegistry(new IConnectionProvider[] { new Provider(new ImmediateIntrospector(Content())) }));
+
+        await worker.StartAsync(CancellationToken.None);
+        await WaitForStateAsync(snapshots, profile.ConnectionId, queued.ScanId, SchemaScanState.Completed);
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal(SchemaScanState.Completed, (await snapshots.GetScanAsync(profile.ConnectionId, queued.ScanId, CancellationToken.None)).State);
+    }
+
+    [Fact]
     public async Task GetScanAsync_WhenTheScanDoesNotBelongToTheConnection_FailsWithTheFixedNotFoundError()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
@@ -203,6 +255,36 @@ public sealed class SchemaScanWorkerTests
     }
 
     [Fact]
+    public async Task GetNeighbourhoodAsync_WhenTheStartingTableIsMissing_FailsWithTheFixedNotFoundError()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-missing-neighbourhood", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+        var snapshot = await StoreSnapshotAsync(snapshots, profile, Content());
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => snapshots.GetNeighbourhoodAsync(profile.ConnectionId, snapshot.SnapshotId, "app", "Missing", 1, CancellationToken.None));
+
+        Assert.Equal("Schema table was not found.", exception.Message);
+    }
+
+    [Fact]
+    public async Task ClaimNextAsync_WhenTheClaimIsLost_ReturnsNoClaimAndLeavesTheScanQueued()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-lost-claim", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+        var queued = await snapshots.QueueAsync(profile.ConnectionId, "scan-lost-claim", CancellationToken.None);
+        using (var db = fixture.Database.Open()) db.Execute("CREATE TRIGGER lose_schema_claim BEFORE UPDATE OF State ON SchemaScans WHEN NEW.State = 'Running' BEGIN SELECT RAISE(IGNORE); END;");
+
+        var claimed = await snapshots.ClaimNextAsync(CancellationToken.None);
+
+        Assert.Null(claimed);
+        Assert.Equal(SchemaScanState.Queued, (await snapshots.GetScanAsync(profile.ConnectionId, queued.ScanId, CancellationToken.None)).State);
+    }
+
+    [Fact]
     public async Task GetTableAsync_WhenTheTableHasNoPrimaryKey_PreservesTheAbsentKey()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
@@ -225,6 +307,16 @@ public sealed class SchemaScanWorkerTests
         await snapshots.CompleteAsync(scan, content, CancellationToken.None);
         var completed = await snapshots.GetScanAsync(profile.ConnectionId, scan.ScanId, CancellationToken.None);
         return await snapshots.GetAsync(profile.ConnectionId, completed.SnapshotId!.Value, CancellationToken.None);
+    }
+    private static Task ExecuteAsync(SchemaScanWorker worker, CancellationToken cancellationToken) => (Task)(typeof(SchemaScanWorker).GetMethod("ExecuteAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(worker, [cancellationToken]) ?? throw new InvalidOperationException("Schema scan worker did not start."));
+    private static async Task WaitForStateAsync(SchemaSnapshotStore snapshots, Guid connectionId, Guid scanId, SchemaScanState expected)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            if ((await snapshots.GetScanAsync(connectionId, scanId, CancellationToken.None)).State == expected) return;
+            await Task.Delay(10);
+        }
+        throw new TimeoutException("Schema scan did not reach the expected state.");
     }
     private static SchemaSnapshotContent Content() => new(new[] { Orders(), Customers() }, new[] { ForeignKey() });
     private static SchemaTable Orders(string column = "CustomerId") => new("app", "Orders", new[] { new SchemaColumn("Id", "int", "System.Int32", false), new SchemaColumn(column, "int", "System.Int32", false) }, new SchemaKey("PK_Orders", new[] { "Id" }), Array.Empty<SchemaKey>());
@@ -273,5 +365,10 @@ public sealed class SchemaScanWorkerTests
     private sealed class ThrowingIntrospector : ISchemaIntrospector
     {
         public Task<SchemaSnapshotContent> ReadAsync(ConnectionProfile profile, string resolvedConnectionString, CancellationToken cancellationToken) => Task.FromException<SchemaSnapshotContent>(new InvalidOperationException("scan-secret-sentinel"));
+    }
+
+    private sealed class ImmediateIntrospector(SchemaSnapshotContent content) : ISchemaIntrospector
+    {
+        public Task<SchemaSnapshotContent> ReadAsync(ConnectionProfile profile, string resolvedConnectionString, CancellationToken cancellationToken) => Task.FromResult(content);
     }
 }

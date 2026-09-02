@@ -81,6 +81,15 @@ public sealed class SqlServerSelectionSqlGeneratorTests
     }
 
     [Fact]
+    public void Compile_RendersAnUnfilteredExistsPredicate()
+    {
+        var sql = new SqlServerSelectionSqlGenerator().Compile(PredicateQuery(new ExistsPredicate(Lines, "l", [new(new("o", "id"), "order_id")], null, false)));
+
+        Assert.Contains("EXISTS (SELECT 1 FROM [dbo].[order_lines] AS [l] WHERE [o].[id] = [l].[order_id])", sql.CommandText, StringComparison.Ordinal);
+        Assert.Empty(sql.Parameters);
+    }
+
+    [Fact]
     public void ColumnDefinition_DefaultsGeneratedMetadataAndPreservesItWhenSpecified()
     {
         Assert.False(new ColumnDefinition("id", typeof(int), false).IsGenerated);

@@ -60,6 +60,21 @@ public sealed class PostgreSqlSelectionExecutionTests : IClassFixture<PostgreSql
     }
 
     [Fact]
+    public async Task PreviewAsync_WhenAColumnIsNull_PreservesTheNullWithoutMarkingItTruncated()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync("CREATE TABLE nullable_preview_orders (id integer PRIMARY KEY, note text NULL); INSERT INTO nullable_preview_orders VALUES (1,NULL);");
+        var schema = await SchemaAsync(scope);
+        var table = schema.Table("nullable_preview_orders").Definition;
+
+        var preview = await new PostgreSqlSelectionExecutor(scope.Source, schema).PreviewAsync(Raw(table, "SELECT id AS \"__datapitcher_key_0\" FROM nullable_preview_orders"), 1, 256, 256, CancellationToken.None);
+
+        var cell = Assert.Single(preview.Rows).Values["note"];
+        Assert.Null(cell.Value);
+        Assert.False(cell.IsTruncated);
+    }
+
+    [Fact]
     public async Task PreviewAsync_UsesALimitInTheGeneratedServerSql()
     {
         var recorder = new PostgreSqlCommandRecorder();

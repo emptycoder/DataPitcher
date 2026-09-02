@@ -62,11 +62,11 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock)
         if (depth < 1) throw new ArgumentOutOfRangeException(nameof(depth));
         var snapshot = await GetAsync(connectionId, snapshotId, cancellationToken);
         var center = snapshot.Content.Tables.Select(item => new SchemaTableAddress(item.Schema, item.Name)).SingleOrDefault(item => Same(item, schema, table)) ?? throw new InvalidOperationException("Schema table was not found.");
-        var included = new HashSet<SchemaTableAddress>(AddressComparer.Instance) { center };
-        var frontier = new HashSet<SchemaTableAddress>(AddressComparer.Instance) { center };
+        var included = new HashSet<SchemaTableAddress> { center };
+        var frontier = new HashSet<SchemaTableAddress> { center };
         for (var currentDepth = 0; currentDepth < depth; currentDepth++)
         {
-            var next = new HashSet<SchemaTableAddress>(AddressComparer.Instance);
+            var next = new HashSet<SchemaTableAddress>();
             foreach (var foreignKey in snapshot.Content.ForeignKeys)
             {
                 if (frontier.Contains(foreignKey.ChildTable)) next.Add(foreignKey.ParentTable);
@@ -125,13 +125,6 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock)
     private static SchemaKey FromRow(KeyRow row) => new(row.Name, row.Columns);
     private static AddressRow ToRow(SchemaTableAddress address) => new(address.Schema, address.Name);
     private static SchemaTableAddress FromRow(AddressRow row) => new(row.Schema, row.Name);
-
-    private sealed class AddressComparer : IEqualityComparer<SchemaTableAddress>
-    {
-        public static AddressComparer Instance { get; } = new();
-        public bool Equals(SchemaTableAddress? first, SchemaTableAddress? second) => first is null ? second is null : second is not null && string.Equals(first.Schema, second.Schema, StringComparison.Ordinal) && string.Equals(first.Name, second.Name, StringComparison.Ordinal);
-        public int GetHashCode(SchemaTableAddress value) => HashCode.Combine(StringComparer.Ordinal.GetHashCode(value.Schema), StringComparer.Ordinal.GetHashCode(value.Name));
-    }
 
     private sealed record SnapshotRow(TableRow[] Tables, ForeignKeyRow[] ForeignKeys, string DatabaseIdentity, string ProviderVersion);
     private sealed record TableRow(string Schema, string Name, ColumnRow[] Columns, KeyRow? PrimaryKey, KeyRow[] UniqueConstraints);
