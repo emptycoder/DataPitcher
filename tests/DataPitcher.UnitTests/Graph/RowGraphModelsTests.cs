@@ -27,6 +27,14 @@ public sealed class RowGraphModelsTests
     }
 
     [Fact]
+    public void RowGraphRequest_WhenCreated_PreservesAnalyzerLimits()
+    {
+        var limits = new RowGraphLimits(10, TimeSpan.FromSeconds(5), 1_000_000);
+        var request = new RowGraphRequest([], [], limits);
+        Assert.Equal(limits, request.Limits);
+    }
+
+    [Fact]
     public void RowGraphAnalysis_WhenExternalParentIsMissing_ReportsItSeparatelyFromAcyclicOrder()
     {
         var employees = Table("Employees"); var fk = ForeignKey(employees, employees);

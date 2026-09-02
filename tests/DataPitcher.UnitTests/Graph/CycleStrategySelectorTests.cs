@@ -19,12 +19,30 @@ public sealed class CycleStrategySelectorTests
     }
 
     [Fact]
+    public async Task SelectAsync_WhenOrdered_ExposesEveryPlannedRowInInsertionAnalysis()
+    {
+        var employees = T("Employees"); var manager = F("FK_Manager", employees, employees);
+        var root = R(employees, 1); var child = R(employees, 2); var request = Request([root, child], [new(root, manager, null, RowReferenceState.NullParent), new(child, manager, root, RowReferenceState.Planned)]);
+        var result = await new CycleStrategySelector(new ScriptedAnalyzer(("", Ordered(root, child)))).SelectAsync(request, Capabilities(false), CancellationToken.None);
+        Assert.Equal(CycleStrategy.Ordered, result.Strategy); Assert.Equal([root, child], result.Analysis.InsertionOrder); Assert.Empty(result.Analysis.UnreachedRows);
+    }
+
+    [Fact]
     public async Task SelectAsync_WhenSelfReferencingRowsFormAGenuineCycle_UsesPostgreSqlDeferredEdges()
     {
         var employees = T("Employees"); var manager = F("FK_Manager", employees, employees); var a = R(employees, 1); var b = R(employees, 2);
         var analyzer = new ScriptedAnalyzer(("", Cyclic(a, b)), ("FK_Manager", Ordered(a, b)));
         var result = await new CycleStrategySelector(analyzer).SelectAsync(Request([a, b], [new(a, manager, b, RowReferenceState.Planned), new(b, manager, a, RowReferenceState.Planned)]), Capabilities(true, new CycleEdgeCapability(manager, true, false, false)), CancellationToken.None);
         Assert.Equal(CycleStrategy.Deferred, result.Strategy); Assert.Equal([manager], result.CycleBreakingEdges); Assert.Equal(["", "FK_Manager"], analyzer.Calls);
+    }
+
+    [Fact]
+    public async Task SelectAsync_WhenDeferredEdgesOrderTheResidualGraph_ExposesResidualAnalysis()
+    {
+        var employees = T("Employees"); var manager = F("FK_Manager", employees, employees); var a = R(employees, 1); var b = R(employees, 2);
+        var residual = Ordered(b, a);
+        var result = await new CycleStrategySelector(new ScriptedAnalyzer(("", Cyclic(a, b)), ("FK_Manager", residual))).SelectAsync(Request([a, b], [new(a, manager, b, RowReferenceState.Planned), new(b, manager, a, RowReferenceState.Planned)]), Capabilities(true, new CycleEdgeCapability(manager, true, false, false)), CancellationToken.None);
+        Assert.Equal(CycleStrategy.Deferred, result.Strategy); Assert.Same(residual, result.Analysis); Assert.Equal([b, a], result.Analysis.InsertionOrder); Assert.Empty(result.Analysis.UnreachedRows);
     }
 
     [Fact]
@@ -60,6 +78,24 @@ public sealed class CycleStrategySelectorTests
         var alpha = T("Alpha"); var beta = T("Beta"); var ab = F("FK_Alpha_Beta", alpha, beta); var ba = F("FK_Beta_Alpha", beta, alpha); var a = R(alpha, 1); var b = R(beta, 1);
         var result = await new CycleStrategySelector(new ScriptedAnalyzer(("", Cyclic(a, b)))).SelectAsync(Request([a, b], [new(a, ab, b, RowReferenceState.Planned), new(b, ba, a, RowReferenceState.Planned)]), Capabilities(false), CancellationToken.None);
         Assert.Equal(CycleStrategy.Blocked, result.Strategy); Assert.Contains("dbo.Alpha", result.Explanation); Assert.Contains("dbo.Beta", result.Explanation); Assert.Contains("FK_Alpha_Beta", result.Explanation); Assert.Contains("FK_Beta_Alpha", result.Explanation);
+    }
+
+    [Fact]
+    public async Task SelectAsync_WhenBlocked_ExposesTheUnreachedRows()
+    {
+        var employees = T("Employees"); var manager = F("FK_Manager", employees, employees); var a = R(employees, 1); var b = R(employees, 2);
+        var result = await new CycleStrategySelector(new ScriptedAnalyzer(("", Cyclic(a, b)))).SelectAsync(Request([a, b], [new(a, manager, b, RowReferenceState.Planned), new(b, manager, a, RowReferenceState.Planned)]), Capabilities(false), CancellationToken.None);
+        Assert.Equal(CycleStrategy.Blocked, result.Strategy); Assert.Empty(result.Analysis.InsertionOrder); Assert.Equal([a, b], result.Analysis.UnreachedRows);
+    }
+
+    [Fact]
+    public async Task SelectAsync_WhenExternalParentIsMissing_ReportsItWithoutClassifyingACycle()
+    {
+        var employees = T("Employees"); var manager = F("FK_Manager", employees, employees); var employee = R(employees, 2); var absentManager = R(employees, 99);
+        var missing = new MissingReference(employee, manager, absentManager);
+        var analysis = new RowGraphAnalysis([employee], [], [missing]);
+        var result = await new CycleStrategySelector(new ScriptedAnalyzer(("", analysis))).SelectAsync(Request([employee], [new(employee, manager, absentManager, RowReferenceState.Missing)]), Capabilities(false), CancellationToken.None);
+        Assert.Equal(CycleStrategy.Ordered, result.Strategy); Assert.Empty(result.Analysis.UnreachedRows); Assert.Equal(missing, Assert.Single(result.Analysis.MissingReferences));
     }
 
     private static TableDefinition T(string name) => new("dbo", name, [], new($"PK_{name}", ["Id"]), []);
