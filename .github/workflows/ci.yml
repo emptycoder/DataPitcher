@@ -3,7 +3,7 @@ on:
   push:
   pull_request:
 jobs:
-  build-test-coverage:
+  unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -12,16 +12,16 @@ jobs:
           dotnet-version: '10.0.400'
       - name: Install xmllint
         run: sudo apt-get update && sudo apt-get install -y libxml2-utils
-      - name: Build
-        run: dotnet build DataPitcher.sln
-      - name: Run unit tests
-        run: dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --no-build
-      - name: Enforce 100% coverage
-        run: ./scripts/test-all.sh
-      - name: Run architecture tests
-        run: dotnet test tests/DataPitcher.ArchitectureTests/DataPitcher.ArchitectureTests.csproj --no-build --filter "FullyQualifiedName~DependencyRuleTests"
-
-# Container-based jobs (Testcontainers, Docker Compose, Playwright, provider
-# integration tests) are intentionally NOT included here: Docker is
-# unavailable in this environment for Slice 1, and those checks are deferred
-# to the Docker-blocked provider slice per the Docker Blocker section above.
+      - name: Run unit and architecture tests
+        run: ./scripts/test-unit.sh
+  postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.400'
+      - name: Install xmllint
+        run: sudo apt-get update && sudo apt-get install -y libxml2-utils
+      - name: Run PostgreSQL container integration tests
+        run: ./scripts/test-postgres.sh
