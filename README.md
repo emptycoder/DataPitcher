@@ -41,7 +41,7 @@ The next action is to read [`docs/plans/2026-09-02-slice-1-domain-spine.md`](doc
 
 ## Git hooks and CI
 
-Install [pre-commit](https://pre-commit.com/) 4.2.0 with `uv tool install pre-commit==4.2.0`, then run `pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push`. It is Python-based, so backend-only contributors do not need `npm install` just to commit.
+Install [pre-commit](https://pre-commit.com/) 4.2.0 with `uv tool install pre-commit==4.2.0`; if prompted, run `uv tool update-shell` and restart the shell. Then run `pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push`. It is Python-based, so backend-only contributors do not need `npm install` just to commit.
 
 Pre-commit checks staged backend files with `./scripts/format.sh --check` and staged frontend files with `npm --prefix web run lint`; commit messages must use `type(scope): summary`. Pre-push repeats the two fast checks for the whole repository. CI blocks on backend formatting, frontend linting, the .NET aggregate gate, and the frontend gate; container-based end-to-end jobs remain excluded.
 
