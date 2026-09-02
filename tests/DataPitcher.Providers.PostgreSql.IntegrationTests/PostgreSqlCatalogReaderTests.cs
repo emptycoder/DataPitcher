@@ -35,4 +35,16 @@ public sealed class PostgreSqlCatalogReaderTests : IClassFixture<PostgreSqlClosu
 
         await Assert.ThrowsAsync<NotSupportedException>(() => reader.ReadAsync(scope.Schema, CancellationToken.None));
     }
+
+    [Fact]
+    public async Task ReadAsync_ReportsGeneratedAndBinaryColumns()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        await scope.ExecuteAsync("CREATE TABLE preview_metadata (id integer PRIMARY KEY, payload bytea NOT NULL, calculated integer GENERATED ALWAYS AS (id + 1) STORED)");
+
+        var table = (await new PostgreSqlCatalogReader(scope.Source).ReadAsync(scope.Schema, CancellationToken.None)).Table("preview_metadata");
+
+        Assert.Equal(typeof(byte[]), table.Column("payload").ClrType);
+        Assert.True(table.Column("calculated").IsGenerated);
+    }
 }

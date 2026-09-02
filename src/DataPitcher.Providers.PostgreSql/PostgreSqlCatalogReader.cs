@@ -5,7 +5,7 @@ namespace DataPitcher.Providers.PostgreSql;
 
 public sealed record PostgreSqlTable(TableDefinition Definition)
 {
-    public ColumnDefinition Column(string name) => Definition.Columns.Single(x => x.Name == name);
+    public ColumnDefinition Column(string name) => Definition.Columns.Single(x => string.Equals(x.Name, name, StringComparison.Ordinal));
 }
 
 public sealed class PostgreSqlSchemaSnapshot
@@ -19,14 +19,14 @@ public sealed class PostgreSqlSchemaSnapshot
     public IReadOnlyList<PostgreSqlTable> Tables { get; }
     public IReadOnlyList<ForeignKeyDefinition> ForeignKeys { get; }
 
-    public PostgreSqlTable Table(string name) => Tables.Single(x => x.Definition.Name == name);
-    public ForeignKeyDefinition ForeignKey(string name) => ForeignKeys.Single(x => x.Name == name);
+    public PostgreSqlTable Table(string name) => Tables.Single(x => string.Equals(x.Definition.Name, name, StringComparison.Ordinal));
+    public ForeignKeyDefinition ForeignKey(string name) => ForeignKeys.Single(x => string.Equals(x.Name, name, StringComparison.Ordinal));
 }
 
 public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
 {
     private const string ColumnsSql =
-        "SELECT c.relname, a.attname, t.typname, NOT a.attnotnull " +
+        "SELECT c.relname, a.attname, t.typname, NOT a.attnotnull, a.attgenerated <> '' " +
         "FROM pg_class c " +
         "JOIN pg_namespace n ON n.oid = c.relnamespace " +
         "JOIN pg_attribute a ON a.attrelid = c.oid " +
@@ -66,7 +66,8 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         var keys = await ReadKeysAsync(schema, columns.Keys, ct);
         var definitions = columns.ToDictionary(
             x => x.Key,
-            x => new TableDefinition(schema, x.Key, x.Value, keys[x.Key].Primary, keys[x.Key].Unique));
+            x => new TableDefinition(schema, x.Key, x.Value, keys[x.Key].Primary, keys[x.Key].Unique),
+            StringComparer.Ordinal);
         var tables = definitions.Values.Select(x => new PostgreSqlTable(x)).ToArray();
         var foreignKeys = await ReadForeignKeysAsync(schema, definitions, ct);
         return new PostgreSqlSchemaSnapshot(tables, foreignKeys);
@@ -74,7 +75,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
 
     private async Task<Dictionary<string, List<ColumnDefinition>>> ReadColumnsAsync(string schema, CancellationToken ct)
     {
-        var columns = new Dictionary<string, List<ColumnDefinition>>();
+        var columns = new Dictionary<string, List<ColumnDefinition>>(StringComparer.Ordinal);
         await using var command = Command(ColumnsSql, schema);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -82,7 +83,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
             var table = reader.GetString(0);
             if (!columns.TryGetValue(table, out var list))
                 columns[table] = list = [];
-            list.Add(new ColumnDefinition(reader.GetString(1), Map(reader.GetString(2)), reader.GetBoolean(3)));
+            list.Add(new ColumnDefinition(reader.GetString(1), Map(reader.GetString(2)), reader.GetBoolean(3), reader.GetBoolean(4)));
         }
 
         return columns;
@@ -91,7 +92,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
     private async Task<Dictionary<string, (UniqueConstraint? Primary, List<UniqueConstraint> Unique)>> ReadKeysAsync(
         string schema, IEnumerable<string> tables, CancellationToken ct)
     {
-        var keys = tables.ToDictionary(name => name, _ => ((UniqueConstraint?)null, new List<UniqueConstraint>()));
+        var keys = tables.ToDictionary(name => name, _ => ((UniqueConstraint?)null, new List<UniqueConstraint>()), StringComparer.Ordinal);
         await using var command = Command(KeysSql, schema);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -139,6 +140,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
     {
         "int4" => typeof(int),
         "text" => typeof(string),
+        "bytea" => typeof(byte[]),
         _ => throw new NotSupportedException($"PostgreSQL type '{typeName}' is not mapped.")
     };
 }

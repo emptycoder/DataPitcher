@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace DataPitcher.Providers.PostgreSql.IntegrationTests;
 
 // A driver database-command execution log, not a store method-call counter. Wired into the
-// target NpgsqlDataSource via UseLoggerFactory so every command Npgsql actually sends to
+// NpgsqlDataSource via UseLoggerFactory so every command Npgsql actually sends to
 // PostgreSQL is captured, regardless of how many store-interface calls produced it.
 public sealed class PostgreSqlCommandRecorder : ILoggerFactory, ILogger
 {
@@ -34,6 +34,8 @@ public sealed class PostgreSqlCommandRecorder : ILoggerFactory, ILogger
 
     public bool AnyContainsLargeInList(int threshold) =>
         _messages.Any(message => ContainsLargeInList(message, threshold));
+
+    public bool AnyContains(string value) => _messages.Any(message => message.Contains(value, StringComparison.Ordinal));
 
     private static bool ContainsLargeInList(string message, int threshold)
     {

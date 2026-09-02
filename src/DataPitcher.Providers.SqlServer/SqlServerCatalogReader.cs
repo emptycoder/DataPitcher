@@ -3,11 +3,11 @@ using Microsoft.Data.SqlClient;
 
 namespace DataPitcher.Providers.SqlServer;
 
-public sealed record SqlServerColumn(string Name, string StoreType, Type ClrType, bool IsNullable);
+public sealed record SqlServerColumn(string Name, string StoreType, Type ClrType, bool IsNullable, bool IsGenerated);
 
 public sealed record SqlServerTable(TableDefinition Definition, IReadOnlyList<SqlServerColumn> Columns)
 {
-    public SqlServerColumn Column(string name) => Columns.Single(c => c.Name == name);
+    public SqlServerColumn Column(string name) => Columns.Single(c => string.Equals(c.Name, name, StringComparison.Ordinal));
 }
 
 public sealed class SqlServerSchemaSnapshot
@@ -21,18 +21,19 @@ public sealed class SqlServerSchemaSnapshot
     public IReadOnlyList<SqlServerTable> Tables { get; }
     public IReadOnlyList<ForeignKeyDefinition> ForeignKeys { get; }
 
-    public SqlServerTable Table(string name) => Tables.Single(t => t.Definition.Name == name);
-    public ForeignKeyDefinition ForeignKey(string name) => ForeignKeys.Single(f => f.Name == name);
+    public SqlServerTable Table(string name) => Tables.Single(t => string.Equals(t.Definition.Name, name, StringComparison.Ordinal));
+    public ForeignKeyDefinition ForeignKey(string name) => ForeignKeys.Single(f => string.Equals(f.Name, name, StringComparison.Ordinal));
 }
 
 public sealed class SqlServerCatalogReader(string connectionString)
 {
     private const string ColumnsSql =
-        "/* DataPitcher.Catalog.Columns */ SELECT t.name, c.name, ty.name, c.max_length, c.is_nullable " +
+        "/* DataPitcher.Catalog.Columns */ SELECT t.name, c.name, ty.name, c.max_length, c.is_nullable, CAST(CASE WHEN cc.is_computed = 1 OR c.generated_always_type <> 0 THEN 1 ELSE 0 END AS bit) " +
         "FROM sys.tables t " +
         "JOIN sys.schemas s ON s.schema_id = t.schema_id " +
         "JOIN sys.columns c ON c.object_id = t.object_id " +
         "JOIN sys.types ty ON ty.user_type_id = c.user_type_id " +
+        "LEFT JOIN sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id " +
         "WHERE s.name = @schema " +
         "ORDER BY t.name, c.column_id";
 
@@ -64,7 +65,8 @@ public sealed class SqlServerCatalogReader(string connectionString)
         var keys = await ReadKeysAsync(schema, columns.Keys, ct);
         var definitions = columns.ToDictionary(
             x => x.Key,
-            x => new TableDefinition(schema, x.Key, x.Value.Select(c => new ColumnDefinition(c.Name, c.ClrType, c.IsNullable)).ToArray(), keys[x.Key].Primary, keys[x.Key].Unique));
+            x => new TableDefinition(schema, x.Key, x.Value.Select(c => new ColumnDefinition(c.Name, c.ClrType, c.IsNullable, c.IsGenerated)).ToArray(), keys[x.Key].Primary, keys[x.Key].Unique),
+            StringComparer.Ordinal);
         var tables = definitions.Values.Select(d => new SqlServerTable(d, columns[d.Name]));
         var foreignKeys = await ReadForeignKeysAsync(schema, definitions, ct);
         return new SqlServerSchemaSnapshot(tables, foreignKeys);
@@ -72,7 +74,7 @@ public sealed class SqlServerCatalogReader(string connectionString)
 
     private async Task<Dictionary<string, List<SqlServerColumn>>> ReadColumnsAsync(string schema, CancellationToken ct)
     {
-        var columns = new Dictionary<string, List<SqlServerColumn>>();
+        var columns = new Dictionary<string, List<SqlServerColumn>>(StringComparer.Ordinal);
         await using var connection = await OpenAsync(ct);
         await using var command = Command(connection, ColumnsSql, schema);
         await using var rows = await command.ExecuteReaderAsync(ct);
@@ -82,7 +84,7 @@ public sealed class SqlServerCatalogReader(string connectionString)
             if (!columns.TryGetValue(table, out var list))
                 columns[table] = list = [];
             var typeName = rows.GetString(2);
-            list.Add(new SqlServerColumn(rows.GetString(1), StoreType(typeName, rows.GetInt16(3)), Map(typeName), rows.GetBoolean(4)));
+            list.Add(new SqlServerColumn(rows.GetString(1), StoreType(typeName, rows.GetInt16(3)), Map(typeName), rows.GetBoolean(4), rows.GetBoolean(5)));
         }
 
         return columns;
@@ -91,14 +93,14 @@ public sealed class SqlServerCatalogReader(string connectionString)
     private async Task<Dictionary<string, (UniqueConstraint? Primary, List<UniqueConstraint> Unique)>> ReadKeysAsync(
         string schema, IEnumerable<string> tables, CancellationToken ct)
     {
-        var keys = tables.ToDictionary(name => name, _ => ((UniqueConstraint?)null, new List<UniqueConstraint>()));
+        var keys = tables.ToDictionary(name => name, _ => ((UniqueConstraint?)null, new List<UniqueConstraint>()), StringComparer.Ordinal);
         await using var connection = await OpenAsync(ct);
         await using var command = Command(connection, KeysSql, schema);
         await using var rows = await command.ExecuteReaderAsync(ct);
         var groups = new List<(string Table, string Name, string Type, List<string> Columns)>();
         while (await rows.ReadAsync(ct))
         {
-            var group = groups.LastOrDefault(x => x.Table == rows.GetString(0) && x.Name == rows.GetString(1));
+            var group = groups.LastOrDefault(x => string.Equals(x.Table, rows.GetString(0), StringComparison.Ordinal) && string.Equals(x.Name, rows.GetString(1), StringComparison.Ordinal));
             if (group.Columns is null)
             {
                 group = (rows.GetString(0), rows.GetString(1), rows.GetString(2).TrimEnd(), []);
@@ -112,7 +114,7 @@ public sealed class SqlServerCatalogReader(string connectionString)
         {
             var constraint = new UniqueConstraint(group.Name, group.Columns);
             var prior = keys[group.Table];
-            keys[group.Table] = group.Type == "PK" ? (constraint, prior.Item2) : (prior.Item1, [.. prior.Item2, constraint]);
+            keys[group.Table] = string.Equals(group.Type, "PK", StringComparison.Ordinal) ? (constraint, prior.Item2) : (prior.Item1, [.. prior.Item2, constraint]);
         }
 
         return keys;
@@ -127,7 +129,7 @@ public sealed class SqlServerCatalogReader(string connectionString)
         await using var rows = await command.ExecuteReaderAsync(ct);
         while (await rows.ReadAsync(ct))
         {
-            var group = groups.LastOrDefault(x => x.Name == rows.GetString(0));
+            var group = groups.LastOrDefault(x => string.Equals(x.Name, rows.GetString(0), StringComparison.Ordinal));
             if (group.ChildColumns is null)
             {
                 group = (rows.GetString(0), rows.GetString(1), rows.GetString(2), [], [], rows.GetBoolean(6), rows.GetBoolean(7));
@@ -159,8 +161,9 @@ public sealed class SqlServerCatalogReader(string connectionString)
     {
         "int" => typeof(int),
         "nvarchar" => typeof(string),
+        "varbinary" => typeof(byte[]),
         _ => throw new NotSupportedException($"SQL Server type '{type}' is not mapped.")
     };
 
-    private static string StoreType(string type, short length) => type == "nvarchar" ? $"nvarchar({length / 2})" : type;
+    private static string StoreType(string type, short length) => string.Equals(type, "nvarchar", StringComparison.Ordinal) ? $"nvarchar({length / 2})" : type;
 }

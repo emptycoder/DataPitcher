@@ -9,7 +9,7 @@ public sealed class PostgreSqlSelectionSqlGeneratorTests
     {
         var query = SelectionQueryTestData.QuotedRootAndJoin(); var sql = new PostgreSqlSelectionSqlGenerator().Compile(query);
         Assert.Equal(query.Root.Table, sql.RootTable); Assert.Equal(query.RootStableKey.Constraint, sql.RootStableKey);
-        Assert.StartsWith("SELECT DISTINCT \"r\".\"Id\" FROM \"sales\".\"Order\"\"Rows\" AS \"r\" INNER JOIN", sql.CommandText);
+        Assert.StartsWith("SELECT DISTINCT \"r\".\"Id\" AS \"__datapitcher_key_0\" FROM \"sales\".\"Order\"\"Rows\" AS \"r\" INNER JOIN", sql.CommandText);
         Assert.Contains("\"r\".\"CustomerId\" = \"c\".\"Id\"", sql.CommandText); Assert.Contains("\"c\".\"RegionId\" = \"g\".\"Id\"", sql.CommandText); Assert.DoesNotContain("SELECT DISTINCT \"c\".\"Id\"", sql.CommandText);
     }
     [Fact]
@@ -71,7 +71,7 @@ public sealed class PostgreSqlSelectionSqlGeneratorTests
         var customers = new DataPitcher.Core.Schema.TableDefinition("sales", "Customers", [new("TenantId", typeof(int), false), new("Id", typeof(int), false)], new("PK_Customers", ["TenantId", "Id"]), []);
         var query = new SelectionQuery(new([orders, customers], []), new(orders, "o"), new(orders.PrimaryKey), [new ManualJoin("o", "c", customers, [new("CustomerTenantId", "TenantId"), new("CustomerId", "Id")])], null);
         var sql = new PostgreSqlSelectionSqlGenerator().Compile(query);
-        Assert.StartsWith("SELECT DISTINCT \"o\".\"TenantId\", \"o\".\"Id\"", sql.CommandText); Assert.Contains("\"o\".\"CustomerTenantId\" = \"c\".\"TenantId\" AND \"o\".\"CustomerId\" = \"c\".\"Id\"", sql.CommandText);
+        Assert.StartsWith("SELECT DISTINCT \"o\".\"TenantId\" AS \"__datapitcher_key_0\", \"o\".\"Id\" AS \"__datapitcher_key_1\"", sql.CommandText); Assert.Contains("\"o\".\"CustomerTenantId\" = \"c\".\"TenantId\" AND \"o\".\"CustomerId\" = \"c\".\"Id\"", sql.CommandText);
     }
     [Fact]
     public void Compile_WritesEverySetValueAsATypedParameter()
@@ -85,7 +85,7 @@ public sealed class PostgreSqlSelectionSqlGeneratorTests
     {
         var query = SelectionQueryTestData.Query(new NotPredicate(new OrPredicate([SelectionQueryTestData.Id(3), new AndPredicate([SelectionQueryTestData.Id(1), new ComparisonPredicate(new("o", "Id"), SelectionComparison.GreaterThan, new(typeof(int), 2))])])));
         var sql = new PostgreSqlSelectionSqlGenerator().Compile(query);
-        Assert.Equal("SELECT DISTINCT \"o\".\"Id\" FROM \"sales\".\"Orders\" AS \"o\" WHERE NOT (((\"o\".\"Id\" = @p0 AND \"o\".\"Id\" > @p1) OR \"o\".\"Id\" = @p2))", sql.CommandText); Assert.Equal([1, 2, 3], sql.Parameters.Select(x => (int)x.Value));
+        Assert.Equal("SELECT DISTINCT \"o\".\"Id\" AS \"__datapitcher_key_0\" FROM \"sales\".\"Orders\" AS \"o\" WHERE NOT (((\"o\".\"Id\" = @p0 AND \"o\".\"Id\" > @p1) OR \"o\".\"Id\" = @p2))", sql.CommandText); Assert.Equal([1, 2, 3], sql.Parameters.Select(x => (int)x.Value));
     }
     [Fact]
     public void Compile_RendersNestedNotExistsPredicate()
