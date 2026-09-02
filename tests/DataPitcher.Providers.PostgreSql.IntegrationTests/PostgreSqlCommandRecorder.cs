@@ -37,8 +37,6 @@ public sealed class PostgreSqlCommandRecorder : ILoggerFactory, ILogger
     public bool AnyContainsLargeInList(int threshold) =>
         _messages.Any(message => ContainsLargeInList(message, threshold));
 
-    public bool AnyContains(string value) => _messages.Any(message => message.Contains(value, StringComparison.Ordinal));
-
     private static bool ContainsLargeInList(string message, int threshold)
     {
         var searchStart = 0;
