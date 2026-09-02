@@ -22,6 +22,9 @@ public sealed class DependencyGraphTests
         Assert.Throws<NotSupportedException>(() => ((IList<TableDefinition>)graph.Tables).RemoveAt(0));
         Assert.Throws<NotSupportedException>(() => ((IList<ForeignKeyDefinition>)graph.DependenciesOf(orders)).Add(foreignKey));
         Assert.Throws<NotSupportedException>(() => ((IList<ForeignKeyDefinition>)graph.DependentsOf(customers)).Add(foreignKey));
+        Assert.Throws<NotSupportedException>(() => ((IList<TableDefinition>)graph.Tables)[0] = orders);
+        Assert.Throws<NotSupportedException>(() => ((IList<ForeignKeyDefinition>)graph.DependenciesOf(orders))[0] = foreignKey);
+        Assert.Throws<NotSupportedException>(() => ((IList<ForeignKeyDefinition>)graph.DependentsOf(customers))[0] = foreignKey);
     }
     private static TableDefinition T(string name) => new("dbo", name, [], null, []);
     private static TableDefinition Rich(string name, int columnCount) => new("dbo", name, Enumerable.Range(1, columnCount).Select(i => new ColumnDefinition($"Col{i}", typeof(int), false)).ToArray(), new UniqueConstraint($"PK_{name}", ["Col1"]), []);
