@@ -64,7 +64,7 @@ public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosur
         var parents = source.Table("untrusted_parents").Definition;
         var grandparents = source.Table("untrusted_grandparents").Definition;
         var relationship = new ClosureRelationship(source.ForeignKey("FK_P_G"));
-        var manual = ClosureRelationship.Manual("manual-relationship", parents, grandparents);
+        var manual = ClosureRelationship.Manual("manual-relationship", parents, grandparents, ["grandparent_id"], ["id"]);
         var selections = new Dictionary<TableDefinition, StableKeySelection> { [parents] = StableKeySelector.Select(parents, null), [grandparents] = StableKeySelector.Select(grandparents, null) };
         await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, selections);
         var present = new StableKey([new("id", 2)]);

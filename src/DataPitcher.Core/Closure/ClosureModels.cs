@@ -13,23 +13,31 @@ public enum RootConflictPolicy
 
 public sealed class ClosureRelationship : IEquatable<ClosureRelationship>
 {
-    private ClosureRelationship(string name, TableDefinition fromTable, TableDefinition toTable, ForeignKeyDefinition? foreignKey, bool isInbound, bool isEnabled)
+    private ClosureRelationship(string name, TableDefinition fromTable, TableDefinition toTable, ForeignKeyDefinition? foreignKey, bool isInbound, IReadOnlyList<string> fromColumns, IReadOnlyList<string> toColumns, bool isEnabled)
     {
+        if (fromColumns.Count == 0 || toColumns.Count == 0)
+            throw new ArgumentException("Relationship from and to column lists must not be empty.");
+
+        if (fromColumns.Count != toColumns.Count)
+            throw new ArgumentException("Relationship from and to column counts must match.");
+
         Name = name;
         FromTable = fromTable;
         ToTable = toTable;
         ForeignKey = foreignKey;
         IsInbound = isInbound;
+        FromColumns = Array.AsReadOnly(fromColumns.ToArray());
+        ToColumns = Array.AsReadOnly(toColumns.ToArray());
         IsEnabled = isEnabled;
     }
 
     public ClosureRelationship(ForeignKeyDefinition foreignKey, bool isInbound = false, bool isEnabled = true)
-        : this(foreignKey.Name, isInbound ? foreignKey.ParentTable : foreignKey.ChildTable, isInbound ? foreignKey.ChildTable : foreignKey.ParentTable, foreignKey, isInbound, isEnabled)
+        : this(foreignKey.Name, isInbound ? foreignKey.ParentTable : foreignKey.ChildTable, isInbound ? foreignKey.ChildTable : foreignKey.ParentTable, foreignKey, isInbound, isInbound ? foreignKey.ParentColumns : foreignKey.ChildColumns, isInbound ? foreignKey.ChildColumns : foreignKey.ParentColumns, isEnabled)
     {
     }
 
-    public static ClosureRelationship Manual(string name, TableDefinition fromTable, TableDefinition toTable, bool isEnabled = true) =>
-        new(name, fromTable, toTable, null, false, isEnabled);
+    public static ClosureRelationship Manual(string name, TableDefinition fromTable, TableDefinition toTable, IReadOnlyList<string> fromColumns, IReadOnlyList<string> toColumns, bool isEnabled = true) =>
+        new(name, fromTable, toTable, null, false, fromColumns, toColumns, isEnabled);
 
     public string Name { get; }
 
@@ -41,6 +49,10 @@ public sealed class ClosureRelationship : IEquatable<ClosureRelationship>
 
     public bool IsInbound { get; }
 
+    public IReadOnlyList<string> FromColumns { get; }
+
+    public IReadOnlyList<string> ToColumns { get; }
+
     public bool IsEnabled { get; }
 
     public bool Equals(ClosureRelationship? other) =>
@@ -49,6 +61,8 @@ public sealed class ClosureRelationship : IEquatable<ClosureRelationship>
         FromTable.Equals(other.FromTable) &&
         ToTable.Equals(other.ToTable) &&
         IsInbound == other.IsInbound &&
+        FromColumns.SequenceEqual(other.FromColumns, StringComparer.Ordinal) &&
+        ToColumns.SequenceEqual(other.ToColumns, StringComparer.Ordinal) &&
         IsEnabled == other.IsEnabled;
 
     public override bool Equals(object? obj) => Equals(obj as ClosureRelationship);
@@ -60,6 +74,10 @@ public sealed class ClosureRelationship : IEquatable<ClosureRelationship>
         hash.Add(FromTable);
         hash.Add(ToTable);
         hash.Add(IsInbound);
+        foreach (var column in FromColumns)
+            hash.Add(column, StringComparer.Ordinal);
+        foreach (var column in ToColumns)
+            hash.Add(column, StringComparer.Ordinal);
         hash.Add(IsEnabled);
         return hash.ToHashCode();
     }

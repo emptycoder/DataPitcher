@@ -4,7 +4,7 @@ public sealed class ClosureModelsTests
 {
     [Fact] public void ClosureModels_WhenInputsAreMutated_ExposeDefensiveNonWritableCopies()
     {
-        var table = new TableDefinition("dbo", "T", [], new UniqueConstraint("PK_T", ["K1"]), []); var key = new StableKey([new KeyComponent("K1", 1)]); var keys = new List<StableKey> { key }; var root = new ClosureRoot(table, keys, RootConflictPolicy.FailOnConflict); var roots = new List<ClosureRoot> { root }; var relationships = new List<ClosureRelationship> { ClosureRelationship.Manual("Manual", table, table) }; var selections = new Dictionary<TableDefinition, StableKeySelection> { [table] = StableKeySelector.Select(table, null) };
+        var table = new TableDefinition("dbo", "T", [], new UniqueConstraint("PK_T", ["K1"]), []); var key = new StableKey([new KeyComponent("K1", 1)]); var keys = new List<StableKey> { key }; var root = new ClosureRoot(table, keys, RootConflictPolicy.FailOnConflict); var roots = new List<ClosureRoot> { root }; var relationships = new List<ClosureRelationship> { ClosureRelationship.Manual("Manual", table, table, ["K1"], ["K1"]) }; var selections = new Dictionary<TableDefinition, StableKeySelection> { [table] = StableKeySelector.Select(table, null) };
         var request = new ClosureRequest(roots, relationships, selections); var rows = new List<ClosureRow> { new(table, key, 0) }; var warnings = new List<TargetConstraintWarning> { new("FK_Target") }; var result = new ClosureResult(rows, warnings); var constraints = new Dictionary<ClosureRelationship, TargetConstraintState> { [relationships[0]] = new("FK_Target",true,true,true) }; var probe = new TargetProbe(true,constraints);
         keys.Clear(); roots.Clear(); relationships.Clear(); selections.Clear(); rows.Clear(); warnings.Clear(); constraints.Clear();
         Assert.Single(root.Keys); Assert.Single(request.Roots); Assert.Single(request.Relationships); Assert.Single(request.StableKeySelections); Assert.Single(result.Rows); Assert.Single(result.Warnings); Assert.Single(probe.Constraints);
@@ -14,8 +14,8 @@ public sealed class ClosureModelsTests
     [Fact] public void ClosureRelationship_WhenAllFieldsMatch_AreEqualAndProduceEqualHashCodes()
     {
         var c = T("C"); var p = T("P");
-        var left = ClosureRelationship.Manual("Name", c, p);
-        var right = ClosureRelationship.Manual("Name", c, p);
+        var left = ClosureRelationship.Manual("Name", c, p, ["K1"], ["K1"]);
+        var right = ClosureRelationship.Manual("Name", c, p, ["K1"], ["K1"]);
         Assert.Equal(left, right);
         Assert.True(left.Equals(right)); Assert.True(right.Equals(left));
         Assert.Equal(left.GetHashCode(), right.GetHashCode());
@@ -23,22 +23,22 @@ public sealed class ClosureModelsTests
     [Fact] public void ClosureRelationship_WhenNameDiffers_AreNotEqual()
     {
         var c = T("C"); var p = T("P");
-        Assert.NotEqual(ClosureRelationship.Manual("A", c, p), ClosureRelationship.Manual("B", c, p));
+        Assert.NotEqual(ClosureRelationship.Manual("A", c, p, ["K1"], ["K1"]), ClosureRelationship.Manual("B", c, p, ["K1"], ["K1"]));
     }
     [Fact] public void ClosureRelationship_WhenFromTableDiffers_AreNotEqual()
     {
         var p = T("P");
-        Assert.NotEqual(ClosureRelationship.Manual("N", T("C1"), p), ClosureRelationship.Manual("N", T("C2"), p));
+        Assert.NotEqual(ClosureRelationship.Manual("N", T("C1"), p, ["K1"], ["K1"]), ClosureRelationship.Manual("N", T("C2"), p, ["K1"], ["K1"]));
     }
     [Fact] public void ClosureRelationship_WhenToTableDiffers_AreNotEqual()
     {
         var c = T("C");
-        Assert.NotEqual(ClosureRelationship.Manual("N", c, T("P1")), ClosureRelationship.Manual("N", c, T("P2")));
+        Assert.NotEqual(ClosureRelationship.Manual("N", c, T("P1"), ["K1"], ["K1"]), ClosureRelationship.Manual("N", c, T("P2"), ["K1"], ["K1"]));
     }
     [Fact] public void ClosureRelationship_WhenIsEnabledDiffers_AreNotEqual()
     {
         var c = T("C"); var p = T("P");
-        Assert.NotEqual(ClosureRelationship.Manual("N", c, p, true), ClosureRelationship.Manual("N", c, p, false));
+        Assert.NotEqual(ClosureRelationship.Manual("N", c, p, ["K1"], ["K1"], true), ClosureRelationship.Manual("N", c, p, ["K1"], ["K1"], false));
     }
     [Fact] public void ClosureRelationship_WhenIsInboundDiffers_AreNotEqual()
     {
@@ -52,17 +52,40 @@ public sealed class ClosureModelsTests
     }
     [Fact] public void ClosureRelationship_Equals_WhenComparedToNullOrUnrelatedType_ReturnsFalse()
     {
-        var relationship = ClosureRelationship.Manual("N", T("C"), T("P"));
+        var relationship = ClosureRelationship.Manual("N", T("C"), T("P"), ["K1"], ["K1"]);
         Assert.False(relationship.Equals((object?)null));
         Assert.False(relationship.Equals("not a relationship"));
     }
     [Fact] public void ClosureRelationship_EqualsObject_WhenSameValue_AgreesWithTypedEquals()
     {
         var c = T("C"); var p = T("P");
-        var left = ClosureRelationship.Manual("N", c, p);
-        var right = ClosureRelationship.Manual("N", c, p);
+        var left = ClosureRelationship.Manual("N", c, p, ["K1"], ["K1"]);
+        var right = ClosureRelationship.Manual("N", c, p, ["K1"], ["K1"]);
         Assert.True(left.Equals((object)right));
         Assert.Equal(left.Equals(right), left.Equals((object)right));
+    }
+
+    [Fact] public void ClosureRelationship_WhenManualColumnCountsDiffer_IsRejected()
+    {
+        var c = T("C"); var p = T("P");
+        Assert.Throws<ArgumentException>(() => ClosureRelationship.Manual("N", c, p, ["A", "B"], ["X"]));
+    }
+    [Fact] public void ClosureRelationship_WhenManualColumnsAreEmpty_IsRejected()
+    {
+        var c = T("C"); var p = T("P");
+        Assert.Throws<ArgumentException>(() => ClosureRelationship.Manual("N", c, p, [], []));
+    }
+    [Fact] public void ClosureRelationship_WhenManualColumnsAreSupplied_ExposesThemInOrder()
+    {
+        var c = T("C"); var p = T("P");
+        var relationship = ClosureRelationship.Manual("N", c, p, ["ChildFirst", "ChildSecond"], ["ParentFirst", "ParentSecond"]);
+        Assert.Equal(new[] { "ChildFirst", "ChildSecond" }, relationship.FromColumns);
+        Assert.Equal(new[] { "ParentFirst", "ParentSecond" }, relationship.ToColumns);
+    }
+    [Fact] public void ClosureRelationship_WhenManualColumnsDiffer_AreNotEqual()
+    {
+        var c = T("C"); var p = T("P");
+        Assert.NotEqual(ClosureRelationship.Manual("N", c, p, ["A"], ["X"]), ClosureRelationship.Manual("N", c, p, ["B"], ["X"]));
     }
 
     private static TableDefinition T(string name) => new("dbo", name, [], null, []);

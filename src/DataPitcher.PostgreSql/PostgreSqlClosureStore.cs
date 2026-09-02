@@ -51,7 +51,8 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
     public async Task<IReadOnlyCollection<StableKey>> ExpandAsync(ClosureRelationship relationship, IReadOnlyCollection<StableKey> fromKeys, CancellationToken cancellationToken)
     {
         await _stages.ReplaceSourceCandidatesAsync(relationship.FromTable, fromKeys, cancellationToken);
-        var (fromColumns, toColumns) = JoinColumns(relationship);
+        var fromColumns = relationship.FromColumns;
+        var toColumns = relationship.ToColumns;
         var fromKeyColumns = KeyColumns(relationship.FromTable);
         var toKeyColumns = KeyColumns(relationship.ToTable);
         var select = string.Join(", ", toKeyColumns.Select(column => $"t.{PostgreSqlIdentifier.Quote(column)}"));
@@ -84,12 +85,6 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
         return fk is null
             ? new TargetConstraintState(relationship.Name, false, false, false)
             : new TargetConstraintState(fk.Name, true, fk.IsEnforced, fk.IsTrusted);
-    }
-
-    private static (IReadOnlyList<string> From, IReadOnlyList<string> To) JoinColumns(ClosureRelationship relationship)
-    {
-        var fk = relationship.ForeignKey!;
-        return relationship.IsInbound ? (fk.ParentColumns, fk.ChildColumns) : (fk.ChildColumns, fk.ParentColumns);
     }
 
     private IReadOnlyList<string> KeyColumns(TableDefinition table) => _stableKeys[table].Constraint!.Columns;
