@@ -333,9 +333,13 @@ Do not serialize `ClaimsPrincipal`, exception data, stack traces, credentials, c
 
 ### Task 5: Persist ordered job events and stream them with authenticated SSE
 
+#### Committed-byte contract amendment
+
+`TransferUnit` carries the existing per-batch byte count and `TargetCheckpoint` carries the cumulative committed byte count. `JobWorker` uses the checkpoint value only after the target commit when appending progress events. These additive worker contracts propagate the bounded transfer pipeline's existing byte accounting without introducing a new measurement or changing a provider project.
+
 **Files:**
 - Create: `src/DataPitcher.Infrastructure/Events/JobEventContracts.cs`, `src/DataPitcher.Infrastructure/Events/JobEventStore.cs`, `src/DataPitcher.Infrastructure/Migrations/0003-job-events.sql`, `src/DataPitcher.Api/Events/JobEventStream.cs`
-- Modify: `src/DataPitcher.Infrastructure/DataPitcher.Infrastructure.csproj`, `src/DataPitcher.Infrastructure/Migrations/ControlDatabaseMigrator.cs`, `src/DataPitcher.Infrastructure/Worker/JobWorker.cs`, `src/DataPitcher.Api/Endpoints/EndpointGroups.cs`, `src/DataPitcher.Api/Errors/ApiProblems.cs`, `src/DataPitcher.Api/Program.cs`, `tests/DataPitcher.Api.IntegrationTests/ApiWebApplicationFactory.cs`
+- Modify: `src/DataPitcher.Infrastructure/DataPitcher.Infrastructure.csproj`, `src/DataPitcher.Infrastructure/Migrations/ControlDatabaseMigrator.cs`, `src/DataPitcher.Infrastructure/Worker/WorkerContracts.cs`, `src/DataPitcher.Infrastructure/Worker/JobWorker.cs`, `src/DataPitcher.Api/Endpoints/EndpointGroups.cs`, `src/DataPitcher.Api/Errors/ApiProblems.cs`, `src/DataPitcher.Api/Program.cs`, `tests/DataPitcher.Api.IntegrationTests/ApiWebApplicationFactory.cs`
 - Test: `tests/DataPitcher.Api.IntegrationTests/JobEventStreamTests.cs`
 
 1. - [ ] **Write failing durable-event and SSE tests.** With the migrated in-process SQLite store, append immutable state and committed-batch facts for one job; reconnect with `Last-Event-ID` equal to the first ID and assert the stream contains only strictly later ordered IDs. Open an empty stream, append one event, signal the stream, and assert it remains open long enough to deliver that frame. Trim the event history, reconnect behind `OldestAvailableEventId - 1`, and assert a `409` Problem Details code `event_cursor_expired` with `reloadRequired` true; assert no attempt to infer a missing event. Open the same job stream twice with different grant decisions and prove the second open is forbidden, recording two resource authorization calls. Verify a challenge returns 401, a resource denial returns 403, no stream URL accepts an access token parameter, and a short-lived authenticated stream closes at expiry without emitting a later event. Test SSE framing exactly: `id`, `event`, JSON `data`, and a blank terminator.
