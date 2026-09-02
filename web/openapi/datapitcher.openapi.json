@@ -2,31 +2,36 @@
   "openapi": "3.1.0",
   "info": { "title": "DataPitcher API", "version": "1.0.0" },
   "paths": {
-    "/api/auth/effective-permissions": {
-      "get": {
-        "operationId": "effectivePermissions",
-        "responses": {
-          "200": {
-            "description": "Effective permission set",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/EffectivePermissions" } }
-            }
-          }
-        }
-      }
-    }
+    "/api/auth/effective-permissions": { "get": { "operationId": "effectivePermissions", "responses": { "200": { "description": "permissions", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EffectivePermissions" } } } } } } },
+    "/api/plans/{planId}/review": { "get": { "operationId": "planReview", "parameters": [{ "$ref": "#/components/parameters/PlanId" }], "responses": { "200": { "description": "review", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PlanReview" } } } } } } },
+    "/api/plans/{planId}/inclusion-paths": { "post": { "operationId": "planInclusionPath", "parameters": [{ "$ref": "#/components/parameters/PlanId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InclusionPathRequest" } } } }, "responses": { "200": { "description": "path", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InclusionPath" } } } } } } },
+    "/api/plans/{planId}/jobs": { "post": { "operationId": "startPlanJob", "parameters": [{ "$ref": "#/components/parameters/PlanId" }, { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 1 } }], "responses": { "202": { "description": "queued", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperationReceipt" } } } } } } },
+    "/api/jobs/{jobId}": { "get": { "operationId": "job", "parameters": [{ "$ref": "#/components/parameters/JobId" }], "responses": { "200": { "description": "job", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" } } } } } } },
+    "/api/jobs/{jobId}/events": { "get": { "operationId": "jobEvents", "parameters": [{ "$ref": "#/components/parameters/JobId" }, { "name": "Last-Event-ID", "in": "header", "schema": { "type": "string" } }], "responses": { "200": { "description": "events", "content": { "text/event-stream": { "schema": { "type": "string" } } } } } } }
   },
   "components": {
+    "parameters": {
+      "PlanId": { "name": "planId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "JobId": { "name": "jobId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+    },
     "schemas": {
-      "EffectivePermissions": {
-        "type": "object",
-        "required": ["principalId", "tenantId", "permissions"],
-        "properties": {
-          "principalId": { "type": "string", "minLength": 1 },
-          "tenantId": { "type": "string", "minLength": 1 },
-          "permissions": { "type": "array", "items": { "type": "string" } }
-        }
-      }
+      "EffectivePermissions": { "type": "object", "required": ["principalId", "tenantId", "permissions"], "properties": { "principalId": { "type": "string", "minLength": 1 }, "tenantId": { "type": "string", "minLength": 1 }, "permissions": { "type": "array", "items": { "type": "string" } } } },
+      "Counts": { "type": "object", "required": ["included", "plannedWrites", "inserts", "updates", "estimatedBytes"], "properties": { "included": { "type": "integer" }, "plannedWrites": { "type": "integer" }, "inserts": { "type": "integer" }, "updates": { "type": "integer" }, "estimatedBytes": { "type": "integer" } } },
+      "Address": { "type": "object", "required": ["schema", "name"], "properties": { "schema": { "type": "string" }, "name": { "type": "string" } } },
+      "ColumnMapping": { "type": "object", "required": ["source", "target"], "properties": { "source": { "type": "string" }, "target": { "type": "string" } } },
+      "Precondition": { "type": "object", "required": ["code", "satisfied", "message"], "properties": { "code": { "type": "string", "enum": ["permission", "sourceHealthy", "targetHealthy", "schemaValid", "noBlockers", "safeMappings", "cycleSupported", "authenticated"] }, "satisfied": { "type": "boolean" }, "message": { "type": "string" } } },
+      "PlanTable": { "type": "object", "required": ["source", "target", "state", "transferOrder", "included", "plannedWrites", "inserts", "updates", "estimatedBytes", "columns"], "properties": { "source": { "$ref": "#/components/schemas/Address" }, "target": { "$ref": "#/components/schemas/Address" }, "state": { "type": "string", "enum": ["Root", "RequiredDependency", "ExplicitDependent", "TargetSatisfied", "Excluded", "Blocked", "Conflict", "CycleMember"] }, "transferOrder": { "type": "integer" }, "included": { "type": "integer" }, "plannedWrites": { "type": "integer" }, "inserts": { "type": "integer" }, "updates": { "type": "integer" }, "estimatedBytes": { "type": "integer" }, "columns": { "type": "array", "items": { "$ref": "#/components/schemas/ColumnMapping" } } } },
+      "Message": { "type": "object", "required": ["code", "message"], "properties": { "code": { "type": "string" }, "message": { "type": "string" } } },
+      "Conflict": { "type": "object", "required": ["table", "policy", "message"], "properties": { "table": { "type": "string" }, "policy": { "type": "string" }, "message": { "type": "string" } } },
+      "Cycle": { "type": "object", "required": ["tables", "strategy", "message"], "properties": { "tables": { "type": "array", "items": { "type": "string" } }, "strategy": { "type": "string" }, "message": { "type": "string" } } },
+      "Seal": { "type": "object", "required": ["status", "invalidationReasons"], "properties": { "status": { "type": "string", "enum": ["sealed", "invalidated"] }, "invalidationReasons": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } } } },
+      "PlanReview": { "type": "object", "required": ["planId", "version", "canonicalHash", "seal", "totals", "startPreconditions", "tables", "conflicts", "cycles", "warnings", "blockers"], "properties": { "planId": { "type": "string", "format": "uuid" }, "version": { "type": "integer" }, "canonicalHash": { "type": "string" }, "seal": { "$ref": "#/components/schemas/Seal" }, "totals": { "$ref": "#/components/schemas/Counts" }, "startPreconditions": { "type": "array", "items": { "$ref": "#/components/schemas/Precondition" } }, "tables": { "type": "array", "items": { "$ref": "#/components/schemas/PlanTable" } }, "conflicts": { "type": "array", "items": { "$ref": "#/components/schemas/Conflict" } }, "cycles": { "type": "array", "items": { "$ref": "#/components/schemas/Cycle" } }, "warnings": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } }, "blockers": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } } } },
+      "InclusionPathRequest": { "type": "object", "required": ["table", "stableKey"], "properties": { "table": { "type": "string", "minLength": 1 }, "stableKey": { "type": "string", "minLength": 1 } } },
+      "InclusionStep": { "type": "object", "required": ["relationship", "from", "to", "reason"], "properties": { "relationship": { "type": "string" }, "from": { "type": "string" }, "to": { "type": "string" }, "reason": { "type": "string" } } },
+      "InclusionPath": { "type": "object", "required": ["table", "stableKey", "rootSelection", "steps"], "properties": { "table": { "type": "string" }, "stableKey": { "type": "string" }, "rootSelection": { "type": "string" }, "steps": { "type": "array", "items": { "$ref": "#/components/schemas/InclusionStep" } } } },
+      "OperationReceipt": { "type": "object", "required": ["operationId", "state", "jobId"], "properties": { "operationId": { "type": "string", "format": "uuid" }, "state": { "type": "string" }, "jobId": { "type": "string", "format": "uuid" } } },
+      "Job": { "type": "object", "required": ["jobId", "planId", "state", "rowsTransferred", "bytesTransferred"], "properties": { "jobId": { "type": "string", "format": "uuid" }, "planId": { "type": "string", "format": "uuid" }, "state": { "type": "string", "enum": ["Draft", "Queued", "Preparing", "Running", "Pausing", "Paused", "Cancelling", "Cancelled", "Verifying", "Succeeded", "Failed", "VerificationFailed", "draft", "queued", "preparing", "running", "pausing", "paused", "cancelling", "cancelled", "verifying", "succeeded", "failed", "verificationfailed"] }, "rowsTransferred": { "type": "integer" }, "bytesTransferred": { "type": "integer" } } },
+      "JobEventPayload": { "type": "object", "required": ["State", "RowsTransferred", "BytesTransferred"], "properties": { "State": { "type": "string", "enum": ["draft", "queued", "preparing", "running", "pausing", "paused", "cancelling", "cancelled", "verifying", "succeeded", "failed", "verificationfailed"] }, "RowsTransferred": { "type": "integer" }, "BytesTransferred": { "type": "integer" } } }
     }
   }
 }

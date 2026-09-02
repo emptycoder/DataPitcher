@@ -29,6 +29,8 @@ public static class EndpointGroups
         var plans = app.MapGroup("/api/plans");
         WithStandardProblems(plans.MapPut("/{planId:guid}", SavePlanAsync).RequireAuthorization(ApiPolicyNames.PlansWrite));
         WithStandardProblems(plans.MapPost("/{planId:guid}/seal", QueuePlanSealAsync).RequireAuthorization(ApiPolicyNames.PlansSeal));
+        WithStandardProblems(plans.MapGet("/{planId:guid}/review", GetPlanReviewAsync).RequireAuthorization(ApiPolicyNames.PlansRead));
+        WithStandardProblems(plans.MapPost("/{planId:guid}/inclusion-paths", GetPlanInclusionPathAsync).RequireAuthorization(ApiPolicyNames.PlansRead));
         WithStandardProblems(plans.MapPost("/{planId:guid}/jobs", StartJobAsync).RequireAuthorization(ApiPolicyNames.TransfersStart));
 
         var jobs = app.MapGroup("/api/jobs");
@@ -115,6 +117,22 @@ public static class EndpointGroups
         if (await AuthorizeResourceAsync(context, authorizationService, user, new PlanResource(planId), Permissions.PlansSeal) is { } problem) return problem;
         var receipt = await application.QueuePlanSealAsync(planId, cancellationToken);
         return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
+    }
+
+    private static async Task<Results<Ok<PlanReviewResponse>, ProblemHttpResult>> GetPlanReviewAsync(
+        Guid planId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+    {
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new PlanResource(planId), Permissions.PlansRead) is { } problem) return problem;
+        return TypedResults.Ok(await application.GetPlanReviewAsync(planId, cancellationToken));
+    }
+
+    private static async Task<Results<Ok<InclusionPathResponse>, ProblemHttpResult>> GetPlanInclusionPathAsync(
+        Guid planId, InclusionPathRequest request, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Table) || string.IsNullOrWhiteSpace(request.StableKey))
+            return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Table and stable key are required.");
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new PlanResource(planId), Permissions.PlansRead) is { } problem) return problem;
+        return TypedResults.Ok(await application.GetPlanInclusionPathAsync(planId, request, cancellationToken));
     }
 
     private static async Task<Results<Accepted<OperationReceiptResponse>, ProblemHttpResult>> StartJobAsync(

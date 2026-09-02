@@ -11,6 +11,8 @@ public interface IDataPitcherApplication
     Task<OperationReceiptResponse> QueueSelectionEvaluationAsync(Guid selectionId, CancellationToken cancellationToken);
     Task<PlanResponse> SavePlanAsync(Guid planId, SavePlanRequest request, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueuePlanSealAsync(Guid planId, CancellationToken cancellationToken);
+    Task<PlanReviewResponse> GetPlanReviewAsync(Guid planId, CancellationToken cancellationToken);
+    Task<InclusionPathResponse> GetPlanInclusionPathAsync(Guid planId, InclusionPathRequest request, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> StartJobAsync(Guid planId, string idempotencyKey, CancellationToken cancellationToken);
     Task<JobResponse> GetJobAsync(Guid jobId, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueJobCommandAsync(Guid jobId, JobCommand command, CancellationToken cancellationToken);
