@@ -37,7 +37,7 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
         var columns = KeyColumns(table);
         var select = string.Join(", ", columns.Select((_, i) => $"s.k{i}"));
         var join = string.Join(" AND ", columns.Select((column, i) => $"s.k{i} = t.{PostgreSqlIdentifier.Quote(column)}"));
-        var sql = $"SELECT {select}, t.{PostgreSqlIdentifier.Quote(columns[0])} IS NOT NULL " +
+        var sql = $"/* DataPitcher.ProbeTarget */ SELECT {select}, t.{PostgreSqlIdentifier.Quote(columns[0])} IS NOT NULL " +
                   $"FROM {PostgreSqlStagingTables.Qualified(_stages.TargetTableName(table))} s " +
                   $"LEFT JOIN {Qualified(table)} t ON {join}";
         var result = new Dictionary<StableKey, TargetProbe>();
