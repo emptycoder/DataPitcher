@@ -313,9 +313,9 @@ using LinqToDB.Mapping;
 
 namespace DataPitcher.Infrastructure.Persistence;
 
-[Table("Jobs")] internal sealed class JobRow { [PrimaryKey] public string JobId { get; set; } = ""; public string RunId { get; set; } = ""; public string PlanId { get; set; } = ""; public string IdempotencyKey { get; set; } = ""; public string State { get; set; } = ""; public string CreatedUtc { get; set; } = ""; public string UpdatedUtc { get; set; } = ""; }
-[Table("JobStateTransitions")] internal sealed class JobStateTransitionRow { [PrimaryKey] public string TransitionId { get; set; } = ""; public string JobId { get; set; } = ""; public string FromState { get; set; } = ""; public string ToState { get; set; } = ""; public string OccurredUtc { get; set; } = ""; }
-[Table("JobLeases")] internal sealed class JobLeaseRow { [PrimaryKey] public string JobId { get; set; } = ""; public string? OwnerId { get; set; } public string? ExpiresUtc { get; set; } public long FenceToken { get; set; } }
+[Table("Jobs")] internal sealed class JobRow { [PrimaryKey, Column("JobId")] public string JobId { get; set; } = ""; [Column("RunId")] public string RunId { get; set; } = ""; [Column("PlanId")] public string PlanId { get; set; } = ""; [Column("IdempotencyKey")] public string IdempotencyKey { get; set; } = ""; [Column("State")] public string State { get; set; } = ""; [Column("CreatedUtc")] public string CreatedUtc { get; set; } = ""; [Column("UpdatedUtc")] public string UpdatedUtc { get; set; } = ""; }
+[Table("JobStateTransitions")] internal sealed class JobStateTransitionRow { [PrimaryKey, Column("TransitionId")] public string TransitionId { get; set; } = ""; [Column("JobId")] public string JobId { get; set; } = ""; [Column("FromState")] public string FromState { get; set; } = ""; [Column("ToState")] public string ToState { get; set; } = ""; [Column("OccurredUtc")] public string OccurredUtc { get; set; } = ""; }
+[Table("JobLeases")] internal sealed class JobLeaseRow { [PrimaryKey, Column("JobId")] public string JobId { get; set; } = ""; [Column("OwnerId")] public string? OwnerId { get; set; } [Column("ExpiresUtc")] public string? ExpiresUtc { get; set; } [Column("FenceToken")] public long FenceToken { get; set; } }
 
 // Migrations/ControlDatabaseMigrator.cs
 using LinqToDB.Data;
@@ -501,7 +501,7 @@ public sealed class JobStoreTests
         var staleWrite = Task.Run(async () => { firstReady.SetResult(true); await takeoverComplete.Task; return store.TryTransition(first, JobState.Preparing); });
         await firstReady.Task; fixture.Clock.Advance(ttl.Add(TimeSpan.FromTicks(1))); var second = leases.Acquire(job.JobId, "worker-b", ttl)!; takeoverComplete.SetResult(true);
         var stale = await staleWrite;
-        Assert.True(second.FenceToken > first.FenceToken); Assert.Equal(0, stale.RowsAffected); Assert.Empty(store.GetHistory(job.JobId).Where(x => x == (JobState.Queued, JobState.Preparing)));
+        Assert.True(second.FenceToken > first.FenceToken); Assert.Equal(0, stale.RowsAffected); Assert.DoesNotContain(store.GetHistory(job.JobId), x => x == (JobState.Queued, JobState.Preparing));
     }
 }
 ```
@@ -516,6 +516,7 @@ Expected: compilation fails with `CS0246` because `JobStore` and `StartJobReques
 
 ```csharp
 using System.Globalization;
+using LinqToDB;
 using LinqToDB.Data;
 using DataPitcher.Core.Jobs;
 using DataPitcher.Infrastructure.Leasing;
@@ -551,7 +552,7 @@ public sealed class JobStore(ControlDatabase database, IClock clock)
     }
 
     public TransferJob Get(Guid jobId) => ToJob(database.Open().GetTable<JobRow>().Single(row => row.JobId == jobId.ToString()));
-    public IReadOnlyList<(JobState From, JobState To)> GetHistory(Guid jobId) => database.Open().GetTable<JobStateTransitionRow>().Where(row => row.JobId == jobId.ToString()).OrderBy(row => row.OccurredUtc).Select(row => (Enum.Parse<JobState>(row.FromState), Enum.Parse<JobState>(row.ToState))).ToArray();
+    public IReadOnlyList<(JobState From, JobState To)> GetHistory(Guid jobId) => database.Open().GetTable<JobStateTransitionRow>().Where(row => row.JobId == jobId.ToString()).OrderBy(row => row.OccurredUtc).Select(row => new { row.FromState, row.ToState }).AsEnumerable().Select(row => (Enum.Parse<JobState>(row.FromState), Enum.Parse<JobState>(row.ToState))).ToArray();
     private static void PersistTransition(LinqToDB.Data.DataConnection db, JobRow row, JobState from, JobState to, string now) { db.Execute("UPDATE Jobs SET State = @toState, UpdatedUtc = @nowUtc WHERE JobId = @jobId AND State = @fromState", new DataParameter("toState", to.ToString()), new DataParameter("nowUtc", now), new DataParameter("jobId", row.JobId), new DataParameter("fromState", from.ToString())); row.State = to.ToString(); row.UpdatedUtc = now; PersistHistory(db, Guid.Parse(row.JobId), from, to, now); }
     private static void PersistHistory(LinqToDB.Data.DataConnection db, Guid jobId, JobState from, JobState to, string now) => db.Insert(new JobStateTransitionRow { TransitionId = Guid.NewGuid().ToString(), JobId = jobId.ToString(), FromState = from.ToString(), ToState = to.ToString(), OccurredUtc = now });
     private static TransferJob ToJob(JobRow row) => new(Guid.Parse(row.JobId), Guid.Parse(row.RunId), Guid.Parse(row.PlanId), row.IdempotencyKey, Enum.Parse<JobState>(row.State));
