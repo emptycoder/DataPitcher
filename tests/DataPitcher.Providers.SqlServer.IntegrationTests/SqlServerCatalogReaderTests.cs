@@ -34,4 +34,16 @@ public sealed class SqlServerCatalogReaderTests(SqlServerClosureFixture fixture)
 
         await Assert.ThrowsAsync<NotSupportedException>(() => reader.ReadAsync("dbo", CancellationToken.None));
     }
+
+    [Fact]
+    public async Task ReadAsync_ReportsGeneratedAndBinaryColumns()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync("CREATE TABLE dbo.preview_metadata (id int PRIMARY KEY, payload varbinary(max) NOT NULL, calculated AS id + 1)");
+
+        var table = (await new SqlServerCatalogReader(scope.SourceConnectionString).ReadAsync("dbo", CancellationToken.None)).Table("preview_metadata");
+
+        Assert.Equal(typeof(byte[]), table.Column("payload").ClrType);
+        Assert.True(table.Column("calculated").IsGenerated);
+    }
 }

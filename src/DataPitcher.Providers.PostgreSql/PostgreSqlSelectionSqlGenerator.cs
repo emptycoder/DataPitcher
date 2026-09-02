@@ -2,7 +2,7 @@ using System.Text;
 using DataPitcher.Core.Schema;
 using DataPitcher.Core.Selection;
 namespace DataPitcher.Providers.PostgreSql;
-public sealed class PostgreSqlSelectionSqlGenerator
+public sealed class PostgreSqlSelectionSqlGenerator : ISelectionSqlCompiler
 {
     private static readonly string[] ComparisonTokens = [" = ", " <> ", " > ", " >= ", " < ", " <= "];
     private static readonly string[] LikePrefixes = [" LIKE ('%' || ", " LIKE (", " LIKE ('%' || "];
@@ -33,7 +33,7 @@ public sealed class PostgreSqlSelectionSqlGenerator
     }
     private static string EscapeLike(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("%", "\\%", StringComparison.Ordinal).Replace("_", "\\_", StringComparison.Ordinal);
     private static void Group(Writer w, string token, IReadOnlyList<SelectionPredicate> terms) { w.Token("("); for (var i = 0; i < terms.Count; i++) { if (i > 0) w.Token(token); Predicate(w, terms[i]); } w.Token(")"); }
-    private static void Columns(Writer w, string alias, IReadOnlyList<string> columns) { for (var i = 0; i < columns.Count; i++) { if (i > 0) w.Token(", "); w.Identifier(alias); w.Token("."); w.Identifier(columns[i]); } }
+    private static void Columns(Writer w, string alias, IReadOnlyList<string> columns) { for (var i = 0; i < columns.Count; i++) { if (i > 0) w.Token(", "); w.Identifier(alias); w.Token("."); w.Identifier(columns[i]); w.Token(" AS "); w.Identifier(SelectionKeyAliases.For(i)); } }
     private static void Pairs(Writer w, string leftAlias, IReadOnlyList<string> left, string rightAlias, IReadOnlyList<string> right) { for (var i = 0; i < left.Count; i++) { if (i > 0) w.Token(" AND "); w.Identifier(leftAlias); w.Token("."); w.Identifier(left[i]); w.Token(" = "); w.Identifier(rightAlias); w.Token("."); w.Identifier(right[i]); } }
     private static void Column(Writer w, SelectionColumn c) { w.Identifier(c.Alias); w.Token("."); w.Identifier(c.Name); }
     private static void Table(Writer w, TableDefinition t) { w.Identifier(t.Schema); w.Token("."); w.Identifier(t.Name); }

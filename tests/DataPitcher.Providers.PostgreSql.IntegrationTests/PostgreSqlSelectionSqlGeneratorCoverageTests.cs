@@ -13,7 +13,7 @@ public sealed class PostgreSqlSelectionSqlGeneratorCoverageTests
         var orders = new TableDefinition("sales", "orders", [new("tenant_id", typeof(int), false), new("id", typeof(int), false)], new("pk_orders", ["tenant_id", "id"]), []);
         var sql = new PostgreSqlSelectionSqlGenerator().Compile(new SelectionQuery(new([orders], []), new(orders, "o"), new(orders.PrimaryKey), [], null));
 
-        Assert.Equal("SELECT DISTINCT \"o\".\"tenant_id\", \"o\".\"id\" FROM \"sales\".\"orders\" AS \"o\"", sql.CommandText);
+        Assert.Equal("SELECT DISTINCT \"o\".\"tenant_id\" AS \"__datapitcher_key_0\", \"o\".\"id\" AS \"__datapitcher_key_1\" FROM \"sales\".\"orders\" AS \"o\"", sql.CommandText);
         Assert.Empty(sql.Parameters);
     }
 
