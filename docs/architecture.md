@@ -48,7 +48,7 @@ Both connections are revalidated on the server immediately before transfer begin
 | `tests/DataPitcher.UnitTests` | Unit tests for domain behavior without database infrastructure. |
 | `tests/DataPitcher.Api.IntegrationTests` | API boundary, transport, authorization, and host integration tests. |
 | `tests/DataPitcher.SqlServer.IntegrationTests` | SQL Server provider integration tests. |
-| `tests/DataPitcher.PostgreSql.IntegrationTests` | PostgreSQL provider integration tests. |
+| `tests/DataPitcher.Providers.PostgreSql.IntegrationTests` | PostgreSQL provider integration tests. |
 | `tests/DataPitcher.Auth.IntegrationTests` | Authentication-provider and authorization integration tests. |
 | `tests/DataPitcher.RecoveryTests` | Checkpoint, interruption, resume, and recovery tests. |
 | `tests/DataPitcher.PerformanceTests` | Discovery, closure, transfer, and throughput benchmark coverage. |

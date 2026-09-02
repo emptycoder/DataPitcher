@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace DataPitcher.PostgreSql.IntegrationTests;
+namespace DataPitcher.Providers.PostgreSql.IntegrationTests;
 
 public sealed class PostgreSqlClosureFixtureTests : IClassFixture<PostgreSqlClosureFixture>
 {

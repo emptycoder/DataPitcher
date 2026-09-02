@@ -1,7 +1,7 @@
 using System.Text;
 using DataPitcher.Core.Schema;
 using DataPitcher.Core.Selection;
-namespace DataPitcher.PostgreSql;
+namespace DataPitcher.Providers.PostgreSql;
 public sealed class PostgreSqlSelectionSqlGenerator
 {
     private static readonly string[] ComparisonTokens = [" = ", " <> ", " > ", " >= ", " < ", " <= "];

@@ -4,7 +4,7 @@
 
 **Goal:** Build a provider-free typed selection-query AST and a pure PostgreSQL compiler that emits parameterized SQL selecting distinct stable keys for exactly one declared root table.
 
-**Architecture:** `DataPitcher.Core` owns the schema-validated AST, predicate semantics, canonical normalization, and deterministic fingerprint; it references no provider, data-access, or ASP.NET package. `DataPitcher.PostgreSql` owns the SQL writer and invokes the existing `PostgreSqlIdentifier` for every identifier while returning Core parameter descriptions instead of executing commands. A generated query contains one `RootTable` and its declared stable-key constraint; joins and correlated `EXISTS` subqueries only constrain that root set, which preserves dependency-semantics section 2's rule that joined tables never become transfer roots.
+**Architecture:** `DataPitcher.Core` owns the schema-validated AST, predicate semantics, canonical normalization, and deterministic fingerprint; it references no provider, data-access, or ASP.NET package. `DataPitcher.Providers.PostgreSql` owns the SQL writer and invokes the existing `PostgreSqlIdentifier` for every identifier while returning Core parameter descriptions instead of executing commands. A generated query contains one `RootTable` and its declared stable-key constraint; joins and correlated `EXISTS` subqueries only constrain that root set, which preserves dependency-semantics section 2's rule that joined tables never become transfer roots.
 
 **Tech Stack:** .NET SDK 10.0.400, C# latest, xUnit 2.9.3, Coverlet, SHA-256, `StringBuilder`, Npgsql 10.0.3 provider project, Bash.
 
@@ -16,7 +16,7 @@
 - `src/DataPitcher.Core/Selection/SelectionQueryValidator.cs` — construction-time validation of schema membership, relationship paths, manual joins, aliases, operators, and parameter CLR types.
 - `src/DataPitcher.Core/Selection/SelectionQueryNormalizer.cs` — canonical, defensive normalized form for equivalent Boolean trees and set values.
 - `src/DataPitcher.Core/Selection/SelectionQueryFingerprint.cs` — SHA-256 fingerprint over the canonical structural representation.
-- `src/DataPitcher.PostgreSql/PostgreSqlSelectionSqlGenerator.cs` — pure PostgreSQL `SELECT DISTINCT` compiler and closed SQL-token writer.
+- `src/DataPitcher.Providers.PostgreSql/PostgreSqlSelectionSqlGenerator.cs` — pure PostgreSQL `SELECT DISTINCT` compiler and closed SQL-token writer.
 - `tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj` — adds a test-only reference to the existing PostgreSQL project so compiler tests remain Docker-free.
 - `tests/DataPitcher.UnitTests/Selection/SelectionQueryValidationTests.cs` — AST, operator, foreign-key/reverse-path, manual-join, alias, and typed-value validation tests.
 - `tests/DataPitcher.UnitTests/Selection/SelectionQueryNormalizationTests.cs` — canonical-form, fingerprint, and bounded property-based normalization tests.
@@ -29,7 +29,7 @@ This slice contains only the typed model and provider SQL generation. It exclude
 
 Raw SQL mode is deferred rather than represented by a string leaf. SQL is never assembled by ad hoc concatenation: the compiler accepts only quoted identifiers, fixed grammar tokens, and generated parameter names. Every operator value is a typed `SelectionParameterValue` that becomes a `SelectionSqlParameter`, never SQL text.
 
-Core contains only CLR types, normalized structures, parameter descriptions, and hashing; its architecture test forbids Npgsql, ADO.NET, ASP.NET, and provider references. PostgreSQL syntax, `LIKE` escaping, and token serialization live in `DataPitcher.PostgreSql`. SQL Server gets its own compiler and quoter later; do not add a Core abstraction with one implementation.
+Core contains only CLR types, normalized structures, parameter descriptions, and hashing; its architecture test forbids Npgsql, ADO.NET, ASP.NET, and provider references. PostgreSQL syntax, `LIKE` escaping, and token serialization live in `DataPitcher.Providers.PostgreSql`. SQL Server gets its own compiler and quoter later; do not add a Core abstraction with one implementation.
 
 Known `ForeignKeyDefinition` joins traverse child-to-parent or parent-to-child; consecutive joins form a path. Manual joins require schema tables, an in-scope source alias, a unique `[A-Za-z_][A-Za-z0-9_]*` alias, nonempty existing column pairs, and equal CLR types. This slice has only inner joins; outer joins, arbitrary fragments, grouping, ordering, extra projection, and set operations are deferred.
 
@@ -327,7 +327,7 @@ Run: `git add src/DataPitcher.Core/Selection/SelectionQueryNormalizer.cs src/Dat
 ### Task 3: Generate parameterized PostgreSQL root-key SQL
 
 **Files:**
-- Create: `src/DataPitcher.PostgreSql/PostgreSqlSelectionSqlGenerator.cs`, `tests/DataPitcher.UnitTests/Selection/PostgreSqlSelectionSqlGeneratorTests.cs`
+- Create: `src/DataPitcher.Providers.PostgreSql/PostgreSqlSelectionSqlGenerator.cs`, `tests/DataPitcher.UnitTests/Selection/PostgreSqlSelectionSqlGeneratorTests.cs`
 - Modify: `tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj`
 - Test: `tests/DataPitcher.UnitTests/Selection/PostgreSqlSelectionSqlGeneratorTests.cs`
 
@@ -335,7 +335,7 @@ Run: `git add src/DataPitcher.Core/Selection/SelectionQueryNormalizer.cs src/Dat
 
 ```csharp
 using DataPitcher.Core.Selection;
-using DataPitcher.PostgreSql;
+using DataPitcher.Providers.PostgreSql;
 using Xunit;
 namespace DataPitcher.UnitTests.Selection;
 public sealed class PostgreSqlSelectionSqlGeneratorTests
@@ -381,20 +381,20 @@ public sealed class PostgreSqlSelectionSqlGeneratorTests
 
 Run: `./scripts/test-unit.sh --filter "FullyQualifiedName~PostgreSqlSelectionSqlGeneratorTests"`
 
-Expected: compilation fails with CS0234 because `DataPitcher.PostgreSql` is not referenced by `DataPitcher.UnitTests`, and CS0246 because `PostgreSqlSelectionSqlGenerator` does not exist. This validates the test project has not accidentally acquired provider behavior before the pure compiler is introduced.
+Expected: compilation fails with CS0234 because `DataPitcher.Providers.PostgreSql` is not referenced by `DataPitcher.UnitTests`, and CS0246 because `PostgreSqlSelectionSqlGenerator` does not exist. This validates the test project has not accidentally acquired provider behavior before the pure compiler is introduced.
 
 - [ ] **Step 3: Add the test-only project reference and closed PostgreSQL SQL writer.**
 
 ```xml
 <!-- tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj: add inside ItemGroup -->
-<ProjectReference Include="../../src/DataPitcher.PostgreSql/DataPitcher.PostgreSql.csproj" />
+<ProjectReference Include="../../src/DataPitcher.Providers.PostgreSql/DataPitcher.Providers.PostgreSql.csproj" />
 ```
 
 ```csharp
 using System.Text;
 using DataPitcher.Core.Schema;
 using DataPitcher.Core.Selection;
-namespace DataPitcher.PostgreSql;
+namespace DataPitcher.Providers.PostgreSql;
 public sealed class PostgreSqlSelectionSqlGenerator
 {
     public GeneratedSelectionSql Compile(SelectionQuery source)
@@ -425,7 +425,7 @@ Expected: focused tests pass without Docker. Metacharacters appear only in escap
 
 - [ ] **Step 5: Run the complete Docker-free unit lane and commit the compiler.**
 
-Run: `./scripts/test-unit.sh && git add tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj src/DataPitcher.PostgreSql/PostgreSqlSelectionSqlGenerator.cs tests/DataPitcher.UnitTests/Selection/PostgreSqlSelectionSqlGeneratorTests.cs && git commit -m "feat: generate postgres selection SQL"`
+Run: `./scripts/test-unit.sh && git add tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj src/DataPitcher.Providers.PostgreSql/PostgreSqlSelectionSqlGenerator.cs tests/DataPitcher.UnitTests/Selection/PostgreSqlSelectionSqlGeneratorTests.cs && git commit -m "feat: generate postgres selection SQL"`
 
 Expected: the Docker-free Core unit and architecture suites pass. Docker-capable CI subsequently runs the unchanged merged 100 percent `./scripts/test-all.sh` gate.
 

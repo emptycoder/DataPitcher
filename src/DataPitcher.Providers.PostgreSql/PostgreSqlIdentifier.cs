@@ -1,4 +1,4 @@
-namespace DataPitcher.PostgreSql;
+namespace DataPitcher.Providers.PostgreSql;
 
 public static class PostgreSqlIdentifier
 {

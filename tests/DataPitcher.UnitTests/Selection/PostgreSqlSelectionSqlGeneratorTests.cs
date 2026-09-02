@@ -1,5 +1,5 @@
 using DataPitcher.Core.Selection;
-using DataPitcher.PostgreSql;
+using DataPitcher.Providers.PostgreSql;
 using Xunit;
 namespace DataPitcher.UnitTests.Selection;
 public sealed class PostgreSqlSelectionSqlGeneratorTests

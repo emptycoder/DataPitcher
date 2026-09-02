@@ -3,7 +3,7 @@ using DataPitcher.Core.Schema;
 using Npgsql;
 using NpgsqlTypes;
 
-namespace DataPitcher.PostgreSql;
+namespace DataPitcher.Providers.PostgreSql;
 
 public sealed class PostgreSqlStagingTables : IAsyncDisposable
 {

@@ -3,7 +3,7 @@ using DataPitcher.Core.Identity;
 using DataPitcher.Core.Schema;
 using Xunit;
 
-namespace DataPitcher.PostgreSql.IntegrationTests;
+namespace DataPitcher.Providers.PostgreSql.IntegrationTests;
 
 // Real-engine re-run of tests/DataPitcher.UnitTests/Closure/DependencyClosureTests.cs lines 5-35
 // (the 31 behavioural fixtures). Every assertion below is unchanged from that file: same

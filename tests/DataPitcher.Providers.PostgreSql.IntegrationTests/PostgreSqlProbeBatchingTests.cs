@@ -3,7 +3,7 @@ using DataPitcher.Core.Identity;
 using DataPitcher.Core.Schema;
 using Xunit;
 
-namespace DataPitcher.PostgreSql.IntegrationTests;
+namespace DataPitcher.Providers.PostgreSql.IntegrationTests;
 
 // Slice 1 counted calls to the IClosureStore interface and proved the ALGORITHM batches its
 // probes. That says nothing about the PROVIDER: PostgreSqlClosureStore.ProbeTargetAsync could

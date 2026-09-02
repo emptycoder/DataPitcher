@@ -2,7 +2,7 @@ using Npgsql;
 using Testcontainers.PostgreSql;
 using Xunit;
 
-namespace DataPitcher.PostgreSql.IntegrationTests;
+namespace DataPitcher.Providers.PostgreSql.IntegrationTests;
 
 public sealed class PostgreSqlContainerTests
 {

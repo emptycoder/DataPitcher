@@ -13,9 +13,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataPitcher.UnitTests", "te
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataPitcher.ArchitectureTests", "tests\DataPitcher.ArchitectureTests\DataPitcher.ArchitectureTests.csproj", "{C7035578-2A34-4F62-B758-7A5C9D992014}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataPitcher.PostgreSql.IntegrationTests", "tests\DataPitcher.PostgreSql.IntegrationTests\DataPitcher.PostgreSql.IntegrationTests.csproj", "{B8D49501-86F1-4EFD-A346-557ED01AD749}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataPitcher.Providers.PostgreSql.IntegrationTests", "tests\DataPitcher.Providers.PostgreSql.IntegrationTests\DataPitcher.Providers.PostgreSql.IntegrationTests.csproj", "{B8D49501-86F1-4EFD-A346-557ED01AD749}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataPitcher.PostgreSql", "src\DataPitcher.PostgreSql\DataPitcher.PostgreSql.csproj", "{0B42F98C-7409-4BCE-87C2-AB4353C8F729}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataPitcher.Providers.PostgreSql", "src\DataPitcher.Providers.PostgreSql\DataPitcher.Providers.PostgreSql.csproj", "{0B42F98C-7409-4BCE-87C2-AB4353C8F729}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataPitcher.Auth.Abstractions", "src\DataPitcher.Auth.Abstractions\DataPitcher.Auth.Abstractions.csproj", "{9C495137-4752-4088-B870-C3C0F50D7D11}"
 EndProject

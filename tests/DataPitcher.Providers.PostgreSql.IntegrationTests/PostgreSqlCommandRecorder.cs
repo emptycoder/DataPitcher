@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using DataPitcher.Core.Schema;
 using Microsoft.Extensions.Logging;
 
-namespace DataPitcher.PostgreSql.IntegrationTests;
+namespace DataPitcher.Providers.PostgreSql.IntegrationTests;
 
 // A driver database-command execution log, not a store method-call counter. Wired into the
 // target NpgsqlDataSource via UseLoggerFactory so every command Npgsql actually sends to

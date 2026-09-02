@@ -1,7 +1,7 @@
 using DataPitcher.Core.Schema;
 using Npgsql;
 
-namespace DataPitcher.PostgreSql;
+namespace DataPitcher.Providers.PostgreSql;
 
 public sealed record PostgreSqlTable(TableDefinition Definition)
 {

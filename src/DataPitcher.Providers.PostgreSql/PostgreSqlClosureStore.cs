@@ -3,7 +3,7 @@ using DataPitcher.Core.Identity;
 using DataPitcher.Core.Schema;
 using Npgsql;
 
-namespace DataPitcher.PostgreSql;
+namespace DataPitcher.Providers.PostgreSql;
 
 public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
 {

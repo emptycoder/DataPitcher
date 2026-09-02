@@ -13,20 +13,20 @@
 ## File Structure
 
 - `DataPitcher.sln` — add the PostgreSQL provider project.
-- `src/DataPitcher.PostgreSql/DataPitcher.PostgreSql.csproj` — Core reference and pinned Npgsql 10.0.3.
-- `src/DataPitcher.PostgreSql/PostgreSqlCatalogReader.cs` — PostgreSQL catalog snapshot, native type metadata, and manual-relationship mapping.
-- `src/DataPitcher.PostgreSql/PostgreSqlIdentifier.cs` — PostgreSQL identifier quoting.
-- `src/DataPitcher.PostgreSql/PostgreSqlStagingTables.cs` — plan-scoped typed source/input/target key stages and binary COPY movement.
-- `src/DataPitcher.PostgreSql/PostgreSqlClosureStore.cs` — real `IClosureStore` implementation and set-based probe/expand SQL.
-- `tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj` — references Core and provider while retaining the pinned integration packages.
-- `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs` — two-container reusable fixture, unique schemas, deterministic DDL, and real-row scenario setup.
-- `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlCatalogReaderTests.cs` — catalog declaration-order, nullability/type, unique-key, FK, and validation tests.
-- `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlIdentifierTests.cs` — quoted identifier safety tests.
-- `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlStagingTablesTests.cs` — typed stages, immutable generations, cleanup, and concurrent-plan isolation tests.
-- `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlClosureStoreTests.cs` — direct real-store expansion and stable-key materialization tests.
-- `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlDependencyClosureTests.cs` — real-engine copies of Slice 1’s first 31 behavioural fixtures with identical assertions.
-- `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlCommandRecorder.cs` — Npgsql execution-log recorder used to count emitted target probe commands.
-- `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlProbeBatchingTests.cs` — database-command batching proof.
+- `src/DataPitcher.Providers.PostgreSql/DataPitcher.Providers.PostgreSql.csproj` — Core reference and pinned Npgsql 10.0.3.
+- `src/DataPitcher.Providers.PostgreSql/PostgreSqlCatalogReader.cs` — PostgreSQL catalog snapshot, native type metadata, and manual-relationship mapping.
+- `src/DataPitcher.Providers.PostgreSql/PostgreSqlIdentifier.cs` — PostgreSQL identifier quoting.
+- `src/DataPitcher.Providers.PostgreSql/PostgreSqlStagingTables.cs` — plan-scoped typed source/input/target key stages and binary COPY movement.
+- `src/DataPitcher.Providers.PostgreSql/PostgreSqlClosureStore.cs` — real `IClosureStore` implementation and set-based probe/expand SQL.
+- `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj` — references Core and provider while retaining the pinned integration packages.
+- `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs` — two-container reusable fixture, unique schemas, deterministic DDL, and real-row scenario setup.
+- `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlCatalogReaderTests.cs` — catalog declaration-order, nullability/type, unique-key, FK, and validation tests.
+- `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlIdentifierTests.cs` — quoted identifier safety tests.
+- `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlStagingTablesTests.cs` — typed stages, immutable generations, cleanup, and concurrent-plan isolation tests.
+- `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlClosureStoreTests.cs` — direct real-store expansion and stable-key materialization tests.
+- `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlDependencyClosureTests.cs` — real-engine copies of Slice 1’s first 31 behavioural fixtures with identical assertions.
+- `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlCommandRecorder.cs` — Npgsql execution-log recorder used to count emitted target probe commands.
+- `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlProbeBatchingTests.cs` — database-command batching proof.
 - `scripts/test-unit.sh` — Docker-free unit plus architecture tests; collects and prints coverage for information only, no threshold gate.
 - `scripts/test-postgres.sh` — PostgreSQL integration tests, no coverage gate.
 - `scripts/test-all.sh` — the sole 100% line/branch/method coverage gate, run as a single pass over the whole solution.
@@ -43,7 +43,7 @@ ADR 0005 forbids LINQ to DB `BulkCopy` in this write path. Do not add LINQ to DB
 
 **Why the coverage gate is aggregate-only:** Coverage is a property of the whole set of handwritten production code, not of any one test lane. `scripts/test-postgres.sh` runs only the integration project; today that project references no production code at all, so a gate on that lane alone instruments nothing and fails by construction (0/0 is reported as 0%, not 100%). Once provider code exists (Tasks 3–8), the unit lane still never exercises it — it requires a real database — and the integration lane never exercises the domain that the unit lane covers. No single lane can ever satisfy a 100% gate once both kinds of production code exist. The gate must therefore live only in `scripts/test-all.sh`, which runs the whole solution in one pass across every emitted report before computing the percentage.
 
-The per-report reports are not disjoint by assembly. An integration test project necessarily references the production code it exercises, so once the PostgreSQL provider project exists, `DataPitcher.Core` is instrumented in both the unit report (fully, via `DataPitcher.UnitTests`) and the integration report (partially, via the provider's transitive reference), because `DataPitcher.PostgreSql.IntegrationTests` links `DataPitcher.PostgreSql`, which links `DataPitcher.Core`. Summing raw sequence/branch/method counts across reports double-counts that shared assembly and drives the aggregate below 100% even when every line is covered by some test. The correct operation across multiple reports of the same solution is a per-assembly, per-method, per-line UNION, not a sum: a line counts as covered if any report says so. `scripts/test-all.sh` therefore merges every emitted `coverage.opencover.xml` with ReportGenerator before computing the percentage, and gates on the merged figures. Do not add a per-lane coverage gate; if one is proposed later, point back to this note.
+The per-report reports are not disjoint by assembly. An integration test project necessarily references the production code it exercises, so once the PostgreSQL provider project exists, `DataPitcher.Core` is instrumented in both the unit report (fully, via `DataPitcher.UnitTests`) and the integration report (partially, via the provider's transitive reference), because `DataPitcher.Providers.PostgreSql.IntegrationTests` links `DataPitcher.Providers.PostgreSql`, which links `DataPitcher.Core`. Summing raw sequence/branch/method counts across reports double-counts that shared assembly and drives the aggregate below 100% even when every line is covered by some test. The correct operation across multiple reports of the same solution is a per-assembly, per-method, per-line UNION, not a sum: a line counts as covered if any report says so. `scripts/test-all.sh` therefore merges every emitted `coverage.opencover.xml` with ReportGenerator before computing the percentage, and gates on the merged figures. Do not add a per-lane coverage gate; if one is proposed later, point back to this note.
 
 **Files:**
 - Create: `scripts/test-unit.sh`, `scripts/test-postgres.sh`
@@ -80,8 +80,8 @@ fi
 #!/usr/bin/env bash
 # scripts/test-postgres.sh — integration lane only, no coverage collection or gate.
 set -euo pipefail
-dotnet build tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj
-dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --no-build "$@"
+dotnet build tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj
+dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --no-build "$@"
 ```
 
 Replace `scripts/test-all.sh` with a script that builds and runs `dotnet test DataPitcher.sln` once with coverage collection, then sums `numSequencePoints`/`visitedSequencePoints`, `numBranchPoints`/`visitedBranchPoints`, and `numMethods`/`visitedMethods` across every `coverage.opencover.xml` the solution-wide run emits (one per test project), and gates at 100% on the summed totals — not on any single report's own percentage. Summing raw counts, rather than averaging each report's own percentage, is what makes an all-zero report (an instrumented-nothing lane) a harmless no-op addition instead of a spurious 0%. Replace the workflow's unit job step label to drop "coverage gate" language (the unit lane no longer gates); keep it running `./scripts/test-unit.sh` after `libxml2-utils`, and keep the separate `postgres` job running `./scripts/test-postgres.sh` labelled `Run PostgreSQL container integration tests`.
@@ -99,9 +99,9 @@ Run: `git add scripts/test-unit.sh scripts/test-postgres.sh scripts/test-all.sh 
 ### Task 2: A seeded PostgreSQL test database
 
 **Files:**
-- Create: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs`
+- Create: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs`
 - Modify: none
-- Test: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs`
+- Test: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs`
 
 - [ ] **Step 1: Write the failing fixture test.**
 
@@ -117,7 +117,7 @@ public async Task Scope_WhenCreated_ContainsDeterministicSchemaAndUnvalidatedFor
 
 - [ ] **Step 2: Run it and confirm the missing-fixture failure.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlClosureFixtureTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlClosureFixtureTests"`
 
 Expected: compilation fails with `The type or namespace name 'PostgreSqlClosureFixture' could not be found`.
 
@@ -179,20 +179,20 @@ ALTER TABLE untrusted_parents ADD CONSTRAINT "Target_FK_P_G" FOREIGN KEY (grandp
 
 - [ ] **Step 4: Run the fixture test and confirm it passes.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlClosureFixtureTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlClosureFixtureTests"`
 
 Expected: one passing test; both PostgreSQL 17 containers start, the scope sees the specified schema, and `Target_FK_P_G` reports `convalidated = false`.
 
 - [ ] **Step 5: Commit the fixture.**
 
-Run: `git add tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs && git commit -m "test: add seeded postgres closure fixture"`
+Run: `git add tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs && git commit -m "test: add seeded postgres closure fixture"`
 
 ### Task 3: PostgreSQL catalog introspection
 
 **Files:**
-- Create: `src/DataPitcher.PostgreSql/DataPitcher.PostgreSql.csproj`, `src/DataPitcher.PostgreSql/PostgreSqlCatalogReader.cs`, `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlCatalogReaderTests.cs`
-- Modify: `DataPitcher.sln`, `tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj`
-- Test: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlCatalogReaderTests.cs`
+- Create: `src/DataPitcher.Providers.PostgreSql/DataPitcher.Providers.PostgreSql.csproj`, `src/DataPitcher.Providers.PostgreSql/PostgreSqlCatalogReader.cs`, `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlCatalogReaderTests.cs`
+- Modify: `DataPitcher.sln`, `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj`
+- Test: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlCatalogReaderTests.cs`
 
 - [ ] **Step 1: Write the failing catalog tests.**
 
@@ -216,14 +216,14 @@ public async Task ReadAsync_UsesConstraintDeclarationOrderAndReadsValidation()
 
 - [ ] **Step 2: Run them and confirm the catalog reader is absent.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlCatalogReaderTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlCatalogReaderTests"`
 
-Expected: compilation fails because `DataPitcher.PostgreSql` and `PostgreSqlCatalogReader` do not exist.
+Expected: compilation fails because `DataPitcher.Providers.PostgreSql` and `PostgreSqlCatalogReader` do not exist.
 
 - [ ] **Step 3: Add the provider project and catalog implementation.**
 
 ```xml
-<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><RootNamespace>DataPitcher.PostgreSql</RootNamespace></PropertyGroup><ItemGroup><ProjectReference Include="../DataPitcher.Core/DataPitcher.Core.csproj" /><PackageReference Include="Npgsql" Version="10.0.3" /></ItemGroup></Project>
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><RootNamespace>DataPitcher.Providers.PostgreSql</RootNamespace></PropertyGroup><ItemGroup><ProjectReference Include="../DataPitcher.Core/DataPitcher.Core.csproj" /><PackageReference Include="Npgsql" Version="10.0.3" /></ItemGroup></Project>
 ```
 
 ```csharp
@@ -256,20 +256,20 @@ The queries use constraint ordinality, not `attnum`; read `convalidated` and tri
 
 - [ ] **Step 4: Run the tests and confirm catalog facts pass.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlCatalogReaderTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlCatalogReaderTests"`
 
 Expected: one passing test proving key declaration order, nullable CLR metadata, unique-only identity metadata, ordered composite FK metadata, and target `NOT VALID` state.
 
 - [ ] **Step 5: Commit catalog discovery.**
 
-Run: `git add DataPitcher.sln src/DataPitcher.PostgreSql tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlCatalogReaderTests.cs && git commit -m "feat: read postgres closure metadata"`
+Run: `git add DataPitcher.sln src/DataPitcher.Providers.PostgreSql tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlCatalogReaderTests.cs && git commit -m "feat: read postgres closure metadata"`
 
 ### Task 4: Identifier quoting
 
 **Files:**
-- Create: `src/DataPitcher.PostgreSql/PostgreSqlIdentifier.cs`, `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlIdentifierTests.cs`
+- Create: `src/DataPitcher.Providers.PostgreSql/PostgreSqlIdentifier.cs`, `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlIdentifierTests.cs`
 - Modify: none
-- Test: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlIdentifierTests.cs`
+- Test: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlIdentifierTests.cs`
 
 - [ ] **Step 1: Write the failing quoter test.**
 
@@ -288,14 +288,14 @@ public async Task Quote_EscapesEmbeddedQuotesAndExecutesCaseSensitiveReservedNam
 
 - [ ] **Step 2: Run it and confirm the quoter failure.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlIdentifierTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlIdentifierTests"`
 
 Expected: compilation fails with `The name 'PostgreSqlIdentifier' does not exist in the current context`.
 
 - [ ] **Step 3: Implement the quoter.**
 
 ```csharp
-namespace DataPitcher.PostgreSql;
+namespace DataPitcher.Providers.PostgreSql;
 public static class PostgreSqlIdentifier
 {
     public static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
@@ -307,20 +307,20 @@ Use this helper for every catalog-derived schema/table/column/constraint name an
 
 - [ ] **Step 4: Run the test and confirm it passes.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlIdentifierTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlIdentifierTests"`
 
 Expected: one passing test, including an identifier containing a double quote; no unquoted identifier interpolation remains.
 
 - [ ] **Step 5: Commit quoting.**
 
-Run: `git add src/DataPitcher.PostgreSql/PostgreSqlIdentifier.cs tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlIdentifierTests.cs && git commit -m "feat: quote postgres identifiers"`
+Run: `git add src/DataPitcher.Providers.PostgreSql/PostgreSqlIdentifier.cs tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlIdentifierTests.cs && git commit -m "feat: quote postgres identifiers"`
 
 ### Task 5: Typed staging tables
 
 **Files:**
-- Create: `src/DataPitcher.PostgreSql/PostgreSqlStagingTables.cs`, `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlStagingTablesTests.cs`
+- Create: `src/DataPitcher.Providers.PostgreSql/PostgreSqlStagingTables.cs`, `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlStagingTablesTests.cs`
 - Modify: none
-- Test: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlStagingTablesTests.cs`
+- Test: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlStagingTablesTests.cs`
 
 - [ ] **Step 1: Write the failing concurrent-plan test.**
 
@@ -345,7 +345,7 @@ public async Task Stages_UseTypedKeysImmutableGenerationAndDifferentPhysicalName
 
 - [ ] **Step 2: Run it and confirm staging is missing.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlStagingTablesTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlStagingTablesTests"`
 
 Expected: compilation fails because `PostgreSqlStagingTables` does not exist.
 
@@ -385,20 +385,20 @@ Stages use catalog store types, binary COPY, `UNIQUE (k0,...)`, and conflict-ign
 
 - [ ] **Step 4: Run the staging test and confirm it passes.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlStagingTablesTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlStagingTablesTests"`
 
 Expected: one passing test; both plans accept the same composite key without collision, the source catalog type is used for each `kN`, duplicate insertion preserves generation 1, and disposal removes generated stages.
 
 - [ ] **Step 5: Commit staging.**
 
-Run: `git add src/DataPitcher.PostgreSql/PostgreSqlStagingTables.cs tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlStagingTablesTests.cs && git commit -m "feat: stage typed postgres closure keys"`
+Run: `git add src/DataPitcher.Providers.PostgreSql/PostgreSqlStagingTables.cs tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlStagingTablesTests.cs && git commit -m "feat: stage typed postgres closure keys"`
 
 ### Task 6: The four store operations in real SQL
 
 **Files:**
-- Create: `src/DataPitcher.PostgreSql/PostgreSqlClosureStore.cs`
+- Create: `src/DataPitcher.Providers.PostgreSql/PostgreSqlClosureStore.cs`
 - Modify: none
-- Test: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlClosureStoreTests.cs`
+- Test: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlClosureStoreTests.cs`
 
 - [ ] **Step 1: Write the failing positional-composite store test.**
 
@@ -419,7 +419,7 @@ public async Task ExpandAsync_UsesForeignKeyPositionRatherThanPhysicalColumnOrde
 
 - [ ] **Step 2: Run it and confirm the store does not exist.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~ExpandAsync_UsesForeignKeyPosition"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~ExpandAsync_UsesForeignKeyPosition"`
 
 Expected: compilation fails with `The type or namespace name 'PostgreSqlClosureStore' could not be found`.
 
@@ -469,20 +469,20 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
 
 - [ ] **Step 4: Run the store tests and confirm they pass.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~ExpandAsync_UsesForeignKeyPosition"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~ExpandAsync_UsesForeignKeyPosition"`
 
 Expected: the test passes only for `(child_right, child_left) -> (left_value, right_value)`; swapping either positional list makes its required parent absent and fails the assertion.
 
 - [ ] **Step 5: Commit the real store.**
 
-Run: `git add src/DataPitcher.PostgreSql/PostgreSqlClosureStore.cs tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlClosureStoreTests.cs && git commit -m "feat: add postgres closure store"`
+Run: `git add src/DataPitcher.Providers.PostgreSql/PostgreSqlClosureStore.cs tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlClosureStoreTests.cs && git commit -m "feat: add postgres closure store"`
 
 ### Task 7: Re-run Slice 1’s closure tests against the real store
 
 **Files:**
-- Create: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlDependencyClosureTests.cs`
+- Create: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlDependencyClosureTests.cs`
 - Modify: none
-- Test: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlDependencyClosureTests.cs`
+- Test: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlDependencyClosureTests.cs`
 
 - [ ] **Step 1: Write the failing real-store contract suite.**
 
@@ -501,7 +501,7 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
 
 - [ ] **Step 2: Run the suite and confirm the first real-engine failure.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlDependencyClosureTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlDependencyClosureTests"`
 
 Expected: the copied suite fails while `PostgreSqlClosureStore` does not yet return real staged expansion/probe results; the diamond assertion is the first required red failure.
 
@@ -519,20 +519,20 @@ Include the child/parent, default inbound exclusion, explicit inbound, nullable 
 
 - [ ] **Step 4: Run the named point-of-the-slice verification.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlDependencyClosureTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlDependencyClosureTests"`
 
 Expected: `Passed: 31. Failed: 0.` Every copied assertion passes unchanged against separate real source and target PostgreSQL containers; if any assertion needs alteration, stop and report a seam finding instead of weakening it.
 
 - [ ] **Step 5: Commit the real-engine behavioural re-run.**
 
-Run: `git add tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlDependencyClosureTests.cs && git commit -m "test: rerun closure contract against postgres"`
+Run: `git add tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlDependencyClosureTests.cs && git commit -m "test: rerun closure contract against postgres"`
 
 ### Task 8: Prove the batching claim
 
 **Files:**
-- Create: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlCommandRecorder.cs`, `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlProbeBatchingTests.cs`
-- Modify: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs`
-- Test: `tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlProbeBatchingTests.cs`
+- Create: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlCommandRecorder.cs`, `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlProbeBatchingTests.cs`
+- Modify: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs`
+- Test: `tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlProbeBatchingTests.cs`
 
 - [ ] **Step 1: Write the failing emitted-command test.**
 
@@ -552,7 +552,7 @@ public async Task ComputeAsync_ProbesEachTableOncePerGeneration_NotOncePerKey()
 
 - [ ] **Step 2: Run it and confirm the recorder is absent.**
 
-Run: `dotnet test tests/DataPitcher.PostgreSql.IntegrationTests/DataPitcher.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlProbeBatchingTests"`
+Run: `dotnet test tests/DataPitcher.Providers.PostgreSql.IntegrationTests/DataPitcher.Providers.PostgreSql.IntegrationTests.csproj --filter "FullyQualifiedName~PostgreSqlProbeBatchingTests"`
 
 Expected: compilation fails with `The type or namespace name 'PostgreSqlCommandRecorder' could not be found`.
 
@@ -580,7 +580,7 @@ Expected: all PostgreSQL integration tests pass with 100% coverage; the batching
 
 - [ ] **Step 5: Commit the batching proof.**
 
-Run: `git add tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlCommandRecorder.cs tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlProbeBatchingTests.cs tests/DataPitcher.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs && git commit -m "test: prove postgres target probe batching"`
+Run: `git add tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlCommandRecorder.cs tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlProbeBatchingTests.cs tests/DataPitcher.Providers.PostgreSql.IntegrationTests/PostgreSqlClosureFixture.cs && git commit -m "test: prove postgres target probe batching"`
 
 ## Self-Review
 

@@ -1,10 +1,10 @@
 using DataPitcher.Core.Closure;
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Schema;
-using DataPitcher.PostgreSql;
+using DataPitcher.Providers.PostgreSql;
 using Xunit;
 
-namespace DataPitcher.PostgreSql.IntegrationTests;
+namespace DataPitcher.Providers.PostgreSql.IntegrationTests;
 
 public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosureFixture>
 {
