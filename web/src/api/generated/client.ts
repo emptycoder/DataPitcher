@@ -12,6 +12,42 @@ export interface EffectivePermissions {
   permissions: string[];
 }
 
+export type PlanSchemaDependencyGraphTableState = typeof PlanSchemaDependencyGraphTableState[keyof typeof PlanSchemaDependencyGraphTableState];
+
+
+export const PlanSchemaDependencyGraphTableState = {
+  unselected: 'unselected',
+  'root-selected': 'root-selected',
+  'required-dependency': 'required-dependency',
+  'explicit-dependent': 'explicit-dependent',
+  'target-satisfied': 'target-satisfied',
+  blocked: 'blocked',
+  conflict: 'conflict',
+  'cycle-member': 'cycle-member',
+} as const;
+
+export interface PlanSchemaDependencyGraphTable {
+  id: string;
+  schema: string;
+  name: string;
+  componentId: string;
+  state: PlanSchemaDependencyGraphTableState;
+}
+
+export interface PlanSchemaDependencyGraphRelationship {
+  id: string;
+  name: string;
+  childTableId: string;
+  parentTableId: string;
+}
+
+export interface PlanSchemaDependencyGraph {
+  revision: string;
+  plannedTableIds: string[];
+  tables: PlanSchemaDependencyGraphTable[];
+  relationships: PlanSchemaDependencyGraphRelationship[];
+}
+
 export type effectivePermissionsResponse200 = {
   data: EffectivePermissions
   status: 200
@@ -48,4 +84,44 @@ export const effectivePermissions = async ( options?: RequestInit): Promise<effe
 
   const data: effectivePermissionsResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as effectivePermissionsResponse
+}
+
+
+
+export type planSchemaDependencyGraphResponse200 = {
+  data: PlanSchemaDependencyGraph
+  status: 200
+}
+
+export type planSchemaDependencyGraphResponseSuccess = (planSchemaDependencyGraphResponse200) & {
+  headers: Headers;
+};
+;
+
+export type planSchemaDependencyGraphResponse = (planSchemaDependencyGraphResponseSuccess)
+
+export const getPlanSchemaDependencyGraphUrl = (planId: string,) => {
+
+
+
+
+  return `/api/plans/${planId}/schema-dependency-graph`
+}
+
+export const planSchemaDependencyGraph = async (planId: string, options?: RequestInit): Promise<planSchemaDependencyGraphResponse> => {
+
+  const res = await fetch(getPlanSchemaDependencyGraphUrl(planId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: planSchemaDependencyGraphResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as planSchemaDependencyGraphResponse
 }

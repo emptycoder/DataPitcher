@@ -11,3 +11,26 @@ export const EffectivePermissionsResponse = zod.object({
   "tenantId": zod.string().min(1),
   "permissions": zod.array(zod.string())
 })
+
+
+export const PlanSchemaDependencyGraphParams = zod.object({
+  "planId": zod.string()
+})
+
+export const PlanSchemaDependencyGraphResponse = zod.object({
+  "revision": zod.string(),
+  "plannedTableIds": zod.array(zod.string()),
+  "tables": zod.array(zod.object({
+  "id": zod.string(),
+  "schema": zod.string(),
+  "name": zod.string(),
+  "componentId": zod.string(),
+  "state": zod.enum(['unselected', 'root-selected', 'required-dependency', 'explicit-dependent', 'target-satisfied', 'blocked', 'conflict', 'cycle-member'])
+})),
+  "relationships": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "childTableId": zod.string(),
+  "parentTableId": zod.string()
+}))
+})
