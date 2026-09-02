@@ -202,8 +202,15 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
    ```tsx
     import { afterEach, expect, it } from 'vitest';
     import { render, screen } from '@testing-library/react';
-    import { createPreferencesStore, preferenceActions } from './preferencesStore';
-    import { sessionActions, useSessionIdentity, useSourceConnectionId, useTargetConnectionId } from './sessionStore';
+     import { createPreferencesStore } from './preferencesStore';
+     import { sessionActions, useSessionIdentity, useSourceConnectionId, useTargetConnectionId } from './sessionStore';
+
+     const preferenceValues = new Map<string, string>();
+     const preferences = createPreferencesStore({
+       getItem: (name) => preferenceValues.get(name) ?? null,
+       setItem: (name, value) => { preferenceValues.set(name, value); },
+       removeItem: (name) => { preferenceValues.delete(name); },
+     });
 
     function SessionProbe() {
       const identity = useSessionIdentity();
@@ -215,12 +222,13 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
       return <output role="status">{`${preferences.useColorScheme()}|${preferences.useReducedMotion()}`}</output>;
     }
 
-   afterEach(() => {
-     sessionActions.setIdentity(null);
-     sessionActions.setConnectionIds(null, null);
-     preferenceActions.setColorScheme('system');
-     preferenceActions.setReducedMotion(false);
-    });
+    afterEach(() => {
+      sessionActions.setIdentity(null);
+      sessionActions.setConnectionIds(null, null);
+      preferences.actions.setColorScheme('system');
+      preferences.actions.setReducedMotion(false);
+      preferenceValues.clear();
+     });
 
    it('exposes only named session identifiers through selectors', () => {
      sessionActions.setIdentity({ subjectId: 'operator-1', tenantId: 'tenant-1' });
@@ -229,19 +237,13 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
      expect(screen.getByRole('status')).toHaveTextContent('operator-1|source-1|target-1');
    });
 
-    it('persists only the preference allowlist', () => {
-      const values = new Map<string, string>();
-      const preferences = createPreferencesStore({
-        getItem: (name) => values.get(name) ?? null,
-        setItem: (name, value) => { values.set(name, value); },
-        removeItem: (name) => { values.delete(name); },
-      });
-      preferences.actions.setColorScheme('dark');
-      render(<PreferenceProbe preferences={preferences} />);
-      expect(screen.getByRole('status')).toHaveTextContent('dark|false');
-      expect(JSON.parse(values.get('datapitcher.preferences')!).state)
-         .toEqual({ colorScheme: 'dark', reducedMotion: false });
-    });
+     it('persists only the preference allowlist', () => {
+       preferences.actions.setColorScheme('dark');
+       render(<PreferenceProbe preferences={preferences} />);
+       expect(screen.getByRole('status')).toHaveTextContent('dark|false');
+       expect(JSON.parse(preferenceValues.get('datapitcher.preferences')!).state)
+          .toEqual({ colorScheme: 'dark', reducedMotion: false });
+     });
     ```
 
     The Vite configuration rejects imports from `src/api` in `src/stores` during module transformation, so the bundler—not a filesystem-reading test—enforces the transport boundary without Node type definitions. The persistence test above verifies the explicit allowlist through observable storage output.
