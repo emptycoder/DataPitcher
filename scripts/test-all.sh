@@ -3,7 +3,8 @@ set -euo pipefail
 rm -rf artifacts/test-results artifacts/coverage-report
 dotnet tool restore
 dotnet build DataPitcher.sln
-dotnet test DataPitcher.sln --no-build --collect:"XPlat Code Coverage" --results-directory artifacts/test-results -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+# Exclude only AliasPattern's compiler-generated RegexGenerator.g.cs output; its regex-engine fallback paths are not constructible input behavior.
+dotnet test DataPitcher.sln --no-build --collect:"XPlat Code Coverage" --results-directory artifacts/test-results -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover 'DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.ExcludeByFile=**/RegexGenerator.g.cs'
 dotnet tool run reportgenerator -reports:"artifacts/test-results/**/coverage.opencover.xml" -targetdir:"artifacts/coverage-report" -reporttypes:"JsonSummary"
 summary="artifacts/coverage-report/Summary.json"
 line=$(jq '.summary.linecoverage' "$summary")
