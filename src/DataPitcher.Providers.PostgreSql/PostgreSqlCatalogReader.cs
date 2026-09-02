@@ -5,7 +5,7 @@ namespace DataPitcher.Providers.PostgreSql;
 
 public sealed record PostgreSqlTable(TableDefinition Definition)
 {
-    public ColumnDefinition Column(string name) => Definition.Columns.Single(x => x.Name == name);
+    public ColumnDefinition Column(string name) => Definition.Columns.Single(x => string.Equals(x.Name, name, StringComparison.Ordinal));
 }
 
 public sealed class PostgreSqlSchemaSnapshot
@@ -19,14 +19,14 @@ public sealed class PostgreSqlSchemaSnapshot
     public IReadOnlyList<PostgreSqlTable> Tables { get; }
     public IReadOnlyList<ForeignKeyDefinition> ForeignKeys { get; }
 
-    public PostgreSqlTable Table(string name) => Tables.Single(x => x.Definition.Name == name);
-    public ForeignKeyDefinition ForeignKey(string name) => ForeignKeys.Single(x => x.Name == name);
+    public PostgreSqlTable Table(string name) => Tables.Single(x => string.Equals(x.Definition.Name, name, StringComparison.Ordinal));
+    public ForeignKeyDefinition ForeignKey(string name) => ForeignKeys.Single(x => string.Equals(x.Name, name, StringComparison.Ordinal));
 }
 
 public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
 {
     private const string ColumnsSql =
-        "SELECT c.relname, a.attname, t.typname, NOT a.attnotnull " +
+        "/* DataPitcher.Catalog.Columns */ SELECT c.relname, a.attname, t.typname, NOT a.attnotnull " +
         "FROM pg_class c " +
         "JOIN pg_namespace n ON n.oid = c.relnamespace " +
         "JOIN pg_attribute a ON a.attrelid = c.oid " +
@@ -35,7 +35,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         "ORDER BY c.relname, a.attnum";
 
     private const string KeysSql =
-        "SELECT c.relname, con.conname, con.contype::text, array_agg(a.attname ORDER BY k.ordinality) " +
+        "/* DataPitcher.Catalog.Keys */ SELECT c.relname, con.conname, con.contype::text, array_agg(a.attname ORDER BY k.ordinality) " +
         "FROM pg_constraint con " +
         "JOIN pg_class c ON c.oid = con.conrelid " +
         "JOIN pg_namespace n ON n.oid = c.relnamespace " +
@@ -45,7 +45,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         "GROUP BY c.relname, con.conname, con.contype";
 
     private const string ForeignKeysSql =
-        "SELECT con.conname, c.relname, p.relname, " +
+        "/* DataPitcher.Catalog.ForeignKeys */ SELECT con.conname, c.relname, p.relname, " +
         "array_agg(ca.attname ORDER BY ck.ordinality), array_agg(pa.attname ORDER BY ck.ordinality), " +
         "COALESCE((SELECT bool_and(tr.tgenabled <> 'D') FROM pg_trigger tr WHERE tr.tgconstraint = con.oid), true), " +
         "con.convalidated " +
@@ -66,15 +66,16 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         var keys = await ReadKeysAsync(schema, columns.Keys, ct);
         var definitions = columns.ToDictionary(
             x => x.Key,
-            x => new TableDefinition(schema, x.Key, x.Value, keys[x.Key].Primary, keys[x.Key].Unique));
-        var tables = definitions.Values.Select(x => new PostgreSqlTable(x)).ToArray();
+            x => new TableDefinition(schema, x.Key, x.Value, keys[x.Key].Primary, keys[x.Key].Unique),
+            StringComparer.Ordinal);
+        var tables = definitions.Values.OrderBy(x => x.Name, StringComparer.Ordinal).Select(x => new PostgreSqlTable(x)).ToArray();
         var foreignKeys = await ReadForeignKeysAsync(schema, definitions, ct);
         return new PostgreSqlSchemaSnapshot(tables, foreignKeys);
     }
 
     private async Task<Dictionary<string, List<ColumnDefinition>>> ReadColumnsAsync(string schema, CancellationToken ct)
     {
-        var columns = new Dictionary<string, List<ColumnDefinition>>();
+        var columns = new Dictionary<string, List<ColumnDefinition>>(StringComparer.Ordinal);
         await using var command = Command(ColumnsSql, schema);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -91,7 +92,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
     private async Task<Dictionary<string, (UniqueConstraint? Primary, List<UniqueConstraint> Unique)>> ReadKeysAsync(
         string schema, IEnumerable<string> tables, CancellationToken ct)
     {
-        var keys = tables.ToDictionary(name => name, _ => ((UniqueConstraint?)null, new List<UniqueConstraint>()));
+        var keys = tables.ToDictionary(name => name, _ => ((UniqueConstraint?)null, new List<UniqueConstraint>()), StringComparer.Ordinal);
         await using var command = Command(KeysSql, schema);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -99,7 +100,7 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
             var table = reader.GetString(0);
             var constraint = new UniqueConstraint(reader.GetString(1), reader.GetFieldValue<string[]>(3));
             var entry = keys[table];
-            keys[table] = reader.GetString(2) == "p"
+            keys[table] = string.Equals(reader.GetString(2), "p", StringComparison.Ordinal)
                 ? (constraint, entry.Item2)
                 : (entry.Item1, [.. entry.Item2, constraint]);
         }

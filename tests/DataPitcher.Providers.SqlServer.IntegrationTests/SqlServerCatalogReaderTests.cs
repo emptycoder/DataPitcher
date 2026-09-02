@@ -34,4 +34,22 @@ public sealed class SqlServerCatalogReaderTests(SqlServerClosureFixture fixture)
 
         await Assert.ThrowsAsync<NotSupportedException>(() => reader.ReadAsync("dbo", CancellationToken.None));
     }
+
+    [Fact]
+    public async Task ReadAsync_UsesThreeTaggedMetadataCommandsRegardlessOfAddedTableCount()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await using var wire = await SqlServerWireCommandRecorder.StartAsync(scope.SourceAdminConnectionString, "DataPitcher.Catalog");
+
+        await new SqlServerCatalogReader(scope.SourceConnectionString).ReadAsync("dbo", CancellationToken.None);
+        var initialCommandCount = await wire.Count("DataPitcher.Catalog");
+        for (var index = 0; index < 50; index++)
+            await scope.ExecuteAsync($"CREATE TABLE dbo.added_{index} (id int NOT NULL PRIMARY KEY)");
+        await new SqlServerCatalogReader(scope.SourceConnectionString).ReadAsync("dbo", CancellationToken.None);
+        var commands = await wire.SqlTextsAsync();
+
+        Assert.Equal(3, initialCommandCount);
+        Assert.Equal(3, await wire.Count("DataPitcher.Catalog") - initialCommandCount);
+        Assert.DoesNotContain(commands, command => command.Contains("COUNT(*)", StringComparison.Ordinal));
+    }
 }
