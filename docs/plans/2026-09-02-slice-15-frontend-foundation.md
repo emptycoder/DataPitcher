@@ -6,7 +6,7 @@
 
 **Architecture:** TanStack Query owns every refetchable value from the server, while Zustand owns only small client interaction values behind narrow stores. OpenAPI produces both the endpoint client and Zod schemas; a thin injected-fetch adapter validates a response before a query can cache it. Pure policy and transformation modules carry behavior, and React components render accessible output without reaching directly into browser or transport APIs.
 
-**Tech Stack:** Node 22.22.2+, npm with committed `package-lock.json`, Vite 8.2.2, React and React DOM 19.2.8, TypeScript strict mode, Zustand 5.0.15, TanStack React Query 5.102.8, Tailwind CSS and `@tailwindcss/vite` 4.3.3, Vitest and `@vitest/coverage-v8` 4.1.11, React Testing Library 16.3.3, Playwright 1.62.1, Orval 8.27.0, Zod 4.5.4, and `@vitejs/plugin-react` 6.1.1.
+**Tech Stack:** Node 22.22.2+, npm with committed `package-lock.json`, Vite 8.2.2, React and React DOM 19.2.8, TypeScript strict mode, Zustand 5.0.15, TanStack React Query 5.102.8, Tailwind CSS and `@tailwindcss/vite` 4.3.3, Vitest and `@vitest/coverage-v8` 4.1.11, happy-dom 20.13.1, React Testing Library 16.3.3, Playwright 1.62.1, Orval 8.27.0, Zod 4.5.4, and `@vitejs/plugin-react` 6.1.1.
 
 ---
 
@@ -26,7 +26,7 @@
 - `scripts/test-frontend.sh` — isolated npm typecheck and frontend coverage lane.
 - `web/src/stores/sessionStore.ts` — private, non-persisted session interaction store with narrow exports.
 - `web/src/stores/preferencesStore.ts` — separate persisted preference store with an explicit allowlist.
-- `web/src/stores/storeBoundary.test.tsx` — state ownership, persistence, and no-transport-import architecture tests.
+- `web/src/stores/storeBoundary.test.tsx` — state ownership and persistence tests.
 - `web/src/auth/authAdapter.ts` — authentication adapter contract and development in-memory implementation.
 - `web/src/auth/permissionPolicy.ts` — pure hide-versus-disable permission decision.
 - `web/src/auth/ProtectedAction.tsx`, `web/src/auth/authAdapter.test.tsx` — accessible permission-aware rendering and adapter tests.
@@ -36,8 +36,7 @@
 - `web/src/api/parseJson.ts`, `web/src/api/parseJson.test.ts` — pure runtime response-validation boundary.
 - `web/src/api/effectivePermissionsApi.ts`, `web/src/api/effectivePermissionsQuery.ts` — injected-fetch shell and Query option factory.
 - `web/src/app/AppProviders.tsx`, `web/src/api/effectivePermissionsQuery.test.tsx` — thin Query client shell and server-state tests.
-- `web/src/app/ciContract.test.ts` — local assertion that CI invokes the separate frontend lane and generated-artifact drift check.
-- `.github/workflows/ci.yml` — distinct backend and frontend CI jobs.
+- `.github/workflows/ci.yml` — distinct backend and frontend CI jobs that directly enforce generation drift and the frontend lane.
 
 ## Scope and Deferrals
 
@@ -45,9 +44,9 @@ This slice deliberately creates no dependency graph, Selection Workbench, plan-r
 
 The foundation is worth completing first because its state boundary, generated transport client, authentication adapter, and coverage lane decide whether every later feature can achieve 100% handwritten coverage. Query-owned topology, SSE job state, table payloads, graph layout results, and any future preview rows must not be copied into Zustand. Likewise, worker, fetch, timer, scheduler, and query-client calls must remain behind small adapters when those features arrive. This slice establishes the enforceable pattern, not a half-built workflow screen.
 
-Vite 8 requires Node 20.19+ or 22.12+; this repository sets Node 22.22.2+ because the pinned generator and JSDOM test runtime have stricter engine requirements. Use npm only, commit `package-lock.json`, and never use a globally installed generator. Tailwind 4 requires `@tailwindcss/vite`; do not recycle a Tailwind 3 PostCSS/config-file setup. Playwright is pinned now for later browser smoke tests but does not enter the unit coverage calculation.
+Vite 8 requires Node 20.19+ or 22.12+; this repository sets Node 22.22.2+. The test environment is explicitly pinned to happy-dom 20.13.1 because jsdom 30.0.1 does not support Node 25.2.1, while happy-dom supports current Node and is faster. Use npm only, commit `package-lock.json`, and never use a globally installed generator. Tailwind 4 requires `@tailwindcss/vite`; do not recycle a Tailwind 3 PostCSS/config-file setup. Playwright is pinned now for later browser smoke tests but does not enter the unit coverage calculation.
 
-The coverage lane is intentionally separate from `scripts/test-all.sh`. The existing aggregate gate measures .NET build and Coverlet/ReportGenerator output, while the frontend lane measures TypeScript with Vitest's V8 provider; neither toolchain can honestly merge the other's counters. The frontend gate uses `all: true`, explicit first-party `src/**/*.{ts,tsx}` inclusion, and 100% statement, branch, function, and line thresholds. Generated files are the sole source exclusion: they are verified through deterministic regeneration and boundary integration instead of pretending vendor generator output is handwritten code.
+The coverage lane is intentionally separate from `scripts/test-all.sh`. The existing aggregate gate measures .NET build and Coverlet/ReportGenerator output, while the frontend lane measures TypeScript with Vitest's V8 provider; neither toolchain can honestly merge the other's counters. The frontend gate uses `coverage.include` for explicit first-party `src/**/*.{ts,tsx}` inclusion and 100% statement, branch, function, and line thresholds, so unimported handwritten modules still count. Generated files are the sole source exclusion: they are verified through deterministic regeneration and boundary integration instead of pretending vendor generator output is handwritten code.
 
 No test may depend on a real network or elapsed time. Tests supply a request function, token adapter, `AbortSignal`, clock, and scheduler whenever a module needs one. Prefer Testing Library queries by accessible role and name, never test identifiers. Every module introduced by a task has an executable test in that same task; an uncovered branch or unimported source file blocks merge.
 
@@ -100,11 +99,11 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
      "engines": { "node": ">=22.22.2" },
      "scripts": { "dev": "vite", "build": "tsc -b && vite build", "typecheck": "tsc -b", "test": "vitest", "test:coverage": "vitest run --coverage" },
      "dependencies": { "@tanstack/react-query": "5.102.8", "react": "19.2.8", "react-dom": "19.2.8", "zod": "4.5.4", "zustand": "5.0.15" },
-     "devDependencies": { "@tailwindcss/vite": "4.3.3", "@testing-library/jest-dom": "7.0.1", "@testing-library/react": "16.3.3", "@types/react": "19.2.18", "@types/react-dom": "19.2.5", "@vitejs/plugin-react": "6.1.1", "@vitest/coverage-v8": "4.1.11", "jsdom": "30.0.1", "orval": "8.27.0", "playwright": "1.62.1", "tailwindcss": "4.3.3", "typescript": "6.0.3", "vite": "8.2.2", "vitest": "4.1.11" }
+      "devDependencies": { "@tailwindcss/vite": "4.3.3", "@testing-library/jest-dom": "7.0.1", "@testing-library/react": "16.3.3", "@types/react": "19.2.18", "@types/react-dom": "19.2.5", "@vitejs/plugin-react": "6.1.1", "@vitest/coverage-v8": "4.1.11", "happy-dom": "20.13.1", "orval": "8.27.0", "playwright": "1.62.1", "tailwindcss": "4.3.3", "typescript": "6.0.3", "vite": "8.2.2", "vitest": "4.1.11" }
    }
    ```
 
-   Configure strict TypeScript with `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, and `verbatimModuleSyntax`; use `react-jsx`, bundler module resolution, and separate app/node project references. Configure Vite with its React plugin, `tailwindcss()` from `@tailwindcss/vite`, JSDOM Vitest setup, and this complete coverage block:
+    Configure strict TypeScript with `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, and `verbatimModuleSyntax`; use `react-jsx`, bundler module resolution, and separate app/node project references. Configure Vite with its React plugin, `tailwindcss()` from `@tailwindcss/vite`, happy-dom Vitest setup, and this complete coverage block:
 
    ```ts
    import { defineConfig } from 'vitest/config';
@@ -114,9 +113,9 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
    export default defineConfig({
      plugins: [react(), tailwindcss()],
      test: {
-       environment: 'jsdom', setupFiles: ['./src/test/setup.ts'],
-       coverage: {
-         provider: 'v8', all: true, include: ['src/**/*.{ts,tsx}'],
+        environment: 'happy-dom', setupFiles: ['./src/test/setup.ts'],
+        coverage: {
+          provider: 'v8', include: ['src/**/*.{ts,tsx}'],
          exclude: ['src/**/*.test.{ts,tsx}', 'src/test/**', 'src/api/generated/**'],
          thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
        },
@@ -190,36 +189,45 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
 
 ### Task 3: Establish structural session and preference state boundaries
 
+Zustand selectors must return primitives or use an explicit shallow comparator. Never return a newly allocated array or object from a selector without shallow comparison: React will treat every selection as changed and can loop until the maximum update depth is exceeded.
+
 **Files:**
 - Create: `web/src/stores/sessionStore.ts`, `web/src/stores/preferencesStore.ts`, `web/src/stores/storeBoundary.test.tsx`
-- Modify: none
+- Modify: `web/vite.config.ts`
 - Test: `web/src/stores/storeBoundary.test.tsx`
 
-1. - [ ] **Write the failing state-boundary tests.** Create `web/src/stores/storeBoundary.test.tsx` with this complete test body. It makes the persisted shape and forbidden transport-import rule executable rather than review convention.
+1. - [ ] **Write the failing state-boundary tests.** Create `web/src/stores/storeBoundary.test.tsx` with this complete test body. It makes the persisted shape executable rather than review convention.
 
    ```tsx
-   import { readFileSync } from 'node:fs';
-   import { afterEach, expect, it } from 'vitest';
-   import { render, screen } from '@testing-library/react';
-   import { preferenceActions, useColorScheme, useReducedMotion } from './preferencesStore';
-   import { sessionActions, useConnectionIds, useSessionIdentity } from './sessionStore';
+    import { afterEach, expect, it } from 'vitest';
+    import { render, screen } from '@testing-library/react';
+     import { createPreferencesStore } from './preferencesStore';
+     import { sessionActions, useSessionIdentity, useSourceConnectionId, useTargetConnectionId } from './sessionStore';
 
-   function SessionProbe() {
-     const identity = useSessionIdentity();
-     const [sourceId, targetId] = useConnectionIds();
-     return <output role="status">{`${identity?.subjectId}|${sourceId}|${targetId}`}</output>;
-   }
-   function PreferenceProbe() {
-     return <output role="status">{`${useColorScheme()}|${useReducedMotion()}`}</output>;
-   }
+     const preferenceValues = new Map<string, string>();
+     const preferences = createPreferencesStore({
+       getItem: (name) => preferenceValues.get(name) ?? null,
+       setItem: (name, value) => { preferenceValues.set(name, value); },
+       removeItem: (name) => { preferenceValues.delete(name); },
+     });
 
-   afterEach(() => {
-     sessionActions.setIdentity(null);
-     sessionActions.setConnectionIds(null, null);
-     preferenceActions.setColorScheme('system');
-     preferenceActions.setReducedMotion(false);
-     localStorage.clear();
-   });
+    function SessionProbe() {
+      const identity = useSessionIdentity();
+      const sourceId = useSourceConnectionId();
+      const targetId = useTargetConnectionId();
+      return <output role="status">{`${identity?.subjectId}|${sourceId}|${targetId}`}</output>;
+    }
+    function PreferenceProbe({ preferences }: { preferences: ReturnType<typeof createPreferencesStore> }) {
+      return <output role="status">{`${preferences.useColorScheme()}|${preferences.useReducedMotion()}`}</output>;
+    }
+
+    afterEach(() => {
+      sessionActions.setIdentity(null);
+      sessionActions.setConnectionIds(null, null);
+      preferences.actions.setColorScheme('system');
+      preferences.actions.setReducedMotion(false);
+      preferenceValues.clear();
+     });
 
    it('exposes only named session identifiers through selectors', () => {
      sessionActions.setIdentity({ subjectId: 'operator-1', tenantId: 'tenant-1' });
@@ -228,26 +236,20 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
      expect(screen.getByRole('status')).toHaveTextContent('operator-1|source-1|target-1');
    });
 
-   it('persists only the preference allowlist', () => {
-     preferenceActions.setColorScheme('dark');
-     render(<PreferenceProbe />);
-     expect(screen.getByRole('status')).toHaveTextContent('dark|false');
-     expect(JSON.parse(localStorage.getItem('datapitcher.preferences')!).state)
-       .toEqual({ colorScheme: 'dark', reducedMotion: false });
-   });
+     it('persists only the preference allowlist', () => {
+       preferences.actions.setColorScheme('dark');
+       render(<PreferenceProbe preferences={preferences} />);
+       expect(screen.getByRole('status')).toHaveTextContent('dark|false');
+       expect(JSON.parse(preferenceValues.get('datapitcher.preferences')!).state)
+          .toEqual({ colorScheme: 'dark', reducedMotion: false });
+     });
+    ```
 
-   it('keeps store modules free of transport imports and preferences allowlisted', () => {
-     const preferenceSource = readFileSync(new URL('./preferencesStore.ts', import.meta.url), 'utf8');
-     expect(preferenceSource).toContain('partialize');
-     for (const name of ['sessionStore.ts', 'preferencesStore.ts']) {
-       expect(readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')).not.toMatch(/from\s+['"][^'"]*\/api\//);
-     }
-   });
-   ```
+    The Vite configuration rejects imports from `src/api` in `src/stores` during module transformation, so the bundler—not a filesystem-reading test—enforces the transport boundary without Node type definitions. The persistence test above verifies the explicit allowlist through observable storage output.
 
 2. - [ ] **Run the missing-store tests.** Run `npm --prefix web test -- --run src/stores/storeBoundary.test.tsx`; expect non-zero exit and `Failed to resolve import "./sessionStore"`.
 
-3. - [ ] **Implement two deliberately narrow Zustand stores.** Create the following session store; it holds identifiers and a small identity value object only, is not persisted, does not export its underlying Zustand hook, and has neither a generic object bag nor arbitrary patch action.
+3. - [ ] **Implement two deliberately narrow Zustand stores and the bundler boundary.** Add a Vite plugin that rejects any `from '.../api/...'` import in a module under `src/stores` during transformation. Create the following session store; it holds identifiers and a small identity value object only, is not persisted, does not export its underlying Zustand hook, and has neither a generic object bag nor arbitrary patch action.
 
    ```ts
    import { create } from 'zustand';
@@ -273,15 +275,16 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
      setIdentity: (identity: SessionIdentity | null) => useSessionState.getState().setIdentity(identity),
      setConnectionIds: (sourceConnectionId: string | null, targetConnectionId: string | null) => useSessionState.getState().setConnectionIds(sourceConnectionId, targetConnectionId),
    };
-   export const useSessionIdentity = () => useSessionState((state) => state.identity);
-   export const useConnectionIds = () => useSessionState((state) => [state.sourceConnectionId, state.targetConnectionId] as const);
+    export const useSessionIdentity = () => useSessionState((state) => state.identity);
+    export const useSourceConnectionId = () => useSessionState((state) => state.sourceConnectionId);
+    export const useTargetConnectionId = () => useSessionState((state) => state.targetConnectionId);
    ```
 
    Create the separately persisted preference store below. It exports only named setters and selectors. `partialize` stays even though these are currently the only data fields: omitting it persists every future state field by default, exactly the accident this boundary prevents.
 
    ```ts
    import { create } from 'zustand';
-   import { persist } from 'zustand/middleware';
+    import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 
    type ColorScheme = 'system' | 'light' | 'dark';
    type PreferencesState = {
@@ -291,32 +294,43 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
      setReducedMotion: (reducedMotion: boolean) => void;
    };
 
-   const usePreferencesState = create<PreferencesState>()(persist(
-     (set) => ({
-       colorScheme: 'system',
-       reducedMotion: false,
-       setColorScheme: (colorScheme) => set({ colorScheme }),
-       setReducedMotion: (reducedMotion) => set({ reducedMotion }),
-     }),
-     {
-       name: 'datapitcher.preferences',
-       partialize: ({ colorScheme, reducedMotion }) => ({ colorScheme, reducedMotion }),
-     },
-   ));
+    export function createPreferencesStore(storage: StateStorage = window.localStorage) {
+      const usePreferencesState = create<PreferencesState>()(persist(
+        (set) => ({
+          colorScheme: 'system',
+          reducedMotion: false,
+          setColorScheme: (colorScheme) => set({ colorScheme }),
+          setReducedMotion: (reducedMotion) => set({ reducedMotion }),
+        }),
+        {
+          name: 'datapitcher.preferences',
+          storage: createJSONStorage(() => storage),
+          partialize: ({ colorScheme, reducedMotion }) => ({ colorScheme, reducedMotion }),
+        },
+      ));
+      return {
+        actions: {
+          setColorScheme: (colorScheme: ColorScheme) => usePreferencesState.getState().setColorScheme(colorScheme),
+          setReducedMotion: (reducedMotion: boolean) => usePreferencesState.getState().setReducedMotion(reducedMotion),
+        },
+        useColorScheme: () => usePreferencesState((state) => state.colorScheme),
+        useReducedMotion: () => usePreferencesState((state) => state.reducedMotion),
+      };
+    }
 
-   export const preferenceActions = {
-     setColorScheme: (colorScheme: ColorScheme) => usePreferencesState.getState().setColorScheme(colorScheme),
-     setReducedMotion: (reducedMotion: boolean) => usePreferencesState.getState().setReducedMotion(reducedMotion),
-   };
-   export const useColorScheme = () => usePreferencesState((state) => state.colorScheme);
-   export const useReducedMotion = () => usePreferencesState((state) => state.reducedMotion);
-   ```
+    const preferences = createPreferencesStore();
+    export const preferenceActions = preferences.actions;
+    export const useColorScheme = preferences.useColorScheme;
+    export const useReducedMotion = preferences.useReducedMotion;
+    ```
 
-   Neither store may import generated types or any other transport type; that makes large server payloads unstorable by construction. Access tokens are not a session field, not a preference, never in localStorage, and never in a URL.
+    `createJSONStorage` is the explicit persistence adapter. Its production instance receives `window.localStorage`, never the ambient `localStorage` global; the test injects an in-memory `StateStorage` double. The factory result still exposes only named actions and selectors, never the underlying Zustand hook or a generic patch operation.
 
-4. - [ ] **Run the state-boundary tests.** Run `npm --prefix web test -- --run src/stores/storeBoundary.test.tsx`; expect exit 0 with all three state ownership assertions passing.
+    Neither store may import generated types or any other transport type; Vite rejects `src/api` imports from `src/stores` during transformation, making large server payloads unstorable by construction. Access tokens are not a session field, not a preference, never in localStorage, and never in a URL.
 
-5. - [ ] **Commit the structurally constrained stores.** Run `git add web/src/stores/sessionStore.ts web/src/stores/preferencesStore.ts web/src/stores/storeBoundary.test.tsx && git commit -m "feat: separate frontend state ownership"`.
+4. - [ ] **Run the state-boundary tests.** Run `npm --prefix web test -- --run src/stores/storeBoundary.test.tsx`; expect exit 0 with both state ownership assertions passing.
+
+5. - [ ] **Commit the structurally constrained stores.** Run `git add web/vite.config.ts web/src/stores/sessionStore.ts web/src/stores/preferencesStore.ts web/src/stores/storeBoundary.test.tsx && git commit -m "feat: separate frontend state ownership"`.
 
 ### Task 4: Add the authentication adapter and permission-aware rendering rule
 
@@ -433,22 +447,22 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
    ```ts
    import { expect, it } from 'vitest';
    import { ZodError } from 'zod';
-   import { EffectivePermissionsSchema } from './generated/permissions.zod';
+   import { EffectivePermissionsResponse } from './generated/permissions.zod';
    import { parseJson } from './parseJson';
 
    it('accepts a response matching the generated schema', async () => {
      const response = new Response(JSON.stringify({ principalId: 'operator-1', tenantId: 'tenant-1', permissions: ['Transfers.Start'] }), { status: 200 });
-     await expect(parseJson(response, EffectivePermissionsSchema)).resolves.toEqual({ principalId: 'operator-1', tenantId: 'tenant-1', permissions: ['Transfers.Start'] });
+     await expect(parseJson(response, EffectivePermissionsResponse)).resolves.toEqual({ principalId: 'operator-1', tenantId: 'tenant-1', permissions: ['Transfers.Start'] });
    });
 
    it('rejects a malformed response before application state can receive it', async () => {
      const response = new Response(JSON.stringify({ permissions: ['Transfers.Start'] }), { status: 200 });
-     await expect(parseJson(response, EffectivePermissionsSchema)).rejects.toBeInstanceOf(ZodError);
+     await expect(parseJson(response, EffectivePermissionsResponse)).rejects.toBeInstanceOf(ZodError);
    });
 
    it('rejects an unsuccessful HTTP response before parsing', async () => {
      const response = new Response('', { status: 500 });
-     await expect(parseJson(response, EffectivePermissionsSchema)).rejects.toThrow('Request failed: 500');
+     await expect(parseJson(response, EffectivePermissionsResponse)).rejects.toThrow('Request failed: 500');
    });
    ```
 
@@ -464,7 +478,7 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
    }
    ```
 
-   Configure two named Orval targets from the same local OpenAPI document: a fetch client written to `src/api/generated/client.ts` and a Zod target written to `src/api/generated/permissions.zod.ts` with `client: 'zod'`. The client target produces `getEffectivePermissionsUrl`; the Zod target produces `EffectivePermissionsSchema` and its inferred type. The exact configuration is deliberately two inputs pointing at the one contract, never two handwritten field lists. Generated artifacts are committed, are excluded from Vitest coverage, and must never be manually edited.
+   Configure two named Orval targets from the same local OpenAPI document: a fetch client written to `src/api/generated/client.ts` and a Zod target written to `src/api/generated/permissions.zod.ts` with `client: 'zod'`. The client target produces `getEffectivePermissionsUrl`; the Zod target produces `EffectivePermissionsResponse` and its inferred type. The exact configuration is deliberately two inputs pointing at the one contract, never two handwritten field lists. Generated artifacts are committed, are excluded from Vitest coverage, and must never be manually edited.
 
    ```ts
    import { defineConfig } from 'orval';
@@ -492,7 +506,7 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
    }
    ```
 
-   The generated `EffectivePermissionsSchema`, not a copied interface, is the schema argument. Handwritten refinements may wrap a generated schema but may not restate transport fields.
+   The generated `EffectivePermissionsResponse`, not a copied interface, is the schema argument. Handwritten refinements may wrap a generated schema but may not restate transport fields.
 
 4. - [ ] **Generate, typecheck, and run the validation tests.** Run `npm --prefix web run generate:api && npm --prefix web run typecheck && npm --prefix web test -- --run src/api/parseJson.test.ts`; expect exit 0 and both valid-response and invalid-response assertions passing.
 
@@ -561,7 +575,7 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
    // web/src/api/effectivePermissionsApi.ts
    import type { AuthenticationAdapter } from '../auth/authAdapter';
    import { getEffectivePermissionsUrl } from './generated/client';
-   import { EffectivePermissionsSchema } from './generated/permissions.zod';
+   import { EffectivePermissionsResponse } from './generated/permissions.zod';
    import { parseJson } from './parseJson';
 
    export type RequestFunction = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -569,7 +583,7 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
      const token = await authentication.getAccessToken();
      if (!token) throw new Error('Not authenticated.');
      const response = await request(getEffectivePermissionsUrl(), { headers: { Authorization: `Bearer ${token}` }, signal });
-     return parseJson(response, EffectivePermissionsSchema);
+     return parseJson(response, EffectivePermissionsResponse);
    }
 
    // web/src/api/effectivePermissionsQuery.ts
@@ -606,28 +620,11 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
 ### Task 7: Add CI drift enforcement and complete the foundation review
 
 **Files:**
-- Create: `web/src/app/ciContract.test.ts`, `.github/workflows/ci.yml`
+- Create: `.github/workflows/ci.yml`
 - Modify: none
-- Test: `web/src/app/ciContract.test.ts`
+- Test: none; the workflow is the executable enforcement, not source under test.
 
-1. - [ ] **Write the failing CI-contract test.** Create `web/src/app/ciContract.test.ts` with this complete test. The absent workflow is the intended first failure.
-
-   ```ts
-   import { readFileSync } from 'node:fs';
-   import { expect, it } from 'vitest';
-
-   it('keeps backend, frontend, and generation checks explicit in CI', () => {
-     const workflow = readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8');
-     expect(workflow).toContain('./scripts/test-all.sh');
-     expect(workflow).toContain('./scripts/test-frontend.sh');
-     expect(workflow).toContain('npm --prefix web run generate:api');
-     expect(workflow).toContain('git diff --exit-code -- web/src/api/generated');
-   });
-   ```
-
-2. - [ ] **Run the missing-workflow contract test.** Run `npm --prefix web test -- --run src/app/ciContract.test.ts`; expect non-zero exit and an `ENOENT` message for `.github/workflows/ci.yml`.
-
-3. - [ ] **Implement the separate CI jobs.** Create this workflow. Regeneration is local against the committed OpenAPI document, so the drift check neither calls a service nor weakens the no-network test rule. Keeping jobs separate preserves meaningful toolchain-specific failure output and thresholds.
+1. - [ ] **Implement the separate CI jobs.** Create this workflow. The workflow directly runs the generation, drift, and frontend-lane commands, so a filesystem-reading test is neither needed nor authoritative. A Vite transformation rule cannot enforce GitHub Actions job execution; resolving a workflow path from a unit test would only reproduce the fragile filesystem coupling. Regeneration is local against the committed OpenAPI document, so the drift check neither calls a service nor weakens the no-network test rule. Keeping jobs separate preserves meaningful toolchain-specific failure output and thresholds.
 
    ```yaml
    name: ci
@@ -652,9 +649,9 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
          - run: ./scripts/test-frontend.sh
    ```
 
-4. - [ ] **Run the CI-contract test and complete the local gate.** Run `npm --prefix web test -- --run src/app/ciContract.test.ts && scripts/test-frontend.sh`; expect exit 0, the CI-contract assertions to pass, and all handwritten frontend coverage totals to remain 100%.
+2. - [ ] **Run the generation drift check and complete the local gate.** Run `npm --prefix web run generate:api && git diff --exit-code -- web/src/api/generated && scripts/test-frontend.sh`; expect exit 0 and all handwritten frontend coverage totals to remain 100%.
 
-5. - [ ] **Commit the CI enforcement.** Run `git add web/src/app/ciContract.test.ts .github/workflows/ci.yml && git commit -m "ci: verify frontend generation and coverage"`.
+3. - [ ] **Commit the CI enforcement.** Run `git add .github/workflows/ci.yml && git commit -m "ci: verify frontend generation and coverage"`.
 
 ## Self-Review
 
@@ -664,4 +661,4 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
 - [ ] Confirm every server payload is parsed with a generated Zod schema before the Query function resolves, that OpenAPI is the single input for generated client and schemas, and that CI regeneration fails on drift. Confirm permission denial hides controls, prerequisites disable permitted controls with a reason, and the document states server-side authorization remains authoritative.
 - [ ] Confirm pure modules contain policy and parsing; rendering components contain only accessibility and presentation; thin adapter shells own fetch and Query-client integration. For future Workers, timers, clocks, schedulers, SSE, Monaco, React Flow, and layout, add injected seams before behavior, not after coverage fails. Reaching 100% honestly costs roughly 30–50% additional effort and requires these seams; coverage demonstrates executed handwritten paths, not performance or security.
 - [ ] Confirm this plan defers the dependency graph, Selection Workbench, plan review, and transfer monitor in full. Verify no task introduces their state, routes, screens, worker code, timers, or network behavior.
-- [ ] Re-read every TypeScript and TSX fragment for strict-mode coherence: every imported symbol is defined in the same or an earlier task, every declared type is used, generated names are consistently `EffectivePermissionsSchema`, `getEffectivePermissionsUrl`, and `effectivePermissionsQueryOptions`, and no task references a file created by a later task. Ensure each module has a same-task test and every test controls fetch, time, and scheduling dependencies.
+- [ ] Re-read every TypeScript and TSX fragment for strict-mode coherence: every imported symbol is defined in the same or an earlier task, every declared type is used, generated names are consistently `EffectivePermissionsResponse`, `getEffectivePermissionsUrl`, and `effectivePermissionsQueryOptions`, and no task references a file created by a later task. Ensure each module has a same-task test and every test controls fetch, time, and scheduling dependencies.

@@ -1,0 +1,32 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "DataPitcher API", "version": "1.0.0" },
+  "paths": {
+    "/api/auth/effective-permissions": {
+      "get": {
+        "operationId": "effectivePermissions",
+        "responses": {
+          "200": {
+            "description": "Effective permission set",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/EffectivePermissions" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "EffectivePermissions": {
+        "type": "object",
+        "required": ["principalId", "tenantId", "permissions"],
+        "properties": {
+          "principalId": { "type": "string", "minLength": 1 },
+          "tenantId": { "type": "string", "minLength": 1 },
+          "permissions": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

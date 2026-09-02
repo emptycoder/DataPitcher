@@ -4,3 +4,9 @@
 bin/
 obj/
 artifacts/
+
+# frontend build output
+web/node_modules/
+web/dist/
+web/coverage/
+web/*.tsbuildinfo

@@ -3,7 +3,7 @@ on:
   push:
   pull_request:
 jobs:
-  unit:
+  backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -12,16 +12,14 @@ jobs:
           dotnet-version: '10.0.400'
       - name: Install xmllint
         run: sudo apt-get update && sudo apt-get install -y libxml2-utils
-      - name: Run unit and architecture tests
-        run: ./scripts/test-auth.sh
-  postgres:
+      - run: ./scripts/test-all.sh
+  frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.400'
-      - name: Install xmllint
-        run: sudo apt-get update && sudo apt-get install -y libxml2-utils
-      - name: Run PostgreSQL container integration tests
-        run: ./scripts/test-postgres.sh
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.22.2, cache: npm, cache-dependency-path: web/package-lock.json }
+      - run: npm --prefix web ci
+      - run: npm --prefix web run generate:api
+      - run: git diff --exit-code -- web/src/api/generated
+      - run: ./scripts/test-frontend.sh
