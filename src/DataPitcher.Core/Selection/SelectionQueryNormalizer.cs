@@ -5,7 +5,7 @@ public static class SelectionQueryNormalizer
     public static SelectionPredicate? Normalize(SelectionPredicate? predicate) => predicate switch
     {
         null => null, NotPredicate(var term) when Normalize(term) is NotPredicate(var inner) => Normalize(inner), NotPredicate(var term) => new NotPredicate(Normalize(term)!),
-        AndPredicate(var terms) => Boolean(true, terms), OrPredicate(var terms) => Boolean(false, terms), SetPredicate(var column, var negated, var values) => new SetPredicate(column, negated, values.Distinct().OrderBy(ValueKey, StringComparer.Ordinal).ToArray()),
+        AndPredicate(var terms) => Boolean(true, terms), OrPredicate(var terms) => Boolean(false, terms), SetPredicate(var column, var negated, var values) => new SetPredicate(column, negated, values.Distinct().OrderBy(ValueKey, StringComparer.Ordinal).ToArray()), ExistsPredicate(var table, var alias, var correlations, var inner, var negated) => new ExistsPredicate(table, alias, correlations, Normalize(inner), negated),
         _ => predicate
     };
     private static SelectionPredicate Boolean(bool and, IReadOnlyList<SelectionPredicate> terms)

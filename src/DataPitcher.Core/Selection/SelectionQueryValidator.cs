@@ -3,7 +3,7 @@ using DataPitcher.Core.Schema;
 namespace DataPitcher.Core.Selection;
 public static partial class SelectionQueryValidator
 {
-    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$")] private static partial Regex AliasPattern();
+    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*\\z")] private static partial Regex AliasPattern();
     public static void Validate(SelectionQuery query)
     {
         if (!query.Schema.Tables.Contains(query.Root.Table)) throw new ArgumentException("Root table is not in selection schema.");
@@ -25,11 +25,11 @@ public static partial class SelectionQueryValidator
             case AndPredicate conjunction when conjunction.Terms.Count >= 2: Each(schema, conjunction.Terms, aliases); return;
             case OrPredicate disjunction when disjunction.Terms.Count >= 2: Each(schema, disjunction.Terms, aliases); return;
             case NotPredicate not: ValidatePredicate(schema, not.Term, aliases); return;
-            case ComparisonPredicate comparison: Value(Column(aliases, comparison.Column), comparison.Value); return;
+            case ComparisonPredicate comparison when Enum.IsDefined(typeof(SelectionComparison), comparison.Operator): Value(Column(aliases, comparison.Column), comparison.Value); return;
             case BetweenPredicate between: Values(Column(aliases, between.Column), between.Lower, between.Upper); return;
             case SetPredicate set when set.Values.Count > 0: EachValue(Column(aliases, set.Column), set.Values); return;
             case NullPredicate nullTest: Column(aliases, nullTest.Column); return;
-            case TextPredicate text when Column(aliases, text.Column).ClrType == typeof(string): Value(Column(aliases, text.Column), text.Value); return;
+            case TextPredicate text when Enum.IsDefined(typeof(TextMatch), text.Match) && Column(aliases, text.Column).ClrType == typeof(string): Value(Column(aliases, text.Column), text.Value); return;
             case BooleanPredicate boolean when Column(aliases, boolean.Column).ClrType == typeof(bool): Value(Column(aliases, boolean.Column), boolean.Value); return;
             case TemporalRangePredicate range when IsTemporal(range, aliases): Values(Column(aliases, range.Column), range.Lower, range.Upper); return;
             case ExistsPredicate exists: Exists(schema, exists, aliases); return;
