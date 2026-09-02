@@ -499,7 +499,7 @@ public sealed class DevelopmentProviderTests
     }
 
     private static DevelopmentProviderOptions Options(string signingKey = "01234567890123456789012345678901") => new() { SchemeName = "development", ProviderInstance = "development", Issuer = "https://development.test", Audience = "api", SigningKey = signingKey };
-    private sealed class TestEnvironment : IHostEnvironment { public string EnvironmentName { get; set; } = ""; public string ApplicationName { get; set; } = "tests"; public string ContentRootPath { get; set; } = AppContext.BaseDirectory; public IFileProvider ContentRootFileProvider { get; set; } = NullFileProvider.Instance; }
+    private sealed class TestEnvironment : IHostEnvironment { public string EnvironmentName { get; set; } = ""; public string ApplicationName { get; set; } = "tests"; public string ContentRootPath { get; set; } = AppContext.BaseDirectory; public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider(); }
 }
 ```
 
