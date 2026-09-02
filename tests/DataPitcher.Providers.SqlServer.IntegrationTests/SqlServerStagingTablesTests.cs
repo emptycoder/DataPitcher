@@ -1,0 +1,28 @@
+using DataPitcher.Core.Identity;
+using DataPitcher.Core.Schema;
+using DataPitcher.Providers.SqlServer;
+using Xunit;
+
+namespace DataPitcher.Providers.SqlServer.IntegrationTests;
+
+[Collection("SqlServer closure")]
+public sealed class SqlServerStagingTablesTests(SqlServerClosureFixture fixture)
+{
+    [Fact]
+    public async Task Stages_UseNativeKeyTypesCompleteUniqueIndexAndFirstGeneration()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        var schema = await new SqlServerCatalogReader(scope.SourceConnectionString).ReadAsync("dbo", CancellationToken.None);
+        var table = schema.Table("declared_key").Definition;
+        var keys = new Dictionary<TableDefinition, StableKeySelection> { { table, StableKeySelector.Select(table, null) } };
+        await using var first = new SqlServerStagingTables(scope.SourceConnectionString, scope.TargetConnectionString, schema, keys);
+        await using var second = new SqlServerStagingTables(scope.SourceConnectionString, scope.TargetConnectionString, schema, keys);
+        var key = new StableKey([new("physical_second", 2), new("physical_first", 1)]);
+        Assert.Single(await first.InsertSourceAsync(table, [key], 1, CancellationToken.None));
+        Assert.Empty(await first.InsertSourceAsync(table, [key], 9, CancellationToken.None));
+        await second.InsertSourceAsync(table, [key], 1, CancellationToken.None);
+        Assert.NotEqual(first.SourceTableName(table), second.SourceTableName(table));
+        Assert.Equal(1, await first.GenerationAsync(table, key, CancellationToken.None));
+        Assert.Equal(2, await first.KeyColumnCountInUniqueIndexAsync(table, CancellationToken.None));
+    }
+}

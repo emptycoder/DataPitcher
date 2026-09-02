@@ -1,0 +1,2 @@
+ALTER TABLE Jobs ADD COLUMN FailureCode TEXT NULL;
+CREATE INDEX IF NOT EXISTS IX_Jobs_Recovery ON Jobs(State, UpdatedUtc);
