@@ -1,19 +1,21 @@
 $ErrorActionPreference = 'Stop'
-Remove-Item artifacts/test-results -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item artifacts/test-results, artifacts/coverage-report -Recurse -Force -ErrorAction SilentlyContinue
+dotnet tool restore
 dotnet build DataPitcher.sln
-dotnet test DataPitcher.sln --no-build
-dotnet test tests/DataPitcher.UnitTests/DataPitcher.UnitTests.csproj --no-build --collect:'XPlat Code Coverage' --results-directory artifacts/test-results -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
-$report = (Get-ChildItem artifacts/test-results -Filter coverage.opencover.xml -Recurse | Select-Object -First 1).FullName
-if (-not $report) { throw 'Coverlet did not write coverage.opencover.xml.' }
-[xml]$coverage = Get-Content $report
-$summary = $coverage.CoverageSession.Summary
-$sequence = [double]$summary.sequenceCoverage
-$branch = [double]$summary.branchCoverage
-$visitedMethods = [double]$summary.visitedMethods
-$totalMethods = [double]$summary.numMethods
-$method = if ($totalMethods -eq 0) { 100 } else { $visitedMethods / $totalMethods * 100 }
+dotnet test DataPitcher.sln --no-build --collect:'XPlat Code Coverage' --results-directory artifacts/test-results -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+dotnet tool run reportgenerator -reports:'artifacts/test-results/**/coverage.opencover.xml' -targetdir:'artifacts/coverage-report' -reporttypes:'JsonSummary'
+$summary = (Get-Content artifacts/coverage-report/Summary.json | ConvertFrom-Json).summary
+$line = $summary.linecoverage
+$branch = $summary.branchcoverage
+$method = $summary.methodcoverage
+if ($null -eq $method) {
+  $covered = $summary.coveredmethods
+  $total = $summary.totalmethods
+  $method = if ($total -eq 0) { 100 } else { $covered / $total * 100 }
+}
+Write-Output "Merged coverage: line=$line% branch=$branch% method=$method%"
 $failures = @()
-if ($sequence -ne 100) { $failures += "SequenceCoverage is $sequence%, expected 100%." }
+if ($line -ne 100) { $failures += "LineCoverage is $line%, expected 100%." }
 if ($branch -ne 100) { $failures += "BranchCoverage is $branch%, expected 100%." }
-if ($method -ne 100) { $failures += "MethodCoverage is $method% ($visitedMethods/$totalMethods methods), expected 100%." }
+if ($method -ne 100) { $failures += "MethodCoverage is $method%, expected 100%." }
 if ($failures.Count -gt 0) { throw ($failures -join "`n") }
