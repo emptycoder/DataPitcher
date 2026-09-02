@@ -448,22 +448,22 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
    ```ts
    import { expect, it } from 'vitest';
    import { ZodError } from 'zod';
-   import { EffectivePermissionsSchema } from './generated/permissions.zod';
+   import { EffectivePermissionsResponse } from './generated/permissions.zod';
    import { parseJson } from './parseJson';
 
    it('accepts a response matching the generated schema', async () => {
      const response = new Response(JSON.stringify({ principalId: 'operator-1', tenantId: 'tenant-1', permissions: ['Transfers.Start'] }), { status: 200 });
-     await expect(parseJson(response, EffectivePermissionsSchema)).resolves.toEqual({ principalId: 'operator-1', tenantId: 'tenant-1', permissions: ['Transfers.Start'] });
+     await expect(parseJson(response, EffectivePermissionsResponse)).resolves.toEqual({ principalId: 'operator-1', tenantId: 'tenant-1', permissions: ['Transfers.Start'] });
    });
 
    it('rejects a malformed response before application state can receive it', async () => {
      const response = new Response(JSON.stringify({ permissions: ['Transfers.Start'] }), { status: 200 });
-     await expect(parseJson(response, EffectivePermissionsSchema)).rejects.toBeInstanceOf(ZodError);
+     await expect(parseJson(response, EffectivePermissionsResponse)).rejects.toBeInstanceOf(ZodError);
    });
 
    it('rejects an unsuccessful HTTP response before parsing', async () => {
      const response = new Response('', { status: 500 });
-     await expect(parseJson(response, EffectivePermissionsSchema)).rejects.toThrow('Request failed: 500');
+     await expect(parseJson(response, EffectivePermissionsResponse)).rejects.toThrow('Request failed: 500');
    });
    ```
 
@@ -479,7 +479,7 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
    }
    ```
 
-   Configure two named Orval targets from the same local OpenAPI document: a fetch client written to `src/api/generated/client.ts` and a Zod target written to `src/api/generated/permissions.zod.ts` with `client: 'zod'`. The client target produces `getEffectivePermissionsUrl`; the Zod target produces `EffectivePermissionsSchema` and its inferred type. The exact configuration is deliberately two inputs pointing at the one contract, never two handwritten field lists. Generated artifacts are committed, are excluded from Vitest coverage, and must never be manually edited.
+   Configure two named Orval targets from the same local OpenAPI document: a fetch client written to `src/api/generated/client.ts` and a Zod target written to `src/api/generated/permissions.zod.ts` with `client: 'zod'`. The client target produces `getEffectivePermissionsUrl`; the Zod target produces `EffectivePermissionsResponse` and its inferred type. The exact configuration is deliberately two inputs pointing at the one contract, never two handwritten field lists. Generated artifacts are committed, are excluded from Vitest coverage, and must never be manually edited.
 
    ```ts
    import { defineConfig } from 'orval';
@@ -507,7 +507,7 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
    }
    ```
 
-   The generated `EffectivePermissionsSchema`, not a copied interface, is the schema argument. Handwritten refinements may wrap a generated schema but may not restate transport fields.
+   The generated `EffectivePermissionsResponse`, not a copied interface, is the schema argument. Handwritten refinements may wrap a generated schema but may not restate transport fields.
 
 4. - [ ] **Generate, typecheck, and run the validation tests.** Run `npm --prefix web run generate:api && npm --prefix web run typecheck && npm --prefix web test -- --run src/api/parseJson.test.ts`; expect exit 0 and both valid-response and invalid-response assertions passing.
 
@@ -576,7 +576,7 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
    // web/src/api/effectivePermissionsApi.ts
    import type { AuthenticationAdapter } from '../auth/authAdapter';
    import { getEffectivePermissionsUrl } from './generated/client';
-   import { EffectivePermissionsSchema } from './generated/permissions.zod';
+   import { EffectivePermissionsResponse } from './generated/permissions.zod';
    import { parseJson } from './parseJson';
 
    export type RequestFunction = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -584,7 +584,7 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
      const token = await authentication.getAccessToken();
      if (!token) throw new Error('Not authenticated.');
      const response = await request(getEffectivePermissionsUrl(), { headers: { Authorization: `Bearer ${token}` }, signal });
-     return parseJson(response, EffectivePermissionsSchema);
+     return parseJson(response, EffectivePermissionsResponse);
    }
 
    // web/src/api/effectivePermissionsQuery.ts
@@ -679,4 +679,4 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
 - [ ] Confirm every server payload is parsed with a generated Zod schema before the Query function resolves, that OpenAPI is the single input for generated client and schemas, and that CI regeneration fails on drift. Confirm permission denial hides controls, prerequisites disable permitted controls with a reason, and the document states server-side authorization remains authoritative.
 - [ ] Confirm pure modules contain policy and parsing; rendering components contain only accessibility and presentation; thin adapter shells own fetch and Query-client integration. For future Workers, timers, clocks, schedulers, SSE, Monaco, React Flow, and layout, add injected seams before behavior, not after coverage fails. Reaching 100% honestly costs roughly 30–50% additional effort and requires these seams; coverage demonstrates executed handwritten paths, not performance or security.
 - [ ] Confirm this plan defers the dependency graph, Selection Workbench, plan review, and transfer monitor in full. Verify no task introduces their state, routes, screens, worker code, timers, or network behavior.
-- [ ] Re-read every TypeScript and TSX fragment for strict-mode coherence: every imported symbol is defined in the same or an earlier task, every declared type is used, generated names are consistently `EffectivePermissionsSchema`, `getEffectivePermissionsUrl`, and `effectivePermissionsQueryOptions`, and no task references a file created by a later task. Ensure each module has a same-task test and every test controls fetch, time, and scheduling dependencies.
+- [ ] Re-read every TypeScript and TSX fragment for strict-mode coherence: every imported symbol is defined in the same or an earlier task, every declared type is used, generated names are consistently `EffectivePermissionsResponse`, `getEffectivePermissionsUrl`, and `effectivePermissionsQueryOptions`, and no task references a file created by a later task. Ensure each module has a same-task test and every test controls fetch, time, and scheduling dependencies.
