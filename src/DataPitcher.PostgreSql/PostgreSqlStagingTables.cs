@@ -16,6 +16,7 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
     };
 
     private readonly NpgsqlDataSource _source;
+    private readonly NpgsqlDataSource _target;
     private readonly PostgreSqlSchemaSnapshot _schema;
     private readonly IReadOnlyDictionary<TableDefinition, StableKeySelection> _stableKeys;
     private readonly string _plan = Guid.NewGuid().ToString("N");
@@ -29,21 +30,46 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
         IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys)
     {
         _source = source;
+        _target = target;
         _schema = schema;
         _stableKeys = stableKeys;
     }
 
+    public NpgsqlDataSource Source => _source;
+
+    public NpgsqlDataSource Target => _target;
+
     public string SourceTableName(TableDefinition table) => $"keys_{_plan}_{Ordinal(table):x8}";
+
+    public string InputTableName(TableDefinition table) => $"input_{_plan}_{Ordinal(table):x8}";
+
+    public string TargetTableName(TableDefinition table) => $"target_{_plan}_{Ordinal(table):x8}";
 
     public async Task<IReadOnlyCollection<StableKey>> InsertSourceAsync(
         TableDefinition table, IReadOnlyCollection<StableKey> keys, int generation, CancellationToken ct)
     {
         var input = InputTableName(table);
-        await EnsureTableAsync(SourceTableName(table), table, ct);
-        await EnsureTableAsync(input, table, ct);
+        await EnsureTableAsync(_source, SourceTableName(table), table, ct);
+        await EnsureTableAsync(_source, input, table, ct);
         await ExecuteAsync(_source, "TRUNCATE " + Qualified(input), ct);
-        await CopyAsync(input, table, keys, generation, ct);
+        await CopyAsync(_source, input, table, keys, generation, ct);
         return await InsertReturningAsync(table, generation, ct);
+    }
+
+    public async Task ReplaceSourceCandidatesAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, CancellationToken ct)
+    {
+        var input = InputTableName(table);
+        await EnsureTableAsync(_source, input, table, ct);
+        await ExecuteAsync(_source, "TRUNCATE " + Qualified(input), ct);
+        await CopyAsync(_source, input, table, keys, 0, ct);
+    }
+
+    public async Task ReplaceTargetCandidatesAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, CancellationToken ct)
+    {
+        var name = TargetTableName(table);
+        await EnsureTableAsync(_target, name, table, ct);
+        await ExecuteAsync(_target, "TRUNCATE " + Qualified(name), ct);
+        await CopyAsync(_target, name, table, keys, 0, ct);
     }
 
     public async Task<int> GenerationAsync(TableDefinition table, StableKey key, CancellationToken ct)
@@ -62,37 +88,36 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
         {
             await ExecuteAsync(_source, "DROP TABLE IF EXISTS " + Qualified(SourceTableName(table)), CancellationToken.None);
             await ExecuteAsync(_source, "DROP TABLE IF EXISTS " + Qualified(InputTableName(table)), CancellationToken.None);
+            await ExecuteAsync(_target, "DROP TABLE IF EXISTS " + Qualified(TargetTableName(table)), CancellationToken.None);
         }
     }
-
-    private string InputTableName(TableDefinition table) => $"input_{_plan}_{Ordinal(table):x8}";
 
     private int Ordinal(TableDefinition table) =>
         _ordinals.TryGetValue(table, out var value) ? value : _ordinals[table] = _nextOrdinal++;
 
     private IReadOnlyList<string> KeyColumns(TableDefinition table) => _stableKeys[table].Constraint!.Columns;
 
-    private static string Qualified(string table) => PostgreSqlIdentifier.Qualified(OwnerSchema, table);
+    public static string Qualified(string table) => PostgreSqlIdentifier.Qualified(OwnerSchema, table);
 
-    private async Task EnsureTableAsync(string name, TableDefinition table, CancellationToken ct)
+    private async Task EnsureTableAsync(NpgsqlDataSource dataSource, string name, TableDefinition table, CancellationToken ct)
     {
         var columns = KeyColumns(table);
         var metadata = _schema.Table(table.Name);
         var declarations = string.Join(", ", columns.Select((column, i) => $"k{i} {ColumnTypes[metadata.Column(column).ClrType].Sql} NOT NULL"));
         var unique = string.Join(", ", columns.Select((_, i) => $"k{i}"));
         await ExecuteAsync(
-            _source,
+            dataSource,
             $"CREATE SCHEMA IF NOT EXISTS {PostgreSqlIdentifier.Quote(OwnerSchema)}; " +
             $"CREATE TABLE IF NOT EXISTS {Qualified(name)} ({declarations}, __generation integer NOT NULL, UNIQUE ({unique}))",
             ct);
     }
 
-    private async Task CopyAsync(string name, TableDefinition table, IReadOnlyCollection<StableKey> keys, int generation, CancellationToken ct)
+    private async Task CopyAsync(NpgsqlDataSource dataSource, string name, TableDefinition table, IReadOnlyCollection<StableKey> keys, int generation, CancellationToken ct)
     {
         var columns = KeyColumns(table);
         var metadata = _schema.Table(table.Name);
         var names = string.Join(", ", columns.Select((_, i) => $"k{i}").Append("__generation"));
-        await using var connection = await _source.OpenConnectionAsync(ct);
+        await using var connection = await dataSource.OpenConnectionAsync(ct);
         await using var importer = await connection.BeginBinaryImportAsync($"COPY {Qualified(name)} ({names}) FROM STDIN (FORMAT BINARY)", ct);
         foreach (var key in keys)
         {
