@@ -7,6 +7,13 @@ namespace DataPitcher.Infrastructure.Migrations;
 public sealed class ControlDatabaseMigrator(ControlDatabase database, IClock clock)
 {
     private static readonly (int Version, string Resource)[] Scripts = [(1, "DataPitcher.Infrastructure.Migrations.0001-initial.sql")];
+    static ControlDatabaseMigrator()
+    {
+        foreach (var script in Scripts)
+        {
+            ArgumentNullException.ThrowIfNull(typeof(ControlDatabaseMigrator).Assembly.GetManifestResourceInfo(script.Resource), $"Missing migration resource: {script.Resource}");
+        }
+    }
     public void Apply()
     {
         using var db = database.Open();
@@ -22,7 +29,7 @@ public sealed class ControlDatabaseMigrator(ControlDatabase database, IClock clo
     }
     private static string ReadScript(string resource)
     {
-        using var stream = typeof(ControlDatabaseMigrator).Assembly.GetManifestResourceStream(resource) ?? throw new InvalidOperationException($"Missing migration resource: {resource}.");
+        using var stream = typeof(ControlDatabaseMigrator).Assembly.GetManifestResourceStream(resource)!;
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
