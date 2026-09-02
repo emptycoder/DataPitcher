@@ -1,7 +1,15 @@
+using System.Security.Claims;
+using System.Text.Encodings.Web;
+using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
+using DataPitcher.Core.Authorization;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace DataPitcher.Api.IntegrationTests;
 
@@ -11,7 +19,51 @@ public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.ConfigureServices(services => services.AddSingleton<IDataPitcherApplication>(Application));
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IDataPitcherApplication>(Application);
+            services.AddSingleton<IResourceAccessGrantReader, TestResourceAccessGrantReader>();
+            services.AddAuthentication(TestAuthenticationHandler.SchemeName)
+                .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>(TestAuthenticationHandler.SchemeName, _ => { });
+        });
+    }
+}
+
+public sealed class TestAuthenticationHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
+    : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+{
+    public const string SchemeName = "ApiBoundaryAuthorizationTest";
+
+    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+    {
+        if (Request.Headers.ContainsKey("X-Test-Unauthenticated")) return Task.FromResult(AuthenticateResult.NoResult());
+
+        var permissions = Request.Headers.TryGetValue("X-Test-Permissions", out var values)
+            ? values.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries)
+            : Permissions.All.Select(permission => permission.Value).ToArray();
+
+        var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, "test-principal") };
+        claims.AddRange(permissions.Select(permission => new Claim(ApiClaimTypes.Permission, permission)));
+        var identity = new ClaimsIdentity(claims, SchemeName);
+        var ticket = new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName);
+        return Task.FromResult(AuthenticateResult.Success(ticket));
+    }
+}
+
+public sealed class TestResourceAccessGrantReader(IHttpContextAccessor accessor) : IResourceAccessGrantReader
+{
+    public Task<bool> IsGrantedAsync(ClaimsPrincipal principal, ApiResource resource, CancellationToken cancellationToken)
+    {
+        var deniedHeader = accessor.HttpContext?.Request.Headers["X-Test-Denied-Resource"].ToString();
+        var deniedId = Guid.TryParse(deniedHeader, out var parsed) ? parsed : (Guid?)null;
+        var resourceId = resource switch
+        {
+            ConnectionResource connection => connection.ConnectionId,
+            PlanResource plan => plan.PlanId,
+            JobResource job => job.JobId,
+            _ => (Guid?)null,
+        };
+        return Task.FromResult(deniedId is null || resourceId != deniedId);
     }
 }
 
