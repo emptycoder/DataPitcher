@@ -25,11 +25,17 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         _keys = keys;
     }
 
-    public Task<IReadOnlyCollection<StableKey>> SeedRootKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken) =>
-        _stages.InsertSourceAsync(table, keys, 0, cancellationToken);
+    public Task<IReadOnlyCollection<StableKey>> SeedRootKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken)
+    {
+        ValidateKeyTypes(table, keys);
+        return _stages.InsertSourceAsync(table, keys, 0, cancellationToken);
+    }
 
-    public Task<IReadOnlyCollection<StableKey>> InsertNewKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, int generation, CancellationToken cancellationToken) =>
-        _stages.InsertSourceAsync(table, keys, generation, cancellationToken);
+    public Task<IReadOnlyCollection<StableKey>> InsertNewKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, int generation, CancellationToken cancellationToken)
+    {
+        ValidateKeyTypes(table, keys);
+        return _stages.InsertSourceAsync(table, keys, generation, cancellationToken);
+    }
 
     public async Task<IReadOnlyDictionary<StableKey, TargetProbe>> ProbeTargetAsync(
         TableDefinition table,
@@ -37,6 +43,7 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         IReadOnlyCollection<StableKey> keys,
         CancellationToken cancellationToken)
     {
+        ValidateKeyTypes(table, keys);
         await _stages.ReplaceTargetCandidatesAsync(table, keys, cancellationToken);
         var columns = KeyColumns(table);
         var select = string.Join(", ", columns.Select((_, i) => $"s.[k{i}]"));
@@ -60,6 +67,7 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         IReadOnlyCollection<StableKey> fromKeys,
         CancellationToken cancellationToken)
     {
+        ValidateKeyTypes(relationship.FromTable, fromKeys);
         await _stages.ReplaceSourceCandidatesAsync(relationship.FromTable, fromKeys, cancellationToken);
         var fromKeyColumns = KeyColumns(relationship.FromTable);
         var toKeyColumns = KeyColumns(relationship.ToTable);
@@ -104,11 +112,23 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
     private StableKey ReadKey(SqlDataReader rows, TableDefinition table)
     {
         var columns = KeyColumns(table);
-        var metadata = _source.Table(table.Name);
         var components = columns.Select((column, i) => new KeyComponent(column, rows.GetValue(i))).ToArray();
-        if (components.Where((component, i) => component.Value!.GetType() != metadata.Column(columns[i]).ClrType).Any())
-            throw new InvalidOperationException("Stable-key CLR type does not match catalog metadata.");
-        return new StableKey(components);
+        var key = new StableKey(components);
+        ValidateKeyTypes(table, [key]);
+        return key;
+    }
+
+    private void ValidateKeyTypes(TableDefinition table, IReadOnlyCollection<StableKey> keys)
+    {
+        var columns = KeyColumns(table);
+        var metadata = _source.Table(table.Name);
+        foreach (var key in keys)
+            foreach (var column in columns)
+            {
+                var value = key.Components.Single(component => component.Column == column).Value;
+                if (value is null || value.GetType() != metadata.Column(column).ClrType)
+                    throw new InvalidOperationException("Stable-key CLR type does not match catalog metadata.");
+            }
     }
 
     private static string Qualified(TableDefinition table) => SqlServerIdentifier.Qualified(table.Schema, table.Name);
