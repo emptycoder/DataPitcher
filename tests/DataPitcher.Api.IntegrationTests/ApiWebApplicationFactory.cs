@@ -44,6 +44,8 @@ public sealed class TestAuthenticationHandler(IOptionsMonitor<AuthenticationSche
 
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, "test-principal") };
         claims.AddRange(permissions.Select(permission => new Claim(ApiClaimTypes.Permission, permission)));
+        if (Request.Headers.TryGetValue("X-Test-Raw-Claim", out var rawClaim))
+            claims.Add(new Claim("test-raw-claim", rawClaim.ToString()));
         var identity = new ClaimsIdentity(claims, SchemeName);
         var ticket = new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName);
         return Task.FromResult(AuthenticateResult.Success(ticket));

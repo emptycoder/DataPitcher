@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using DataPitcher.Core.Authorization;
+using DataPitcher.Api.Contracts;
+using DataPitcher.Api.Errors;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Http;
@@ -71,15 +73,19 @@ public sealed class ResourceAuthorizationHandler(IResourceAccessGrantReader gran
 
 public static class ApiAuthorizationResults
 {
-    public static ProblemHttpResult Unauthenticated() => TypedResults.Problem(
-        statusCode: StatusCodes.Status401Unauthorized, title: "Authentication required",
-        detail: "Authentication is required for this operation.",
-        extensions: new Dictionary<string, object?> { ["code"] = "unauthenticated", ["correlationId"] = Guid.NewGuid().ToString() });
+    public static ProblemHttpResult Unauthenticated(HttpContext context) =>
+        ApiProblemMapper.Result(new(ApiErrorClass.Unauthenticated, new(null, null, null, null, null)), context);
 
-    public static ProblemHttpResult Forbidden() => TypedResults.Problem(
-        statusCode: StatusCodes.Status403Forbidden, title: "Authorization denied",
-        detail: "You are not allowed to perform this operation.",
-        extensions: new Dictionary<string, object?> { ["code"] = "authorization_denied", ["correlationId"] = Guid.NewGuid().ToString() });
+    public static ProblemHttpResult Forbidden(HttpContext context, ApiResource? resource = null) =>
+        ApiProblemMapper.Result(new(ApiErrorClass.Forbidden, Resources(resource)), context);
+
+    private static ResourceIdentifiers Resources(ApiResource? resource) => resource switch
+    {
+        ConnectionResource connection => new(connection.ConnectionId, null, null, null, null),
+        PlanResource plan => new(null, null, null, plan.PlanId, null),
+        JobResource job => new(null, null, null, null, job.JobId),
+        _ => new(null, null, null, null, null),
+    };
 }
 
 public sealed class ApiAuthorizationMiddlewareResultHandler : IAuthorizationMiddlewareResultHandler
@@ -89,8 +95,8 @@ public sealed class ApiAuthorizationMiddlewareResultHandler : IAuthorizationMidd
     public async Task HandleAsync(RequestDelegate next, HttpContext context, AuthorizationPolicy policy, PolicyAuthorizationResult authorizeResult)
     {
         if (authorizeResult.Succeeded) { await next(context); return; }
-        if (authorizeResult.Challenged) { await ApiAuthorizationResults.Unauthenticated().ExecuteAsync(context); return; }
-        if (authorizeResult.Forbidden) { await ApiAuthorizationResults.Forbidden().ExecuteAsync(context); return; }
+        if (authorizeResult.Challenged) { await ApiAuthorizationResults.Unauthenticated(context).ExecuteAsync(context); return; }
+        if (authorizeResult.Forbidden) { await ApiAuthorizationResults.Forbidden(context).ExecuteAsync(context); return; }
         await Default.HandleAsync(next, context, policy, authorizeResult);
     }
 }

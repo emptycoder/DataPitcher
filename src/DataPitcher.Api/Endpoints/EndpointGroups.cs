@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
+using DataPitcher.Api.Errors;
 using DataPitcher.Core.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -14,31 +15,37 @@ public static class EndpointGroups
     public static void Map(IEndpointRouteBuilder app)
     {
         var connections = app.MapGroup("/api/connections");
-        connections.MapGet("", ListConnectionsAsync).RequireAuthorization(ApiPolicyNames.ConnectionsRead);
-        connections.MapPost("", CreateConnectionAsync).RequireAuthorization(ApiPolicyNames.ConnectionsWrite);
-        connections.MapPost("/{connectionId:guid}/checks", QueueConnectionCheckAsync).RequireAuthorization(ApiPolicyNames.ConnectionsWrite);
-        connections.MapPost("/{connectionId:guid}/schema-scans", QueueSchemaScanAsync).RequireAuthorization(ApiPolicyNames.SchemaWrite);
-        connections.MapGet("/{connectionId:guid}/snapshots/{snapshotId:guid}", GetSnapshotAsync).RequireAuthorization(ApiPolicyNames.SchemaRead);
+        WithStandardProblems(connections.MapGet("", ListConnectionsAsync).RequireAuthorization(ApiPolicyNames.ConnectionsRead));
+        WithStandardProblems(connections.MapPost("", CreateConnectionAsync).RequireAuthorization(ApiPolicyNames.ConnectionsWrite));
+        WithStandardProblems(connections.MapPost("/{connectionId:guid}/checks", QueueConnectionCheckAsync).RequireAuthorization(ApiPolicyNames.ConnectionsWrite));
+        WithStandardProblems(connections.MapPost("/{connectionId:guid}/schema-scans", QueueSchemaScanAsync).RequireAuthorization(ApiPolicyNames.SchemaWrite));
+        WithStandardProblems(connections.MapGet("/{connectionId:guid}/snapshots/{snapshotId:guid}", GetSnapshotAsync).RequireAuthorization(ApiPolicyNames.SchemaRead));
 
         var selections = app.MapGroup("/api/selections");
-        selections.MapPut("/{selectionId:guid}", SaveSelectionAsync).RequireAuthorization(ApiPolicyNames.SelectionsWrite);
-        selections.MapPost("/{selectionId:guid}/evaluations", QueueSelectionEvaluationAsync).RequireAuthorization(ApiPolicyNames.SelectionsWrite);
+        WithStandardProblems(selections.MapPut("/{selectionId:guid}", SaveSelectionAsync).RequireAuthorization(ApiPolicyNames.SelectionsWrite));
+        WithStandardProblems(selections.MapPost("/{selectionId:guid}/evaluations", QueueSelectionEvaluationAsync).RequireAuthorization(ApiPolicyNames.SelectionsWrite));
 
         var plans = app.MapGroup("/api/plans");
-        plans.MapPut("/{planId:guid}", SavePlanAsync).RequireAuthorization(ApiPolicyNames.PlansWrite);
-        plans.MapPost("/{planId:guid}/seal", QueuePlanSealAsync).RequireAuthorization(ApiPolicyNames.PlansSeal);
-        plans.MapPost("/{planId:guid}/jobs", StartJobAsync).RequireAuthorization(ApiPolicyNames.TransfersStart);
+        WithStandardProblems(plans.MapPut("/{planId:guid}", SavePlanAsync).RequireAuthorization(ApiPolicyNames.PlansWrite));
+        WithStandardProblems(plans.MapPost("/{planId:guid}/seal", QueuePlanSealAsync).RequireAuthorization(ApiPolicyNames.PlansSeal));
+        WithStandardProblems(plans.MapPost("/{planId:guid}/jobs", StartJobAsync).RequireAuthorization(ApiPolicyNames.TransfersStart));
 
         var jobs = app.MapGroup("/api/jobs");
-        jobs.MapGet("/{jobId:guid}", GetJobAsync).RequireAuthorization(ApiPolicyNames.TransfersRead);
-        jobs.MapPost("/{jobId:guid}/commands", QueueJobCommandAsync).RequireAuthorization(ApiPolicyNames.TransfersWrite);
+        WithStandardProblems(jobs.MapGet("/{jobId:guid}", GetJobAsync).RequireAuthorization(ApiPolicyNames.TransfersRead));
+        WithStandardProblems(jobs.MapPost("/{jobId:guid}/commands", QueueJobCommandAsync).RequireAuthorization(ApiPolicyNames.TransfersWrite));
     }
 
+    private static RouteHandlerBuilder WithStandardProblems(RouteHandlerBuilder builder) => builder
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden)
+        .ProducesProblem(StatusCodes.Status500InternalServerError);
+
     private static async Task<ProblemHttpResult?> AuthorizeResourceAsync(
-        IAuthorizationService authorizationService, ClaimsPrincipal user, ApiResource resource, Permission permission)
+        HttpContext context, IAuthorizationService authorizationService, ClaimsPrincipal user, ApiResource resource, Permission permission)
     {
         var result = await authorizationService.AuthorizeAsync(user, resource, new ResourcePermissionRequirement(permission));
-        return result.Succeeded ? null : ApiAuthorizationResults.Forbidden();
+        return result.Succeeded ? null : ApiAuthorizationResults.Forbidden(context, resource);
     }
 
     private static async Task<Ok<IReadOnlyList<ConnectionResponse>>> ListConnectionsAsync(
@@ -50,25 +57,25 @@ public static class EndpointGroups
         TypedResults.Ok(await application.CreateConnectionAsync(request, cancellationToken));
 
     private static async Task<Results<Accepted<OperationReceiptResponse>, ProblemHttpResult>> QueueConnectionCheckAsync(
-        Guid connectionId, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+        Guid connectionId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
     {
-        if (await AuthorizeResourceAsync(authorizationService, user, new ConnectionResource(connectionId), Permissions.ConnectionsWrite) is { } problem) return problem;
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new ConnectionResource(connectionId), Permissions.ConnectionsWrite) is { } problem) return problem;
         var receipt = await application.QueueConnectionCheckAsync(connectionId, cancellationToken);
         return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
     }
 
     private static async Task<Results<Accepted<OperationReceiptResponse>, ProblemHttpResult>> QueueSchemaScanAsync(
-        Guid connectionId, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+        Guid connectionId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
     {
-        if (await AuthorizeResourceAsync(authorizationService, user, new ConnectionResource(connectionId), Permissions.SchemaWrite) is { } problem) return problem;
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new ConnectionResource(connectionId), Permissions.SchemaWrite) is { } problem) return problem;
         var receipt = await application.QueueSchemaScanAsync(connectionId, cancellationToken);
         return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
     }
 
     private static async Task<Results<Ok<SchemaSnapshotResponse>, ProblemHttpResult>> GetSnapshotAsync(
-        Guid connectionId, Guid snapshotId, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+        Guid connectionId, Guid snapshotId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
     {
-        if (await AuthorizeResourceAsync(authorizationService, user, new ConnectionResource(connectionId), Permissions.SchemaRead) is { } problem) return problem;
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new ConnectionResource(connectionId), Permissions.SchemaRead) is { } problem) return problem;
         return TypedResults.Ok(await application.GetSnapshotAsync(connectionId, snapshotId, cancellationToken));
     }
 
@@ -88,44 +95,44 @@ public static class EndpointGroups
     }
 
     private static async Task<Results<Ok<PlanResponse>, ProblemHttpResult>> SavePlanAsync(
-        Guid planId, SavePlanRequest request, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+        Guid planId, SavePlanRequest request, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.IfMatch))
             return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "If-Match is required.");
-        if (await AuthorizeResourceAsync(authorizationService, user, new PlanResource(planId), Permissions.PlansWrite) is { } problem) return problem;
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new PlanResource(planId), Permissions.PlansWrite) is { } problem) return problem;
         return TypedResults.Ok(await application.SavePlanAsync(planId, request, cancellationToken));
     }
 
     private static async Task<Results<Accepted<OperationReceiptResponse>, ProblemHttpResult>> QueuePlanSealAsync(
-        Guid planId, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+        Guid planId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
     {
-        if (await AuthorizeResourceAsync(authorizationService, user, new PlanResource(planId), Permissions.PlansSeal) is { } problem) return problem;
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new PlanResource(planId), Permissions.PlansSeal) is { } problem) return problem;
         var receipt = await application.QueuePlanSealAsync(planId, cancellationToken);
         return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
     }
 
     private static async Task<Results<Accepted<OperationReceiptResponse>, ProblemHttpResult>> StartJobAsync(
-        Guid planId, HttpRequest request, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+        Guid planId, HttpRequest request, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
     {
         if (!request.Headers.TryGetValue("Idempotency-Key", out var values) || string.IsNullOrWhiteSpace(values.ToString()))
             return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Idempotency key is required.");
-        if (await AuthorizeResourceAsync(authorizationService, user, new PlanResource(planId), Permissions.TransfersStart) is { } problem) return problem;
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new PlanResource(planId), Permissions.TransfersStart) is { } problem) return problem;
 
         var receipt = await application.StartJobAsync(planId, values.ToString(), cancellationToken);
         return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
     }
 
     private static async Task<Results<Ok<JobResponse>, ProblemHttpResult>> GetJobAsync(
-        Guid jobId, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+        Guid jobId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
     {
-        if (await AuthorizeResourceAsync(authorizationService, user, new JobResource(jobId), Permissions.TransfersRead) is { } problem) return problem;
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new JobResource(jobId), Permissions.TransfersRead) is { } problem) return problem;
         return TypedResults.Ok(await application.GetJobAsync(jobId, cancellationToken));
     }
 
     private static async Task<Results<Accepted<OperationReceiptResponse>, ProblemHttpResult>> QueueJobCommandAsync(
-        Guid jobId, JobCommandRequest request, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+        Guid jobId, JobCommandRequest request, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
     {
-        if (await AuthorizeResourceAsync(authorizationService, user, new JobResource(jobId), Permissions.TransfersWrite) is { } problem) return problem;
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new JobResource(jobId), Permissions.TransfersWrite) is { } problem) return problem;
         var receipt = await application.QueueJobCommandAsync(jobId, request.Command, cancellationToken);
         return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
     }
