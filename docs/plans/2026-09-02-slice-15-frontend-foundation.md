@@ -6,7 +6,7 @@
 
 **Architecture:** TanStack Query owns every refetchable value from the server, while Zustand owns only small client interaction values behind narrow stores. OpenAPI produces both the endpoint client and Zod schemas; a thin injected-fetch adapter validates a response before a query can cache it. Pure policy and transformation modules carry behavior, and React components render accessible output without reaching directly into browser or transport APIs.
 
-**Tech Stack:** Node 22.22.2+, npm with committed `package-lock.json`, Vite 8.2.2, React and React DOM 19.2.8, TypeScript strict mode, Zustand 5.0.15, TanStack React Query 5.102.8, Tailwind CSS and `@tailwindcss/vite` 4.3.3, Vitest and `@vitest/coverage-v8` 4.1.11, React Testing Library 16.3.3, Playwright 1.62.1, Orval 8.27.0, Zod 4.5.4, and `@vitejs/plugin-react` 6.1.1.
+**Tech Stack:** Node 22.22.2+, npm with committed `package-lock.json`, Vite 8.2.2, React and React DOM 19.2.8, TypeScript strict mode, Zustand 5.0.15, TanStack React Query 5.102.8, Tailwind CSS and `@tailwindcss/vite` 4.3.3, Vitest and `@vitest/coverage-v8` 4.1.11, happy-dom 20.13.1, React Testing Library 16.3.3, Playwright 1.62.1, Orval 8.27.0, Zod 4.5.4, and `@vitejs/plugin-react` 6.1.1.
 
 ---
 
@@ -26,7 +26,7 @@
 - `scripts/test-frontend.sh` — isolated npm typecheck and frontend coverage lane.
 - `web/src/stores/sessionStore.ts` — private, non-persisted session interaction store with narrow exports.
 - `web/src/stores/preferencesStore.ts` — separate persisted preference store with an explicit allowlist.
-- `web/src/stores/storeBoundary.test.tsx` — state ownership, persistence, and no-transport-import architecture tests.
+- `web/src/stores/storeBoundary.test.tsx` — state ownership and persistence tests.
 - `web/src/auth/authAdapter.ts` — authentication adapter contract and development in-memory implementation.
 - `web/src/auth/permissionPolicy.ts` — pure hide-versus-disable permission decision.
 - `web/src/auth/ProtectedAction.tsx`, `web/src/auth/authAdapter.test.tsx` — accessible permission-aware rendering and adapter tests.
@@ -45,9 +45,9 @@ This slice deliberately creates no dependency graph, Selection Workbench, plan-r
 
 The foundation is worth completing first because its state boundary, generated transport client, authentication adapter, and coverage lane decide whether every later feature can achieve 100% handwritten coverage. Query-owned topology, SSE job state, table payloads, graph layout results, and any future preview rows must not be copied into Zustand. Likewise, worker, fetch, timer, scheduler, and query-client calls must remain behind small adapters when those features arrive. This slice establishes the enforceable pattern, not a half-built workflow screen.
 
-Vite 8 requires Node 20.19+ or 22.12+; this repository sets Node 22.22.2+ because the pinned generator and JSDOM test runtime have stricter engine requirements. Use npm only, commit `package-lock.json`, and never use a globally installed generator. Tailwind 4 requires `@tailwindcss/vite`; do not recycle a Tailwind 3 PostCSS/config-file setup. Playwright is pinned now for later browser smoke tests but does not enter the unit coverage calculation.
+Vite 8 requires Node 20.19+ or 22.12+; this repository sets Node 22.22.2+. The test environment is explicitly pinned to happy-dom 20.13.1 because jsdom 30.0.1 does not support Node 25.2.1, while happy-dom supports current Node and is faster. Use npm only, commit `package-lock.json`, and never use a globally installed generator. Tailwind 4 requires `@tailwindcss/vite`; do not recycle a Tailwind 3 PostCSS/config-file setup. Playwright is pinned now for later browser smoke tests but does not enter the unit coverage calculation.
 
-The coverage lane is intentionally separate from `scripts/test-all.sh`. The existing aggregate gate measures .NET build and Coverlet/ReportGenerator output, while the frontend lane measures TypeScript with Vitest's V8 provider; neither toolchain can honestly merge the other's counters. The frontend gate uses `all: true`, explicit first-party `src/**/*.{ts,tsx}` inclusion, and 100% statement, branch, function, and line thresholds. Generated files are the sole source exclusion: they are verified through deterministic regeneration and boundary integration instead of pretending vendor generator output is handwritten code.
+The coverage lane is intentionally separate from `scripts/test-all.sh`. The existing aggregate gate measures .NET build and Coverlet/ReportGenerator output, while the frontend lane measures TypeScript with Vitest's V8 provider; neither toolchain can honestly merge the other's counters. The frontend gate uses `coverage.include` for explicit first-party `src/**/*.{ts,tsx}` inclusion and 100% statement, branch, function, and line thresholds, so unimported handwritten modules still count. Generated files are the sole source exclusion: they are verified through deterministic regeneration and boundary integration instead of pretending vendor generator output is handwritten code.
 
 No test may depend on a real network or elapsed time. Tests supply a request function, token adapter, `AbortSignal`, clock, and scheduler whenever a module needs one. Prefer Testing Library queries by accessible role and name, never test identifiers. Every module introduced by a task has an executable test in that same task; an uncovered branch or unimported source file blocks merge.
 
@@ -100,11 +100,11 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
      "engines": { "node": ">=22.22.2" },
      "scripts": { "dev": "vite", "build": "tsc -b && vite build", "typecheck": "tsc -b", "test": "vitest", "test:coverage": "vitest run --coverage" },
      "dependencies": { "@tanstack/react-query": "5.102.8", "react": "19.2.8", "react-dom": "19.2.8", "zod": "4.5.4", "zustand": "5.0.15" },
-     "devDependencies": { "@tailwindcss/vite": "4.3.3", "@testing-library/jest-dom": "7.0.1", "@testing-library/react": "16.3.3", "@types/react": "19.2.18", "@types/react-dom": "19.2.5", "@vitejs/plugin-react": "6.1.1", "@vitest/coverage-v8": "4.1.11", "jsdom": "30.0.1", "orval": "8.27.0", "playwright": "1.62.1", "tailwindcss": "4.3.3", "typescript": "6.0.3", "vite": "8.2.2", "vitest": "4.1.11" }
+      "devDependencies": { "@tailwindcss/vite": "4.3.3", "@testing-library/jest-dom": "7.0.1", "@testing-library/react": "16.3.3", "@types/react": "19.2.18", "@types/react-dom": "19.2.5", "@vitejs/plugin-react": "6.1.1", "@vitest/coverage-v8": "4.1.11", "happy-dom": "20.13.1", "orval": "8.27.0", "playwright": "1.62.1", "tailwindcss": "4.3.3", "typescript": "6.0.3", "vite": "8.2.2", "vitest": "4.1.11" }
    }
    ```
 
-   Configure strict TypeScript with `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, and `verbatimModuleSyntax`; use `react-jsx`, bundler module resolution, and separate app/node project references. Configure Vite with its React plugin, `tailwindcss()` from `@tailwindcss/vite`, JSDOM Vitest setup, and this complete coverage block:
+    Configure strict TypeScript with `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, and `verbatimModuleSyntax`; use `react-jsx`, bundler module resolution, and separate app/node project references. Configure Vite with its React plugin, `tailwindcss()` from `@tailwindcss/vite`, happy-dom Vitest setup, and this complete coverage block:
 
    ```ts
    import { defineConfig } from 'vitest/config';
@@ -114,9 +114,9 @@ No test may depend on a real network or elapsed time. Tests supply a request fun
    export default defineConfig({
      plugins: [react(), tailwindcss()],
      test: {
-       environment: 'jsdom', setupFiles: ['./src/test/setup.ts'],
-       coverage: {
-         provider: 'v8', all: true, include: ['src/**/*.{ts,tsx}'],
+        environment: 'happy-dom', setupFiles: ['./src/test/setup.ts'],
+        coverage: {
+          provider: 'v8', include: ['src/**/*.{ts,tsx}'],
          exclude: ['src/**/*.test.{ts,tsx}', 'src/test/**', 'src/api/generated/**'],
          thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
        },
@@ -194,14 +194,12 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
 
 **Files:**
 - Create: `web/src/stores/sessionStore.ts`, `web/src/stores/preferencesStore.ts`, `web/src/stores/storeBoundary.test.tsx`
-- Modify: none
+- Modify: `web/vite.config.ts`
 - Test: `web/src/stores/storeBoundary.test.tsx`
 
-1. - [ ] **Write the failing state-boundary tests.** Create `web/src/stores/storeBoundary.test.tsx` with this complete test body. It makes the persisted shape and forbidden transport-import rule executable rather than review convention.
+1. - [ ] **Write the failing state-boundary tests.** Create `web/src/stores/storeBoundary.test.tsx` with this complete test body. It makes the persisted shape executable rather than review convention.
 
    ```tsx
-    import { readFileSync } from 'node:fs';
-    import { resolve } from 'node:path';
     import { afterEach, expect, it } from 'vitest';
     import { render, screen } from '@testing-library/react';
     import { createPreferencesStore, preferenceActions } from './preferencesStore';
@@ -242,22 +240,15 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
       render(<PreferenceProbe preferences={preferences} />);
       expect(screen.getByRole('status')).toHaveTextContent('dark|false');
       expect(JSON.parse(values.get('datapitcher.preferences')!).state)
-        .toEqual({ colorScheme: 'dark', reducedMotion: false });
+         .toEqual({ colorScheme: 'dark', reducedMotion: false });
     });
+    ```
 
-    it('keeps store modules free of transport imports and preferences allowlisted', () => {
-      const stores = resolve(process.cwd(), 'src/stores');
-      const preferenceSource = readFileSync(resolve(stores, 'preferencesStore.ts'), 'utf8');
-      expect(preferenceSource).toContain('partialize');
-      for (const name of ['sessionStore.ts', 'preferencesStore.ts']) {
-        expect(readFileSync(resolve(stores, name), 'utf8')).not.toMatch(/from\s+['"][^'"]*\/api\//);
-      }
-    });
-   ```
+    The Vite configuration rejects imports from `src/api` in `src/stores` during module transformation, so the bundler—not a filesystem-reading test—enforces the transport boundary without Node type definitions. The persistence test above verifies the explicit allowlist through observable storage output.
 
 2. - [ ] **Run the missing-store tests.** Run `npm --prefix web test -- --run src/stores/storeBoundary.test.tsx`; expect non-zero exit and `Failed to resolve import "./sessionStore"`.
 
-3. - [ ] **Implement two deliberately narrow Zustand stores.** Create the following session store; it holds identifiers and a small identity value object only, is not persisted, does not export its underlying Zustand hook, and has neither a generic object bag nor arbitrary patch action.
+3. - [ ] **Implement two deliberately narrow Zustand stores and the bundler boundary.** Add a Vite plugin that rejects any `from '.../api/...'` import in a module under `src/stores` during transformation. Create the following session store; it holds identifiers and a small identity value object only, is not persisted, does not export its underlying Zustand hook, and has neither a generic object bag nor arbitrary patch action.
 
    ```ts
    import { create } from 'zustand';
@@ -334,11 +325,11 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
 
     `createJSONStorage` is the explicit persistence adapter. Its production instance receives `window.localStorage`, never the ambient `localStorage` global; the test injects an in-memory `StateStorage` double. The factory result still exposes only named actions and selectors, never the underlying Zustand hook or a generic patch operation.
 
-   Neither store may import generated types or any other transport type; that makes large server payloads unstorable by construction. Access tokens are not a session field, not a preference, never in localStorage, and never in a URL.
+    Neither store may import generated types or any other transport type; Vite rejects `src/api` imports from `src/stores` during transformation, making large server payloads unstorable by construction. Access tokens are not a session field, not a preference, never in localStorage, and never in a URL.
 
-4. - [ ] **Run the state-boundary tests.** Run `npm --prefix web test -- --run src/stores/storeBoundary.test.tsx`; expect exit 0 with all three state ownership assertions passing.
+4. - [ ] **Run the state-boundary tests.** Run `npm --prefix web test -- --run src/stores/storeBoundary.test.tsx`; expect exit 0 with both state ownership assertions passing.
 
-5. - [ ] **Commit the structurally constrained stores.** Run `git add web/src/stores/sessionStore.ts web/src/stores/preferencesStore.ts web/src/stores/storeBoundary.test.tsx && git commit -m "feat: separate frontend state ownership"`.
+5. - [ ] **Commit the structurally constrained stores.** Run `git add web/vite.config.ts web/src/stores/sessionStore.ts web/src/stores/preferencesStore.ts web/src/stores/storeBoundary.test.tsx && git commit -m "feat: separate frontend state ownership"`.
 
 ### Task 4: Add the authentication adapter and permission-aware rendering rule
 
