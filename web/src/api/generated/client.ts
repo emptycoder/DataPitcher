@@ -48,6 +48,117 @@ export interface PlanSchemaDependencyGraph {
   relationships: PlanSchemaDependencyGraphRelationship[];
 }
 
+export type ValueKind = typeof ValueKind[keyof typeof ValueKind];
+
+
+export const ValueKind = {
+  int: 'int',
+  decimal: 'decimal',
+  string: 'string',
+  boolean: 'boolean',
+  date: 'date',
+  time: 'time',
+  dateTime: 'dateTime',
+  guid: 'guid',
+} as const;
+
+export interface TypedParameterDefinition {
+  name: string;
+  kind: ValueKind;
+}
+
+export interface TypedParameterValue {
+  name: string;
+  kind: ValueKind;
+  value: string | number | boolean;
+}
+
+export type SelectionRequestMode = typeof SelectionRequestMode[keyof typeof SelectionRequestMode];
+
+
+export const SelectionRequestMode = {
+  visual: 'visual',
+  raw: 'raw',
+} as const;
+
+export type SelectionRequestVisual = { [key: string]: unknown } | null;
+
+export interface SelectionRequest {
+  mode: SelectionRequestMode;
+  visual: SelectionRequestVisual;
+  rawSql: string | null;
+  parameters: TypedParameterValue[];
+  schemaRevision: string;
+}
+
+export interface SelectionColumn {
+  name: string;
+  valueKind: ValueKind;
+}
+
+export interface SelectionTable {
+  tableId: string;
+  schemaName: string;
+  tableName: string;
+  approximateRowCount: number | null;
+  stableKeyColumns: string[] | null;
+  columns: SelectionColumn[];
+}
+
+export interface ForeignKeyPath {
+  foreignKeyId: string;
+  childTableId: string;
+  parentTableId: string;
+}
+
+export interface SelectionWorkbenchSchemaResponse {
+  tables: SelectionTable[];
+  foreignKeys: ForeignKeyPath[];
+  schemaRevision: string;
+}
+
+export type SavedSelectionMode = typeof SavedSelectionMode[keyof typeof SavedSelectionMode];
+
+
+export const SavedSelectionMode = {
+  visual: 'visual',
+  raw: 'raw',
+} as const;
+
+export interface SavedSelection {
+  selectionId: string;
+  displayName: string;
+  version: number;
+  eTag: string;
+  mode: SavedSelectionMode;
+  warnings: string[];
+}
+
+export interface ListSelectionsResponse {
+  selections: SavedSelection[];
+}
+
+export interface CompilationResponse {
+  sqlSnapshot: string;
+  parameters: TypedParameterDefinition[];
+  warnings: string[];
+  schemaRevision: string;
+}
+
+export type PreviewResponseRowsItem = { [key: string]: unknown };
+
+export interface PreviewResponse {
+  columns: string[];
+  rows: PreviewResponseRowsItem[];
+  hasMore: boolean;
+  revision: string;
+}
+
+export interface CountResponse {
+  /** @minimum 0 */
+  distinctStableKeyCount: number;
+}
+
 export type effectivePermissionsResponse200 = {
   data: EffectivePermissions
   status: 200
@@ -124,4 +235,268 @@ export const planSchemaDependencyGraph = async (planId: string, options?: Reques
 
   const data: planSchemaDependencyGraphResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as planSchemaDependencyGraphResponse
+}
+
+
+
+export type getSelectionWorkbenchSchemaResponse200 = {
+  data: SelectionWorkbenchSchemaResponse
+  status: 200
+}
+
+export type getSelectionWorkbenchSchemaResponseSuccess = (getSelectionWorkbenchSchemaResponse200) & {
+  headers: Headers;
+};
+;
+
+export type getSelectionWorkbenchSchemaResponse = (getSelectionWorkbenchSchemaResponseSuccess)
+
+export const getGetSelectionWorkbenchSchemaUrl = () => {
+
+
+
+
+  return `/api/selections/workbench-schema`
+}
+
+export const getSelectionWorkbenchSchema = async ( options?: RequestInit): Promise<getSelectionWorkbenchSchemaResponse> => {
+
+  const res = await fetch(getGetSelectionWorkbenchSchemaUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: getSelectionWorkbenchSchemaResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as getSelectionWorkbenchSchemaResponse
+}
+
+
+
+export type listSelectionsResponse200 = {
+  data: ListSelectionsResponse
+  status: 200
+}
+
+export type listSelectionsResponseSuccess = (listSelectionsResponse200) & {
+  headers: Headers;
+};
+;
+
+export type listSelectionsResponse = (listSelectionsResponseSuccess)
+
+export const getListSelectionsUrl = () => {
+
+
+
+
+  return `/api/selections`
+}
+
+export const listSelections = async ( options?: RequestInit): Promise<listSelectionsResponse> => {
+
+  const res = await fetch(getListSelectionsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: listSelectionsResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as listSelectionsResponse
+}
+
+
+
+export type compileSelectionResponse200 = {
+  data: CompilationResponse
+  status: 200
+}
+
+export type compileSelectionResponseSuccess = (compileSelectionResponse200) & {
+  headers: Headers;
+};
+;
+
+export type compileSelectionResponse = (compileSelectionResponseSuccess)
+
+export const getCompileSelectionUrl = () => {
+
+
+
+
+  return `/api/selections/compile`
+}
+
+export const compileSelection = async (selectionRequest: SelectionRequest, options?: RequestInit): Promise<compileSelectionResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+const res = await fetch(getCompileSelectionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(selectionRequest)
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: compileSelectionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as compileSelectionResponse
+}
+
+
+
+export type previewSelectionResponse200 = {
+  data: PreviewResponse
+  status: 200
+}
+
+export type previewSelectionResponseSuccess = (previewSelectionResponse200) & {
+  headers: Headers;
+};
+;
+
+export type previewSelectionResponse = (previewSelectionResponseSuccess)
+
+export const getPreviewSelectionUrl = () => {
+
+
+
+
+  return `/api/selections/preview`
+}
+
+export const previewSelection = async (selectionRequest: SelectionRequest, options?: RequestInit): Promise<previewSelectionResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+const res = await fetch(getPreviewSelectionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(selectionRequest)
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: previewSelectionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as previewSelectionResponse
+}
+
+
+
+export type countSelectionResponse200 = {
+  data: CountResponse
+  status: 200
+}
+
+export type countSelectionResponseSuccess = (countSelectionResponse200) & {
+  headers: Headers;
+};
+;
+
+export type countSelectionResponse = (countSelectionResponseSuccess)
+
+export const getCountSelectionUrl = () => {
+
+
+
+
+  return `/api/selections/count`
+}
+
+export const countSelection = async (selectionRequest: SelectionRequest, options?: RequestInit): Promise<countSelectionResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+const res = await fetch(getCountSelectionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(selectionRequest)
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: countSelectionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as countSelectionResponse
+}
+
+
+
+export type saveSelectionResponse200 = {
+  data: SavedSelection
+  status: 200
+}
+
+export type saveSelectionResponseSuccess = (saveSelectionResponse200) & {
+  headers: Headers;
+};
+;
+
+export type saveSelectionResponse = (saveSelectionResponseSuccess)
+
+export const getSaveSelectionUrl = () => {
+
+
+
+
+  return `/api/selections/save`
+}
+
+export const saveSelection = async (selectionRequest: SelectionRequest, options?: RequestInit): Promise<saveSelectionResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+const res = await fetch(getSaveSelectionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(selectionRequest)
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: saveSelectionResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as saveSelectionResponse
 }
