@@ -1,8 +1,13 @@
+using System.Collections.Concurrent;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
 using DataPitcher.Core.Authorization;
+using DataPitcher.Infrastructure.Events;
+using DataPitcher.Infrastructure.Migrations;
+using DataPitcher.Infrastructure.Storage;
+using DataPitcher.Infrastructure.Time;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -15,18 +20,47 @@ namespace DataPitcher.Api.IntegrationTests;
 
 public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
 {
+    private readonly string _databasePath = Path.Combine(Path.GetTempPath(), $"datapitcher-api-{Guid.NewGuid():N}.db");
     public FakeDataPitcherApplication Application { get; } = new();
+    public TestClock Clock { get; } = new(new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero));
+    public JobEventStore Events { get; }
+    public IJobEventSignal EventSignal { get; } = new JobEventSignal();
+    public TestResourceAccessGrantReader Grants => Services.GetRequiredService<TestResourceAccessGrantReader>();
+
+    public ApiWebApplicationFactory()
+    {
+        var database = new ControlDatabase($"Data Source={_databasePath}");
+        new ControlDatabaseMigrator(database, Clock).Apply();
+        Events = new(database, Clock, EventSignal);
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<IDataPitcherApplication>(Application);
-            services.AddSingleton<IResourceAccessGrantReader, TestResourceAccessGrantReader>();
+            services.AddSingleton<TestResourceAccessGrantReader>();
+            services.AddSingleton<IResourceAccessGrantReader>(serviceProvider => serviceProvider.GetRequiredService<TestResourceAccessGrantReader>());
+            services.AddSingleton<IValidatedAccessTokenLifetime, TestValidatedAccessTokenLifetime>();
+            services.AddSingleton<IJobEventWriter>(Events);
+            services.AddSingleton<IJobEventReader>(Events);
+            services.AddSingleton(EventSignal);
             services.AddAuthentication(TestAuthenticationHandler.SchemeName)
                 .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>(TestAuthenticationHandler.SchemeName, _ => { });
         });
     }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        if (disposing && File.Exists(_databasePath)) File.Delete(_databasePath);
+    }
+}
+
+public sealed class TestClock(DateTimeOffset utcNow) : IClock
+{
+    public DateTimeOffset UtcNow { get; private set; } = utcNow;
+    public void Advance(TimeSpan elapsed) => UtcNow = UtcNow.Add(elapsed);
 }
 
 public sealed class TestAuthenticationHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
@@ -46,6 +80,8 @@ public sealed class TestAuthenticationHandler(IOptionsMonitor<AuthenticationSche
         claims.AddRange(permissions.Select(permission => new Claim(ApiClaimTypes.Permission, permission)));
         if (Request.Headers.TryGetValue("X-Test-Raw-Claim", out var rawClaim))
             claims.Add(new Claim("test-raw-claim", rawClaim.ToString()));
+        if (Request.Headers.TryGetValue("X-Test-Token-Expiry", out var expiry))
+            claims.Add(new Claim(TestValidatedAccessTokenLifetime.ExpiryClaim, expiry.ToString()));
         var identity = new ClaimsIdentity(claims, SchemeName);
         var ticket = new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName);
         return Task.FromResult(AuthenticateResult.Success(ticket));
@@ -54,19 +90,38 @@ public sealed class TestAuthenticationHandler(IOptionsMonitor<AuthenticationSche
 
 public sealed class TestResourceAccessGrantReader(IHttpContextAccessor accessor) : IResourceAccessGrantReader
 {
+    private readonly ConcurrentDictionary<Guid, bool> _jobGrants = [];
+    private int _jobAuthorizationCalls;
+
+    public int JobAuthorizationCalls => _jobAuthorizationCalls;
+    public void AllowJob(Guid jobId, bool allowed) => _jobGrants[jobId] = allowed;
+
     public Task<bool> IsGrantedAsync(ClaimsPrincipal principal, ApiResource resource, CancellationToken cancellationToken)
     {
+        if (resource is JobResource job)
+        {
+            Interlocked.Increment(ref _jobAuthorizationCalls);
+            if (_jobGrants.TryGetValue(job.JobId, out var allowed)) return Task.FromResult(allowed);
+        }
         var deniedHeader = accessor.HttpContext?.Request.Headers["X-Test-Denied-Resource"].ToString();
         var deniedId = Guid.TryParse(deniedHeader, out var parsed) ? parsed : (Guid?)null;
         var resourceId = resource switch
         {
             ConnectionResource connection => connection.ConnectionId,
             PlanResource plan => plan.PlanId,
-            JobResource job => job.JobId,
+            JobResource jobResource => jobResource.JobId,
             _ => (Guid?)null,
         };
         return Task.FromResult(deniedId is null || resourceId != deniedId);
     }
+}
+
+public sealed class TestValidatedAccessTokenLifetime : IValidatedAccessTokenLifetime
+{
+    public const string ExpiryClaim = "test-expiry";
+
+    public DateTimeOffset GetExpiryUtc(ClaimsPrincipal principal) =>
+        DateTimeOffset.TryParse(principal.FindFirst(ExpiryClaim)?.Value, out var expiry) ? expiry : DateTimeOffset.UtcNow.AddMinutes(5);
 }
 
 public sealed class FakeDataPitcherApplication : IDataPitcherApplication

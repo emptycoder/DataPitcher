@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
+using DataPitcher.Api.Events;
 using DataPitcher.Api.Errors;
 using DataPitcher.Core.Authorization;
 using Microsoft.AspNetCore.Authorization;
@@ -33,6 +34,7 @@ public static class EndpointGroups
         var jobs = app.MapGroup("/api/jobs");
         WithStandardProblems(jobs.MapGet("/{jobId:guid}", GetJobAsync).RequireAuthorization(ApiPolicyNames.TransfersRead));
         WithStandardProblems(jobs.MapPost("/{jobId:guid}/commands", QueueJobCommandAsync).RequireAuthorization(ApiPolicyNames.TransfersWrite));
+        JobEventStream.Map(jobs);
     }
 
     private static RouteHandlerBuilder WithStandardProblems(RouteHandlerBuilder builder) => builder

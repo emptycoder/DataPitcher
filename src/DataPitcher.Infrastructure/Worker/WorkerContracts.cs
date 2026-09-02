@@ -6,9 +6,9 @@ using DataPitcher.Infrastructure.Persistence;
 namespace DataPitcher.Infrastructure.Worker;
 
 public sealed record TransferRun(Guid JobId, Guid RunId, string ManifestSealHash, bool SupportsDurableResume);
-public sealed record TargetCheckpoint(Guid JobId, Guid RunId, long BatchSequence, StableKey? LastStableKey, long RowCount, string ManifestSealHash, long FenceToken);
+public sealed record TargetCheckpoint(Guid JobId, Guid RunId, long BatchSequence, StableKey? LastStableKey, long RowCount, string ManifestSealHash, long FenceToken, long BytesTransferred = 0);
 public enum TransferUnitKind { Batch, AtomicComponent }
-public sealed record TransferUnit(long BatchSequence, StableKey LastStableKey, long RowCount, TransferUnitKind Kind)
+public sealed record TransferUnit(long BatchSequence, StableKey LastStableKey, long RowCount, TransferUnitKind Kind, long BytesTransferred = 0)
 {
     public bool CanPauseAfterCommit => Kind is TransferUnitKind.Batch or TransferUnitKind.AtomicComponent;
 }

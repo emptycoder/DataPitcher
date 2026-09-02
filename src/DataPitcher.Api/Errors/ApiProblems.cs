@@ -3,6 +3,7 @@ using DataPitcher.Api.Contracts;
 using DataPitcher.Core.Closure;
 using DataPitcher.Core.Jobs;
 using DataPitcher.Infrastructure.Worker;
+using DataPitcher.Infrastructure.Events;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
@@ -35,6 +36,19 @@ public static class ApiProblemMapper
 
     public static ProblemHttpResult Result(ApiFault fault, HttpContext context) =>
         TypedResults.Problem(Map(fault, CorrelationId(context)));
+
+    public static ProblemHttpResult EventCursorExpired(HttpContext context, long oldestAvailableEventId)
+    {
+        var problem = Map(new(ApiErrorClass.Validation, new(null, null, null, null, null)), CorrelationId(context));
+        problem.Status = StatusCodes.Status409Conflict;
+        problem.Title = "Event cursor expired";
+        problem.Detail = "The retained event history no longer includes the supplied cursor.";
+        problem.Type = "urn:datapitcher:event-cursor-expired";
+        problem.Extensions["code"] = "event_cursor_expired";
+        problem.Extensions["reloadRequired"] = true;
+        problem.Extensions["oldestAvailableEventId"] = oldestAvailableEventId;
+        return TypedResults.Problem(problem);
+    }
 
     public static async Task WriteAsync(HttpContext context, ApiFault fault, CancellationToken cancellationToken)
     {
