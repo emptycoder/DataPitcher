@@ -90,6 +90,18 @@ public sealed class SqlServerSelectionSqlGeneratorTests
     }
 
     [Fact]
+    public void Compile_RendersEveryExistsCorrelation()
+    {
+        var orders = new TableDefinition("dbo", "orders", [new("tenant_id", typeof(int), false), new("id", typeof(int), false)], new("PK_orders", ["tenant_id", "id"]), []);
+        var lines = new TableDefinition("dbo", "order_lines", [new("order_tenant_id", typeof(int), false), new("order_id", typeof(int), false)], new("PK_order_lines", ["order_tenant_id", "order_id"]), []);
+        var query = new SelectionQuery(new([orders, lines], []), new(orders, "o"), new(orders.PrimaryKey), [], new ExistsPredicate(lines, "l", [new(new("o", "tenant_id"), "order_tenant_id"), new(new("o", "id"), "order_id")], null, false));
+
+        var sql = new SqlServerSelectionSqlGenerator().Compile(query);
+
+        Assert.Contains("[o].[tenant_id] = [l].[order_tenant_id] AND [o].[id] = [l].[order_id]", sql.CommandText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ColumnDefinition_DefaultsGeneratedMetadataAndPreservesItWhenSpecified()
     {
         Assert.False(new ColumnDefinition("id", typeof(int), false).IsGenerated);

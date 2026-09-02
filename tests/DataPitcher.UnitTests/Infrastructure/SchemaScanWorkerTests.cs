@@ -178,13 +178,16 @@ public sealed class SchemaScanWorkerTests
         var profile = await profiles.CreateAsync(Draft(), "profile-running-worker", CancellationToken.None);
         var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
         var queued = await snapshots.QueueAsync(profile.ConnectionId, "scan-running-worker", CancellationToken.None);
-        var worker = new SchemaScanWorker(snapshots, profiles, new Resolver(), new ConnectionProviderRegistry(new IConnectionProvider[] { new Provider(new ImmediateIntrospector(Content())) }));
+        var resolver = new Resolver();
+        var worker = new SchemaScanWorker(snapshots, profiles, resolver, new ConnectionProviderRegistry(new IConnectionProvider[] { new Provider(new ImmediateIntrospector(Content())) }));
 
         await worker.StartAsync(CancellationToken.None);
         await WaitForStateAsync(snapshots, profile.ConnectionId, queued.ScanId, SchemaScanState.Completed);
+        await Task.Delay(TimeSpan.FromSeconds(1.1));
         await worker.StopAsync(CancellationToken.None);
 
         Assert.Equal(SchemaScanState.Completed, (await snapshots.GetScanAsync(profile.ConnectionId, queued.ScanId, CancellationToken.None)).State);
+        Assert.Equal(1, resolver.Calls);
     }
 
     [Fact]
@@ -263,7 +266,7 @@ public sealed class SchemaScanWorkerTests
         var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
         var snapshot = await StoreSnapshotAsync(snapshots, profile, Content());
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => snapshots.GetNeighbourhoodAsync(profile.ConnectionId, snapshot.SnapshotId, "app", "Missing", 1, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => snapshots.GetNeighbourhoodAsync(profile.ConnectionId, snapshot.SnapshotId, "missing", "Missing", 1, CancellationToken.None));
 
         Assert.Equal("Schema table was not found.", exception.Message);
     }
