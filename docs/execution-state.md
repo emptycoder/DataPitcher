@@ -19,11 +19,13 @@ code, no API code, and no frontend code exists anywhere in this repository yet.
   `.worktrees/architecture-foundation` (git-ignored, not part of `main`'s tree).
 - .NET SDK 10.0.400 — available.
 - Node — available.
-- Docker — **NOT INSTALLED on PATH**. The `docker` command is not found. Docker
-  Desktop is present on disk but its CLI is not on `PATH` and its daemon is not
-  running.
-- The machine is **arm64 Apple Silicon**, a known risk for SQL Server container
-  images, which must be verified before the SQL Server slice is attempted.
+- Docker Engine 29.3.1 is running: arm64 Apple Silicon, 10 CPUs, 7.65 GiB RAM
+  available to the VM.
+- `docker` CLI is not on `PATH` (binary is in the Docker Desktop bundle), which
+  affects shell-out tooling but not Testcontainers.
+- Testcontainers .NET smoke-test path is verified: `postgres:17-alpine` (native
+  arm64) and `mcr.microsoft.com/mssql/server:2022-latest` (amd64 image, running
+  under emulation) both become ready quickly and executed real queries.
 
 ## What Slice 1 delivered
 
@@ -44,6 +46,9 @@ Eight tasks, executed test-first per `docs/plans/2026-09-02-slice-1-domain-spine
 - `dotnet build`: clean, **zero warnings**, under warnings-as-errors.
 - `./scripts/test-all.sh`: **100% line coverage, 100% branch coverage, 103 of 103 methods covered**, gate script exits 0.
 - This gate is known to work, not merely assumed to: it was observed **FAILING at 96.42%** coverage before the final equality-contract tests were added, and passed only after those tests closed the gap. That failure-then-pass sequence is the evidence the gate actually enforces something.
+- Updated suite is **122 tests** including a Testcontainers smoke test; coverage is still
+  **100% line, 100% branch, and 100% method**; `scripts/test-all.sh` now
+  requires Docker.
 
 ## Evidence from independent review
 
@@ -63,7 +68,7 @@ Separately, a differential test ran **25,000 randomly generated schemas** throug
 
 ## Blockers
 
-**Docker is unavailable** (not on PATH, daemon not running), blocking Testcontainers integration tests, Docker Compose end-to-end runs, and Playwright browser tests. Slice 1 was deliberately scoped to need none of this. The `IClosureStore` abstraction from Task 6 is the seam that makes this tractable going forward: the closure algorithm's existing tests are written against the interface, not the in-memory fake, so they can be re-run unchanged against a real database-backed implementation once Slice 5 introduces one.
+**Resolved blocker:** container-based testing was previously blocked by external Docker availability and is now lifted and verified. Testcontainers now boots PostgreSQL (`postgres:17-alpine`) and SQL Server (`mcr.microsoft.com/mssql/server:2022-latest`) containers and executes real queries in one second-level startup path. Caveats remain: SQL Server is amd64-only and runs under emulation, and memory headroom is tight for the full two-postgres/two-SQL Server container design because each SQL Server container needs at least 2 GB.
 
 ## Key decisions that must not be silently reversed
 
@@ -81,4 +86,8 @@ Separately, a differential test ran **25,000 randomly generated schemas** throug
 
 ## Exact next executable action
 
-Begin **Slice 2: the control database and job state machine**, per `docs/roadmap.md`. This slice requires no Docker, because it uses SQLite running in-process. It has **no task-level plan yet** — one must be written first, following the same task-by-task TDD format used in `docs/plans/2026-09-02-slice-1-domain-spine.md`, before any implementation work begins.
+Begin **Slice 2: the control database and job state machine**, as required by
+`docs/roadmap.md` (the next unblocked executable slice). Then execute
+`docs/plans/2026-09-02-slice-2-postgresql-closure-store.md` to implement a
+PostgreSQL-backed closure store so Slice 1's thirty-one closure behavioural tests can
+be re-run unchanged against a real database.
