@@ -10,6 +10,7 @@ namespace DataPitcher.ArchitectureTests;
 public sealed class DependencyRuleTests
 {
     [Fact] public void Core_ReferencesNoAspNetDataAccessOrProviderPackage() { var names=References(Project("DataPitcher.Core")).Concat(Packages(Project("DataPitcher.Core"))); Assert.DoesNotContain(names,name => name.StartsWith("Microsoft.AspNetCore",StringComparison.Ordinal) || name.StartsWith("DataPitcher.Providers.",StringComparison.Ordinal) || name is "Dapper" or "LinqToDB" or "Microsoft.EntityFrameworkCore" or "Npgsql" or "Microsoft.Data.SqlClient"); }
+    [Fact] public void Core_HasNoProjectOrPackageDependencies() { var core=Project("DataPitcher.Core"); Assert.Empty(References(core)); Assert.Empty(Packages(core)); }
     [Fact] public void Nothing_ReferencesTheApiProject() => Assert.DoesNotContain(Projects().Where(p=>Name(p)!="DataPitcher.Api").SelectMany(References),name=>name=="DataPitcher.Api");
     [Fact] public void OnlyApi_ReferencesConcreteProviderProjects() => Assert.DoesNotContain(Projects().Where(p=>Name(p)!="DataPitcher.Api").SelectMany(References),name=>name.StartsWith("DataPitcher.Providers.",StringComparison.Ordinal));
     private static string Root { get; }=FindRoot();
