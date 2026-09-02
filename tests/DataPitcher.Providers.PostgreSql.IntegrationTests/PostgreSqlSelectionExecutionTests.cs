@@ -113,6 +113,22 @@ public sealed class PostgreSqlSelectionExecutionTests : IClassFixture<PostgreSql
     }
 
     [Fact]
+    public async Task RawSqlWithTrailingTerminator_WorksThroughEveryDerivedTableWrapper()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync("INSERT INTO customers VALUES (1,'c'); INSERT INTO orders VALUES (10,1);");
+        var schema = await SchemaAsync(scope);
+        var orders = schema.Table("orders").Definition;
+        var raw = Raw(orders, "SELECT order_id AS \"__datapitcher_key_0\" FROM orders;");
+        var executor = new PostgreSqlSelectionExecutor(scope.Source, schema);
+
+        await executor.ValidateAsync(raw, CancellationToken.None);
+        Assert.Single((await executor.ReadKeysAsync(raw, 100, CancellationToken.None)).Keys, key => key == new StableKey([new("order_id", 10)]));
+        Assert.Single((await executor.PreviewAsync(raw, 200, 256, 256, CancellationToken.None)).Rows);
+        Assert.Equal(1, await executor.CountAsync(raw, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Operations_WithPreCancelledToken_PropagateCancellationToEveryDatabaseOperation()
     {
         await using var scope = await fixture.CreateScopeAsync();

@@ -10,7 +10,7 @@ public sealed class PostgreSqlSelectionExecutor(NpgsqlDataSource source, Postgre
     public async Task ValidateAsync(GeneratedSelectionSql selection, CancellationToken cancellationToken)
     {
         if (selection.IsRawSql) RawSqlSafetyValidator.Validate(RawSqlDialect.PostgreSql, selection.CommandText);
-        await using var command = Command("/* DataPitcher.Selection.Validate */ SELECT * FROM (" + selection.CommandText + ") AS selection LIMIT 1", selection);
+        await using var command = Command("/* DataPitcher.Selection.Validate */ SELECT * FROM (" + CommandText(selection) + "\n) AS selection LIMIT 1", selection);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         RequireAliases(reader, selection.RootStableKey);
     }
@@ -18,7 +18,7 @@ public sealed class PostgreSqlSelectionExecutor(NpgsqlDataSource source, Postgre
     public async Task<SelectionKeySet> ReadKeysAsync(GeneratedSelectionSql selection, int maximumResultSize, CancellationToken cancellationToken)
     {
         var aliases = Aliases(selection.RootStableKey);
-        await using var command = Command("/* DataPitcher.Selection.Keys */ SELECT DISTINCT " + aliases + " FROM (" + selection.CommandText + ") AS selection ORDER BY " + aliases + " LIMIT @take", selection);
+        await using var command = Command("/* DataPitcher.Selection.Keys */ SELECT DISTINCT " + aliases + " FROM (" + CommandText(selection) + "\n) AS selection ORDER BY " + aliases + " LIMIT @take", selection);
         command.Parameters.AddWithValue("take", checked(maximumResultSize + 1));
         var keys = await ReadKeysAsync(command, selection.RootStableKey, cancellationToken);
         if (keys.Count > maximumResultSize) throw new SelectionResultLimitExceededException(maximumResultSize);
@@ -34,7 +34,7 @@ public sealed class PostgreSqlSelectionExecutor(NpgsqlDataSource source, Postgre
         var projection = string.Join(", ", keys.Select(PostgreSqlIdentifier.Quote).Concat(root.Columns.Select(column => PreviewProjection(rootAlias, column))));
         var join = string.Join(" AND ", selection.RootStableKey.Columns.Select((column, index) => rootAlias + "." + PostgreSqlIdentifier.Quote(column) + " = keys." + PostgreSqlIdentifier.Quote(keys[index])));
         var order = string.Join(", ", selection.RootStableKey.Columns.Select(column => rootAlias + "." + PostgreSqlIdentifier.Quote(column)));
-        var sql = "/* DataPitcher.Selection.Preview */ WITH selection AS (" + selection.CommandText + "), keys AS (SELECT DISTINCT " + aliases + " FROM selection ORDER BY " + aliases + " LIMIT @previewLimit) SELECT " + projection + " FROM " + PostgreSqlIdentifier.Qualified(root.Schema, root.Name) + " AS " + rootAlias + " INNER JOIN keys ON " + join + " ORDER BY " + order;
+        var sql = "/* DataPitcher.Selection.Preview */ WITH selection AS (" + CommandText(selection) + "\n), keys AS (SELECT DISTINCT " + aliases + " FROM selection ORDER BY " + aliases + " LIMIT @previewLimit) SELECT " + projection + " FROM " + PostgreSqlIdentifier.Qualified(root.Schema, root.Name) + " AS " + rootAlias + " INNER JOIN keys ON " + join + " ORDER BY " + order;
         await using var command = Command(sql, selection);
         command.Parameters.AddWithValue("previewLimit", rowLimit);
         command.Parameters.AddWithValue("textLimit", textLimit);
@@ -46,7 +46,7 @@ public sealed class PostgreSqlSelectionExecutor(NpgsqlDataSource source, Postgre
     public async Task<long> CountAsync(GeneratedSelectionSql selection, CancellationToken cancellationToken)
     {
         var aliases = Aliases(selection.RootStableKey);
-        await using var command = Command("/* DataPitcher.Selection.Count */ SELECT count(*) FROM (SELECT DISTINCT " + aliases + " FROM (" + selection.CommandText + ") AS selection) AS keys", selection);
+        await using var command = Command("/* DataPitcher.Selection.Count */ SELECT count(*) FROM (SELECT DISTINCT " + aliases + " FROM (" + CommandText(selection) + "\n) AS selection) AS keys", selection);
         return (long)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 
@@ -90,6 +90,8 @@ public sealed class PostgreSqlSelectionExecutor(NpgsqlDataSource source, Postgre
     }
 
     private static string Aliases(UniqueConstraint stableKey) => string.Join(", ", SelectionKeyAliases.ForKey(stableKey).Select(PostgreSqlIdentifier.Quote));
+
+    private static string CommandText(GeneratedSelectionSql selection) => selection.IsRawSql ? RawSqlSafetyValidator.RemoveTrailingOrderBy(selection.CommandText) : selection.CommandText;
 
     private static string PreviewProjection(string rootAlias, ColumnDefinition column)
     {

@@ -259,6 +259,32 @@ public sealed class RawSqlSafetyValidatorTests
     }
 
     [Theory]
+    [InlineData("SELECT 7 AS [__datapitcher_key_0];", "SELECT 7 AS [__datapitcher_key_0]")]
+    [InlineData("SELECT 7 AS [__datapitcher_key_0] ORDER BY [__datapitcher_key_0];", "SELECT 7 AS [__datapitcher_key_0]")]
+    public void RemoveTrailingOrderBy_RemovesTheTrailingClauseAndStatementTerminator(string sql, string expected)
+    {
+        Assert.Equal(expected, RawSqlSafetyValidator.RemoveTrailingOrderBy(sql));
+    }
+
+    [Theory]
+    [InlineData("SELECT 'ORDER BY ;' AS [__datapitcher_key_0]")]
+    [InlineData("SELECT 7 AS [__datapitcher_key_0] /* ORDER BY ; */")]
+    public void RemoveTrailingOrderBy_LeavesQuotedAndCommentedClausesUntouched(string sql)
+    {
+        Assert.Equal(sql, RawSqlSafetyValidator.RemoveTrailingOrderBy(sql));
+    }
+
+    [Fact]
+    public void TrySplitLeadingCte_SplitsOnlyTheTerminalTopLevelSelect()
+    {
+        var sql = "WITH roots AS (SELECT 'SELECT' AS [value] /* SELECT */) SELECT [value] AS [__datapitcher_key_0] FROM roots";
+
+        Assert.True(RawSqlSafetyValidator.TrySplitLeadingCte(sql, out var ctes, out var query));
+        Assert.Equal("WITH roots AS (SELECT 'SELECT' AS [value] /* SELECT */) ", ctes);
+        Assert.Equal("SELECT [value] AS [__datapitcher_key_0] FROM roots", query);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("VALUES (1)")]
     public void Validate_RejectsSqlThatDoesNotStartWithSelectOrWith(string sql)
