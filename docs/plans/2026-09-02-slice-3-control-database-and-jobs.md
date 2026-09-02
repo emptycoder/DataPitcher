@@ -501,7 +501,7 @@ public sealed class JobStoreTests
         var staleWrite = Task.Run(async () => { firstReady.SetResult(true); await takeoverComplete.Task; return store.TryTransition(first, JobState.Preparing); });
         await firstReady.Task; fixture.Clock.Advance(ttl.Add(TimeSpan.FromTicks(1))); var second = leases.Acquire(job.JobId, "worker-b", ttl)!; takeoverComplete.SetResult(true);
         var stale = await staleWrite;
-        Assert.True(second.FenceToken > first.FenceToken); Assert.Equal(0, stale.RowsAffected); Assert.Empty(store.GetHistory(job.JobId).Where(x => x == (JobState.Queued, JobState.Preparing)));
+        Assert.True(second.FenceToken > first.FenceToken); Assert.Equal(0, stale.RowsAffected); Assert.DoesNotContain(store.GetHistory(job.JobId), x => x == (JobState.Queued, JobState.Preparing));
     }
 }
 ```
