@@ -164,6 +164,12 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public Task<OperationReceiptResponse> QueuePlanSealAsync(Guid planId, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(QueuePlanSealAsync), cancellationToken, () => Receipt(planId: planId));
 
+    public Task<PlanReviewResponse> GetPlanReviewAsync(Guid planId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(GetPlanReviewAsync), cancellationToken, () => new PlanReviewResponse(planId, 4, new string('A', 64), new("sealed", []), new(12, 9, 7, 2, 4096), [new("permission", true, "Transfer permission is current."), new("sourceHealthy", true, "Source is server-verified Healthy."), new("targetHealthy", true, "Target is server-verified Healthy."), new("schemaValid", true, "Target schema validation passed."), new("noBlockers", true, "No blockers remain."), new("safeMappings", true, "All type mappings are safe."), new("cycleSupported", true, "Cycle strategy is supported."), new("authenticated", true, "Authentication is valid.")], [new(new("sales", "Orders"), new("sales", "Orders"), "Root", 2, 9, 9, 7, 2, 3072, [new("Id", "Id")])], [new("sales.Orders", "FailOnConflict", "Existing target keys fail the plan.")], [new(["sales.Orders", "sales.OrderLines"], "DeferredConstraints", "Constraints are deferred for this component.")], [new("target-satisfied-values", "Target-satisfied dependencies are not refreshed.")], []));
+
+    public Task<InclusionPathResponse> GetPlanInclusionPathAsync(Guid planId, InclusionPathRequest request, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(GetPlanInclusionPathAsync), cancellationToken, () => new InclusionPathResponse(request.Table, request.StableKey, "Open orders", [new("Root selection", request.Table, request.Table, "Selected as a root row.")]));
+
     public Task<OperationReceiptResponse> StartJobAsync(Guid planId, string idempotencyKey, CancellationToken cancellationToken)
     {
         LastIdempotencyKey = idempotencyKey;

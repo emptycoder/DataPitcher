@@ -161,3 +161,140 @@ export const SaveSelectionResponse = zod.object({
   "mode": zod.enum(['visual', 'raw']),
   "warnings": zod.array(zod.string())
 })
+
+
+export const PlanReviewParams = zod.object({
+  "planId": zod.uuid()
+})
+
+export const PlanReviewResponse = zod.object({
+  "planId": zod.uuid(),
+  "version": zod.int(),
+  "canonicalHash": zod.string(),
+  "seal": zod.object({
+  "status": zod.enum(['sealed', 'invalidated']),
+  "invalidationReasons": zod.array(zod.object({
+  "code": zod.string(),
+  "message": zod.string()
+}))
+}),
+  "totals": zod.object({
+  "included": zod.int(),
+  "plannedWrites": zod.int(),
+  "inserts": zod.int(),
+  "updates": zod.int(),
+  "estimatedBytes": zod.int()
+}),
+  "startPreconditions": zod.array(zod.object({
+  "code": zod.enum(['permission', 'sourceHealthy', 'targetHealthy', 'schemaValid', 'noBlockers', 'safeMappings', 'cycleSupported', 'authenticated']),
+  "satisfied": zod.boolean(),
+  "message": zod.string()
+})),
+  "tables": zod.array(zod.object({
+  "source": zod.object({
+  "schema": zod.string(),
+  "name": zod.string()
+}),
+  "target": zod.object({
+  "schema": zod.string(),
+  "name": zod.string()
+}),
+  "state": zod.enum(['Root', 'RequiredDependency', 'ExplicitDependent', 'TargetSatisfied', 'Excluded', 'Blocked', 'Conflict', 'CycleMember']),
+  "transferOrder": zod.int(),
+  "included": zod.int(),
+  "plannedWrites": zod.int(),
+  "inserts": zod.int(),
+  "updates": zod.int(),
+  "estimatedBytes": zod.int(),
+  "columns": zod.array(zod.object({
+  "source": zod.string(),
+  "target": zod.string()
+}))
+})),
+  "conflicts": zod.array(zod.object({
+  "table": zod.string(),
+  "policy": zod.string(),
+  "message": zod.string()
+})),
+  "cycles": zod.array(zod.object({
+  "tables": zod.array(zod.string()),
+  "strategy": zod.string(),
+  "message": zod.string()
+})),
+  "warnings": zod.array(zod.object({
+  "code": zod.string(),
+  "message": zod.string()
+})),
+  "blockers": zod.array(zod.object({
+  "code": zod.string(),
+  "message": zod.string()
+}))
+})
+
+
+export const PlanInclusionPathParams = zod.object({
+  "planId": zod.uuid()
+})
+
+
+
+
+
+export const PlanInclusionPathBody = zod.object({
+  "table": zod.string().min(1),
+  "stableKey": zod.string().min(1)
+})
+
+export const PlanInclusionPathResponse = zod.object({
+  "table": zod.string(),
+  "stableKey": zod.string(),
+  "rootSelection": zod.string(),
+  "steps": zod.array(zod.object({
+  "relationship": zod.string(),
+  "from": zod.string(),
+  "to": zod.string(),
+  "reason": zod.string()
+}))
+})
+
+
+export const StartPlanJobParams = zod.object({
+  "planId": zod.uuid()
+})
+
+
+
+
+export const StartPlanJobHeader = zod.object({
+  "Idempotency-Key": zod.string().min(1)
+})
+
+export const StartPlanJobResponse = zod.object({
+  "operationId": zod.uuid(),
+  "state": zod.string(),
+  "jobId": zod.uuid()
+})
+
+
+export const JobParams = zod.object({
+  "jobId": zod.uuid()
+})
+
+export const JobResponse = zod.object({
+  "jobId": zod.uuid(),
+  "planId": zod.uuid(),
+  "state": zod.enum(['Draft', 'Queued', 'Preparing', 'Running', 'Pausing', 'Paused', 'Cancelling', 'Cancelled', 'Verifying', 'Succeeded', 'Failed', 'VerificationFailed', 'draft', 'queued', 'preparing', 'running', 'pausing', 'paused', 'cancelling', 'cancelled', 'verifying', 'succeeded', 'failed', 'verificationfailed']),
+  "rowsTransferred": zod.int(),
+  "bytesTransferred": zod.int()
+})
+
+
+export const JobEventsParams = zod.object({
+  "jobId": zod.uuid()
+})
+
+export const JobEventsHeader = zod.object({
+  "Last-Event-ID": zod.string().optional()
+})
+
+export const JobEventsResponse = zod.unknown()

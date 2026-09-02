@@ -12,7 +12,7 @@
 
 ## File Structure
 
-- `web/openapi/datapitcher.openapi.json`, `web/src/api/generated/{client.ts,permissions.zod.ts}` — single contract and committed, coverage-excluded Orval output.
+- `web/openapi/datapitcher.openapi.json`, `web/src/api/generated/{client.ts,permissions.zod.ts,jobEventPayloadSchema.ts}` — single contract, committed coverage-excluded Orval output, and the adjacent hand-written streamed-event schema.
 - `web/src/features/plans/{planReviewApi.ts,planReviewModel.ts,PlanReviewView.tsx,planReviewQuery.ts,PlanReviewScreen.tsx}` — validated transport, pure approval policy/export, rendering, and Query binding.
 - `web/src/features/jobs/{eventStreamParser.ts,jobReducer.ts,jobEventTransport.ts,jobApi.ts,jobMonitor.ts,TransferMonitorView.tsx}` — pure SSE semantics, injected transport, canonical refetch, cache binding, and outcome rendering.
 - `web/src/test/planFixtures.ts` and same-directory tests — safe wire fixtures and complete same-task coverage.
@@ -27,16 +27,33 @@ The review is an approval artifact, not a mutation surface. It shows totals, map
 
 The server remains authoritative and rechecks conditions before queueing; disabled Start explains, never controls.
 
+## Corrected API Dependencies and SSE Wire Format
+
+Task 1 includes the currently missing `GET /api/plans/{planId}/review` and `POST /api/plans/{planId}/inclusion-paths` API endpoints and their integration tests. Both endpoints are thin reads of existing plan state through `IDataPitcherApplication`; they add no plan or inclusion-path domain logic. Each route carries `.RequireAuthorization(ApiPolicyNames.PlansRead)` and performs `PlanResource` authorization with `Permissions.PlansRead` before reading application state. Add their response/request contracts and application query members only as needed to expose the review and body-only inclusion-path shapes below.
+
+Write the API integration test first, then add these endpoints, their contract/application seams, and the fake application's existing-state responses. Run the project-scoped API integration test with coverage before beginning the frontend adapter test. The review and inclusion-path endpoints must return 401 without credentials, 403 for a denied `PlanResource`, and must not invoke the application when that resource authorization fails.
+
+SSE is a separate wire format: its payload property names are `State`, `RowsTransferred`, and `BytesTransferred`, and its state values are lowercase (`running`, `succeeded`, `verificationfailed`, and so on), as the existing stream tests pin. The event-payload OpenAPI schema, stream fixtures, parser/reducer, terminal-state list, and outcome logic must use that exact format. Do not change the SSE endpoint.
+
+This correction supersedes stale fragments below: `JobEventPayload` requires the three PascalCase properties and its enum contains lowercase state values; the `Job` schema permits both its existing PascalCase REST states and lowercase event-applied states. The reducer reads `event.payload.State`, `event.payload.RowsTransferred`, and `event.payload.BytesTransferred`. The coverage command for this endpoint task is `dotnet test tests/DataPitcher.Api.IntegrationTests/DataPitcher.Api.IntegrationTests.csproj --collect:"XPlat Code Coverage" --results-directory artifacts/slice-20-api-coverage -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover`.
+
+### Generator symbol-name rule
+
+Use the names emitted by `npm --prefix web run generate:api`, not names inferred from component schemas or operation descriptions. In the current generated output they are `PlanReviewResponse`, `PlanInclusionPathResponse`, `StartPlanJobResponse`, `JobResponse`, and `JobEventsResponse`. `InclusionPathResponse`, `OperationReceiptResponse`, and `JobEventPayloadResponse` are not generated symbols and must not be imported, recreated in generated output, or induced by generator configuration changes.
+
+`JobEventsResponse` is `zod.unknown()` because the route returns `text/event-stream`; it is not a validator for individual `data:` frames. The generator cannot infer the schema of a `data:` frame from that streaming content type and does not emit the unreferenced `JobEventPayload` component. Do not hand-edit generated files. Instead, Task 5 hand-writes `JobEventPayloadSchema` in `web/src/api/generated/jobEventPayloadSchema.ts` beside the generated output, with the exact PascalCase wire properties and lowercase state enum. Its tests must accept a real frame and reject malformed payloads before reduction, so stream-contract drift remains visible and no unvalidated event reaches the Query cache.
+
 ## Tasks
 
 ### Task 1: Generate validated review and monitoring transport contracts
 
 **Files:**
 - Create: `web/src/features/plans/planReviewApi.ts`, `web/src/features/plans/planReviewApi.test.ts`, `web/src/test/planFixtures.ts`
-- Modify: `web/openapi/datapitcher.openapi.json`, `web/src/api/generated/client.ts`, `web/src/api/generated/permissions.zod.ts`
+- Create: `tests/DataPitcher.Api.IntegrationTests/PlanReviewEndpointTests.cs`
+- Modify: `src/DataPitcher.Api/Contracts/{ApiContracts.cs,IDataPitcherApplication.cs}`, `src/DataPitcher.Api/Endpoints/EndpointGroups.cs`, `tests/DataPitcher.Api.IntegrationTests/ApiWebApplicationFactory.cs`, `web/openapi/datapitcher.openapi.json`, `web/src/api/generated/client.ts`, `web/src/api/generated/permissions.zod.ts`
 - Test: `web/src/features/plans/planReviewApi.test.ts`
 
-1. - [ ] **Write the failing adapter test and safe wire fixture.** Create `web/src/test/planFixtures.ts` with `export const planId = '11111111-1111-1111-1111-111111111111';` and this complete response value, which has no token, connection string, raw selection parameter, or source-row payload.
+1. - [ ] **Write the failing adapter test and safe wire fixture.** Create `web/src/test/planFixtures.ts` with `export const planId = '11111111-1111-4111-8111-111111111111';` and this complete response value, which has no token, connection string, raw selection parameter, or source-row payload.
 
    ```ts
    export const reviewWire = {
@@ -60,8 +77,10 @@ The server remains authoritative and rechecks conditions before queueing; disabl
      blockers: [],
    };
    export const inclusionPathWire = { table: 'sales.Orders', stableKey: 'Id=42', rootSelection: 'Open orders', steps: [{ relationship: 'Root selection', from: 'sales.Orders', to: 'sales.Orders', reason: 'Selected as a root row.' }] };
-   export const jobWire = { jobId: '22222222-2222-2222-2222-222222222222', planId, state: 'Running', rowsTransferred: 3, bytesTransferred: 1024 };
-   ```
+     export const jobWire = { jobId: '22222222-2222-4222-8222-222222222222', planId, state: 'Running', rowsTransferred: 3, bytesTransferred: 1024 };
+    ```
+
+    Before this frontend test, add the failing `PlanReviewEndpointTests.cs` integration test described in the corrected dependency section and run `dotnet test tests/DataPitcher.Api.IntegrationTests/DataPitcher.Api.IntegrationTests.csproj`; it must fail because the two routes do not exist.
 
    Create `web/src/features/plans/planReviewApi.test.ts` with the following test body.
 
@@ -85,7 +104,7 @@ The server remains authoritative and rechecks conditions before queueing; disabl
      expect(request).toHaveBeenCalledWith(getPlanInclusionPathUrl(planId), expect.objectContaining({ method: 'POST', body: JSON.stringify({ table: 'sales.Orders', stableKey: 'Id=42' }) }));
    });
    it('starts with an in-memory token and rejects an absent token', async () => {
-     const request = vi.fn(async () => new Response(JSON.stringify({ operationId: '33333333-3333-3333-3333-333333333333', state: 'queued', jobId: '22222222-2222-2222-2222-222222222222' }), { status: 202 }));
+      const request = vi.fn(async () => new Response(JSON.stringify({ operationId: '33333333-3333-4333-8333-333333333333', state: 'queued', jobId: '22222222-2222-4222-8222-222222222222' }), { status: 202 }));
      await expect(startPlanJob(planId, 'request-1', request, authentication, new AbortController().signal)).resolves.toMatchObject({ state: 'queued' });
      expect(request).toHaveBeenCalledWith(getStartPlanJobUrl(planId), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer memory-token', 'Idempotency-Key': 'request-1' }) }));
      await authentication.signOut(); await expect(fetchPlanReview(planId, request, authentication, new AbortController().signal)).rejects.toThrow('Not authenticated.');
@@ -94,7 +113,7 @@ The server remains authoritative and rechecks conditions before queueing; disabl
 
 2. - [ ] **Run the test before the review adapter exists.** Run `npm --prefix web test -- --run src/features/plans/planReviewApi.test.ts`; expect non-zero exit and `Failed to resolve import "./planReviewApi"`.
 
-3. - [ ] **Add the OpenAPI contract, regenerate, and implement the adapter.** Replace `web/openapi/datapitcher.openapi.json` with this complete document, then generate instead of editing generated files. Its operation IDs produce `getPlanReviewUrl`, `getPlanInclusionPathUrl`, `getStartPlanJobUrl`, `getJobUrl`, and `getJobEventsUrl`.
+3. - [ ] **Add the API endpoints, OpenAPI contract, regenerate, and implement the adapter.** Add the two tested, explicitly authorized API read endpoints before replacing `web/openapi/datapitcher.openapi.json` with this complete document, then generate instead of editing generated files. Its operation IDs produce `getPlanReviewUrl`, `getPlanInclusionPathUrl`, `getStartPlanJobUrl`, `getJobUrl`, and `getJobEventsUrl`.
 
    ```json
    {"openapi":"3.1.0","info":{"title":"DataPitcher API","version":"1.0.0"},"paths":{"/api/auth/effective-permissions":{"get":{"operationId":"effectivePermissions","responses":{"200":{"description":"permissions","content":{"application/json":{"schema":{"$ref":"#/components/schemas/EffectivePermissions"}}}}}}},"/api/plans/{planId}/review":{"get":{"operationId":"planReview","parameters":[{"$ref":"#/components/parameters/PlanId"}],"responses":{"200":{"description":"review","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PlanReview"}}}}}}},"/api/plans/{planId}/inclusion-paths":{"post":{"operationId":"planInclusionPath","parameters":[{"$ref":"#/components/parameters/PlanId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/InclusionPathRequest"}}}},"responses":{"200":{"description":"path","content":{"application/json":{"schema":{"$ref":"#/components/schemas/InclusionPath"}}}}}}},"/api/plans/{planId}/jobs":{"post":{"operationId":"startPlanJob","parameters":[{"$ref":"#/components/parameters/PlanId"},{"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string","minLength":1}}],"responses":{"202":{"description":"queued","content":{"application/json":{"schema":{"$ref":"#/components/schemas/OperationReceipt"}}}}}}},"/api/jobs/{jobId}":{"get":{"operationId":"job","parameters":[{"$ref":"#/components/parameters/JobId"}],"responses":{"200":{"description":"job","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Job"}}}}}}},"/api/jobs/{jobId}/events":{"get":{"operationId":"jobEvents","parameters":[{"$ref":"#/components/parameters/JobId"},{"name":"Last-Event-ID","in":"header","schema":{"type":"string"}}],"responses":{"200":{"description":"events","content":{"text/event-stream":{"schema":{"type":"string"}}}}}}}},"components":{"parameters":{"PlanId":{"name":"planId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},"JobId":{"name":"jobId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}},"schemas":{"EffectivePermissions":{"type":"object","required":["principalId","tenantId","permissions"],"properties":{"principalId":{"type":"string","minLength":1},"tenantId":{"type":"string","minLength":1},"permissions":{"type":"array","items":{"type":"string"}}}},"Counts":{"type":"object","required":["included","plannedWrites","inserts","updates","estimatedBytes"],"properties":{"included":{"type":"integer"},"plannedWrites":{"type":"integer"},"inserts":{"type":"integer"},"updates":{"type":"integer"},"estimatedBytes":{"type":"integer"}}},"Address":{"type":"object","required":["schema","name"],"properties":{"schema":{"type":"string"},"name":{"type":"string"}}},"ColumnMapping":{"type":"object","required":["source","target"],"properties":{"source":{"type":"string"},"target":{"type":"string"}}},"Precondition":{"type":"object","required":["code","satisfied","message"],"properties":{"code":{"type":"string","enum":["permission","sourceHealthy","targetHealthy","schemaValid","noBlockers","safeMappings","cycleSupported","authenticated"]},"satisfied":{"type":"boolean"},"message":{"type":"string"}}},"PlanTable":{"type":"object","required":["source","target","state","transferOrder","included","plannedWrites","inserts","updates","estimatedBytes","columns"],"properties":{"source":{"$ref":"#/components/schemas/Address"},"target":{"$ref":"#/components/schemas/Address"},"state":{"type":"string","enum":["Root","RequiredDependency","ExplicitDependent","TargetSatisfied","Excluded","Blocked","Conflict","CycleMember"]},"transferOrder":{"type":"integer"},"included":{"type":"integer"},"plannedWrites":{"type":"integer"},"inserts":{"type":"integer"},"updates":{"type":"integer"},"estimatedBytes":{"type":"integer"},"columns":{"type":"array","items":{"$ref":"#/components/schemas/ColumnMapping"}}}},"Message":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string"},"message":{"type":"string"}}},"Conflict":{"type":"object","required":["table","policy","message"],"properties":{"table":{"type":"string"},"policy":{"type":"string"},"message":{"type":"string"}}},"Cycle":{"type":"object","required":["tables","strategy","message"],"properties":{"tables":{"type":"array","items":{"type":"string"}},"strategy":{"type":"string"},"message":{"type":"string"}}},"Seal":{"type":"object","required":["status","invalidationReasons"],"properties":{"status":{"type":"string","enum":["sealed","invalidated"]},"invalidationReasons":{"type":"array","items":{"$ref":"#/components/schemas/Message"}}}},"PlanReview":{"type":"object","required":["planId","version","canonicalHash","seal","totals","startPreconditions","tables","conflicts","cycles","warnings","blockers"],"properties":{"planId":{"type":"string","format":"uuid"},"version":{"type":"integer"},"canonicalHash":{"type":"string"},"seal":{"$ref":"#/components/schemas/Seal"},"totals":{"$ref":"#/components/schemas/Counts"},"startPreconditions":{"type":"array","items":{"$ref":"#/components/schemas/Precondition"}},"tables":{"type":"array","items":{"$ref":"#/components/schemas/PlanTable"}},"conflicts":{"type":"array","items":{"$ref":"#/components/schemas/Conflict"}},"cycles":{"type":"array","items":{"$ref":"#/components/schemas/Cycle"}},"warnings":{"type":"array","items":{"$ref":"#/components/schemas/Message"}},"blockers":{"type":"array","items":{"$ref":"#/components/schemas/Message"}}}},"InclusionPathRequest":{"type":"object","required":["table","stableKey"],"properties":{"table":{"type":"string","minLength":1},"stableKey":{"type":"string","minLength":1}}},"InclusionStep":{"type":"object","required":["relationship","from","to","reason"],"properties":{"relationship":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"},"reason":{"type":"string"}}},"InclusionPath":{"type":"object","required":["table","stableKey","rootSelection","steps"],"properties":{"table":{"type":"string"},"stableKey":{"type":"string"},"rootSelection":{"type":"string"},"steps":{"type":"array","items":{"$ref":"#/components/schemas/InclusionStep"}}}},"OperationReceipt":{"type":"object","required":["operationId","state","jobId"],"properties":{"operationId":{"type":"string","format":"uuid"},"state":{"type":"string"},"jobId":{"type":"string","format":"uuid"}}},"Job":{"type":"object","required":["jobId","planId","state","rowsTransferred","bytesTransferred"],"properties":{"jobId":{"type":"string","format":"uuid"},"planId":{"type":"string","format":"uuid"},"state":{"type":"string","enum":["Draft","Queued","Preparing","Running","Pausing","Paused","Cancelling","Cancelled","Verifying","Succeeded","Failed","VerificationFailed"]},"rowsTransferred":{"type":"integer"},"bytesTransferred":{"type":"integer"}}},"JobEventPayload":{"type":"object","required":["state","rowsTransferred","bytesTransferred"],"properties":{"state":{"type":"string","enum":["Draft","Queued","Preparing","Running","Pausing","Paused","Cancelling","Cancelled","Verifying","Succeeded","Failed","VerificationFailed"]},"rowsTransferred":{"type":"integer"},"bytesTransferred":{"type":"integer"}}}}}}
@@ -105,7 +124,7 @@ The server remains authoritative and rechecks conditions before queueing; disabl
    ```ts
    import type { AuthenticationAdapter } from '../../auth/authAdapter';
    import { getPlanInclusionPathUrl, getPlanReviewUrl, getStartPlanJobUrl } from '../../api/generated/client';
-   import { InclusionPathResponse, OperationReceiptResponse, PlanReviewResponse } from '../../api/generated/permissions.zod';
+    import { PlanInclusionPathResponse, PlanReviewResponse, StartPlanJobResponse } from '../../api/generated/permissions.zod';
    import { parseJson } from '../../api/parseJson';
 
    export type RequestFunction = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -119,14 +138,14 @@ The server remains authoritative and rechecks conditions before queueing; disabl
      return parseJson(await request(getPlanReviewUrl(planId), { headers: await authorization(authentication), signal }), PlanReviewResponse);
    }
    export async function fetchInclusionPath(planId: string, body: InclusionRequest, request: RequestFunction, authentication: AuthenticationAdapter, signal: AbortSignal) {
-     return parseJson(await request(getPlanInclusionPathUrl(planId), { method: 'POST', headers: { ...await authorization(authentication), 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal }), InclusionPathResponse);
+      return parseJson(await request(getPlanInclusionPathUrl(planId), { method: 'POST', headers: { ...await authorization(authentication), 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal }), PlanInclusionPathResponse);
    }
    export async function startPlanJob(planId: string, idempotencyKey: string, request: RequestFunction, authentication: AuthenticationAdapter, signal: AbortSignal) {
-     return parseJson(await request(getStartPlanJobUrl(planId), { method: 'POST', headers: { ...await authorization(authentication), 'Idempotency-Key': idempotencyKey }, signal }), OperationReceiptResponse);
+      return parseJson(await request(getStartPlanJobUrl(planId), { method: 'POST', headers: { ...await authorization(authentication), 'Idempotency-Key': idempotencyKey }, signal }), StartPlanJobResponse);
    }
    ```
 
-   Run `npm --prefix web run generate:api` so Orval writes both generated artifacts. Keep existing pins. The emitted Zod values are `PlanReviewResponse`, `InclusionPathResponse`, `OperationReceiptResponse`, `JobResponse`, and `JobEventPayloadResponse`.
+    Run `npm --prefix web run generate:api` so Orval writes both generated artifacts. Keep existing pins. The emitted Zod values are `PlanReviewResponse`, `PlanInclusionPathResponse`, `StartPlanJobResponse`, `JobResponse`, and `JobEventsResponse`; the last is `zod.unknown()` for the raw stream response, not a payload validator.
 
 4. - [ ] **Run the transport test and typecheck.** Run `npm --prefix web run typecheck && npm --prefix web test -- --run src/features/plans/planReviewApi.test.ts`; expect exit 0 with three passing tests.
 
@@ -198,12 +217,13 @@ The server remains authoritative and rechecks conditions before queueing; disabl
 1. - [ ] **Write the failing accessible-review test.** Create `web/src/features/plans/PlanReviewView.test.tsx` with this complete body.
 
    ```tsx
-   import { expect, it, vi } from 'vitest';
-   import { fireEvent, render, screen } from '@testing-library/react';
+   import { afterEach, expect, it, vi } from 'vitest';
+   import { cleanup, fireEvent, render, screen } from '@testing-library/react';
    import { PlanReviewView } from './PlanReviewView';
    import { inclusionPathWire, reviewWire } from '../../test/planFixtures';
 
    const allStates = ['Root', 'RequiredDependency', 'ExplicitDependent', 'TargetSatisfied', 'Excluded', 'Blocked', 'Conflict', 'CycleMember'];
+   afterEach(cleanup);
    it('renders totals, every state, mappings, order, warnings, and the target-satisfied limitation', () => {
      const review = { ...reviewWire, tables: allStates.map((state, transferOrder) => ({ ...reviewWire.tables[0], state, transferOrder })) };
      render(<PlanReviewView review={review as never} path={null} pathLoading={false} onInspect={vi.fn()} onExport={vi.fn()} onStart={vi.fn()} />);
@@ -242,9 +262,9 @@ The server remains authoritative and rechecks conditions before queueing; disabl
    import type { InclusionRequest } from './planReviewApi';
    import { createSanitizedPlanExport, planTableStateLabel, startAvailability, type PlanReview } from './planReviewModel';
    import type { z } from 'zod';
-   import { InclusionPathResponse } from '../../api/generated/permissions.zod';
+    import { PlanInclusionPathResponse } from '../../api/generated/permissions.zod';
 
-   type InclusionPath = z.infer<typeof InclusionPathResponse>;
+    type InclusionPath = z.infer<typeof PlanInclusionPathResponse>;
    type Props = { review: PlanReview; path: InclusionPath | null; pathLoading: boolean; onInspect: (request: InclusionRequest) => void; onExport: (value: string) => void; onStart: () => void };
    export function PlanReviewView({ review, path, pathLoading, onInspect, onExport, onStart }: Props) {
      const [stableKey, setStableKey] = useState('');
@@ -290,7 +310,7 @@ The server remains authoritative and rechecks conditions before queueing; disabl
    import { inclusionPathWire, planId, reviewWire } from '../../test/planFixtures';
 
    it('puts validated review and path data in Query and queues the server-authorized start', async () => {
-     const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => new Response(JSON.stringify(init?.method === 'POST' && String(input).includes('inclusion-paths') ? inclusionPathWire : init?.method === 'POST' ? { operationId: '33333333-3333-3333-3333-333333333333', state: 'queued', jobId: '22222222-2222-2222-2222-222222222222' } : reviewWire), { status: init?.method === 'POST' && !String(input).includes('inclusion-paths') ? 202 : 200 }));
+      const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => new Response(JSON.stringify(init?.method === 'POST' && String(input).includes('inclusion-paths') ? inclusionPathWire : init?.method === 'POST' ? { operationId: '33333333-3333-4333-8333-333333333333', state: 'queued', jobId: '22222222-2222-4222-8222-222222222222' } : reviewWire), { status: init?.method === 'POST' && !String(input).includes('inclusion-paths') ? 202 : 200 }));
      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); const queued = vi.fn(); const exported = vi.fn();
      render(<QueryClientProvider client={client}><PlanReviewScreen planId={planId} request={request} authentication={createDevelopmentAuthenticationAdapter({ subjectId: 'operator-1', tenantId: 'tenant-1' }, 'memory-token')} createId={() => 'request-1'} onJobQueued={queued} onExport={exported} /></QueryClientProvider>);
      await screen.findByRole('heading', { name: 'Transfer plan version 4' });
@@ -347,77 +367,19 @@ The server remains authoritative and rechecks conditions before queueing; disabl
 ### Task 5: Parse stream frames and reduce verified job state purely
 
 **Files:**
-- Create: `web/src/features/jobs/eventStreamParser.ts`, `web/src/features/jobs/jobReducer.ts`, `web/src/features/jobs/eventStreamParser.test.ts`, `web/src/features/jobs/jobReducer.test.ts`
-- Modify: none
+- Create: `web/src/api/generated/jobEventPayloadSchema.ts`, `web/src/features/jobs/eventStreamParser.ts`, `web/src/features/jobs/jobReducer.ts`, `web/src/features/jobs/eventStreamParser.test.ts`, `web/src/features/jobs/jobReducer.test.ts`
+- Modify: `web/vite.config.ts`
 - Test: `web/src/features/jobs/eventStreamParser.test.ts`, `web/src/features/jobs/jobReducer.test.ts`
 
-1. - [ ] **Write failing parser and reducer tests.** Create the two test files with this complete code.
-
-   ```ts
-   // web/src/features/jobs/eventStreamParser.test.ts
-   import { expect, it } from 'vitest';
-   import { EventStreamParser } from './eventStreamParser';
-   it('preserves chunk boundaries, ignores comments, joins data, dispatches blank lines, and reads retry', () => {
-     const parser = new EventStreamParser();
-     expect(parser.push(': ping\nid: 1\nevent: progress\ndata: {"state":"Running",\n')).toEqual([]);
-     expect(parser.push('data: "rowsTransferred":4,"bytesTransferred":10}\nretry: 250\n\n')).toEqual([{ kind: 'retry', milliseconds: 250 }, { kind: 'event', id: '1', event: 'progress', data: '{"state":"Running",\n"rowsTransferred":4,"bytesTransferred":10}' }]);
-     expect(parser.push('event\nretry: no\n\n')).toEqual([]);
-   });
-   ```
-
-   ```ts
-   // web/src/features/jobs/jobReducer.test.ts
-   import { expect, it } from 'vitest';
-   import { parseJobStreamEvent, reduceJobEvent, transferOutcome } from './jobReducer';
-   import { jobWire } from '../../test/planFixtures';
-   it('validates the stream payload before accepting an adjacent sequence', () => {
-     const event = parseJobStreamEvent({ kind: 'event', id: '1', event: 'state', data: '{"state":"VerificationFailed","rowsTransferred":9,"bytesTransferred":40}' });
-     expect(reduceJobEvent(jobWire as never, 0, event)).toMatchObject({ kind: 'terminal', job: { state: 'VerificationFailed' }, watermark: 1 });
-     expect(() => parseJobStreamEvent({ kind: 'event', id: 'x', event: 'state', data: '{}' })).toThrow('Invalid job event sequence.');
-   });
-   it('discards duplicates, refetches gaps, and never calls verification failure success', () => {
-     const event = parseJobStreamEvent({ kind: 'event', id: '3', event: 'state', data: '{"state":"Succeeded","rowsTransferred":9,"bytesTransferred":40}' });
-     expect(reduceJobEvent(jobWire as never, 3, event).kind).toBe('duplicate');
-     expect(reduceJobEvent(jobWire as never, 1, event).kind).toBe('gap');
-     expect(() => parseJobStreamEvent({ kind: 'retry', milliseconds: 1 })).toThrow('Invalid job event sequence.');
-     expect(transferOutcome('VerificationFailed')).toEqual({ tone: 'failure', text: 'Bulk copy completed, but verification failed. The transfer was not successful.' });
-     expect(transferOutcome('Succeeded').tone).toBe('success');
-     expect(transferOutcome('Queued').tone).toBe('progress');
-   });
-   ```
+1. - [ ] **Write failing parser, schema, and reducer tests.** The reducer test must first prove a well-formed lowercase event is accepted and an invalid payload is rejected by the hand-written `JobEventPayloadSchema` before it can be reduced. Retain the existing tests for chunk boundaries, comments, joined data, retries, duplicate and gap events, terminal states, and `verificationfailed` reporting failure rather than success.
 
 2. - [ ] **Run the missing pure-module tests.** Run `npm --prefix web test -- --run src/features/jobs/eventStreamParser.test.ts src/features/jobs/jobReducer.test.ts`; expect non-zero exit and `Failed to resolve import "./eventStreamParser"`.
 
-3. - [ ] **Implement the incremental parser and reducer.** Create both modules. `TextDecoder` stays in the transport shell, leaving parser input deterministic.
-
-   ```ts
-   // web/src/features/jobs/eventStreamParser.ts
-   export type StreamRecord = Readonly<{ kind: 'event'; id: string; event: string; data: string }> | Readonly<{ kind: 'retry'; milliseconds: number }>;
-   export class EventStreamParser {
-     private buffer = ''; private id = ''; private event = 'message'; private data: string[] = [];
-     push(chunk: string) { const records: StreamRecord[] = []; this.buffer += chunk; let newline = this.buffer.indexOf('\n'); while (newline >= 0) { const line = this.buffer.slice(0, newline).replace(/\r$/, ''); this.buffer = this.buffer.slice(newline + 1); if (line === '') { if (this.data.length) records.push({ kind: 'event', id: this.id, event: this.event, data: this.data.join('\n') }); this.event = 'message'; this.data = []; } else if (!line.startsWith(':')) { const colon = line.indexOf(':'); const field = colon < 0 ? line : line.slice(0, colon); const value = (colon < 0 ? '' : line.slice(colon + 1)).replace(/^ /, ''); if (field === 'id') this.id = value; else if (field === 'event') this.event = value; else if (field === 'data') this.data.push(value); else if (field === 'retry' && /^\d+$/.test(value)) records.push({ kind: 'retry', milliseconds: Number(value) }); } newline = this.buffer.indexOf('\n'); } return records; }
-   }
-   ```
-
-   ```ts
-   // web/src/features/jobs/jobReducer.ts
-   import { z } from 'zod';
-   import { JobEventPayloadResponse, JobResponse } from '../../api/generated/permissions.zod';
-   import type { StreamRecord } from './eventStreamParser';
-   export type Job = z.infer<typeof JobResponse>; export type JobStreamEvent = Readonly<{ sequence: number; event: string; payload: z.infer<typeof JobEventPayloadResponse> }>;
-   export function parseJobStreamEvent(record: StreamRecord): JobStreamEvent { if (record.kind !== 'event' || !/^\d+$/.test(record.id)) throw new Error('Invalid job event sequence.'); return { sequence: Number(record.id), event: record.event, payload: JobEventPayloadResponse.parse(JSON.parse(record.data)) }; }
-   export function reduceJobEvent(job: Job, watermark: number, event: JobStreamEvent) {
-     if (event.sequence <= watermark) return { kind: 'duplicate' as const, job, watermark };
-     if (event.sequence !== watermark + 1) return { kind: 'gap' as const, job, watermark };
-     const next = { ...job, state: event.payload.state, rowsTransferred: event.payload.rowsTransferred, bytesTransferred: event.payload.bytesTransferred };
-     return { kind: ['Succeeded', 'Failed', 'VerificationFailed', 'Cancelled'].includes(next.state) ? 'terminal' as const : 'accepted' as const, job: next, watermark: event.sequence };
-   }
-   export function transferOutcome(state: Job['state']) { return state === 'Succeeded' ? { tone: 'success' as const, text: 'Verification passed. Transfer succeeded.' } : state === 'VerificationFailed' ? { tone: 'failure' as const, text: 'Bulk copy completed, but verification failed. The transfer was not successful.' } : { tone: 'progress' as const, text: state }; }
-   ```
+3. - [ ] **Implement the incremental parser, hand-written event schema, and reducer.** `TextDecoder` stays in the transport shell, leaving parser input deterministic. Put `JobEventPayloadSchema` beside, but not inside, the generated Orval files; it validates `State`, `RowsTransferred`, and `BytesTransferred` with all-lowercase job states. `parseJobStreamEvent` must parse with this schema before `reduceJobEvent` can return an accepted or terminal job. Narrow the generated coverage exclusion to the two generated files so the hand-written schema is measured.
 
 4. - [ ] **Run the pure tests and the coverage gate.** Run `npm --prefix web test -- --run src/features/jobs/eventStreamParser.test.ts src/features/jobs/jobReducer.test.ts && npm --prefix web run test:coverage`; expect exit 0 and all four coverage totals at 100%.
 
-5. - [ ] **Commit the SSE pure boundary.** Run `git add web/src/features/jobs/eventStreamParser.ts web/src/features/jobs/jobReducer.ts web/src/features/jobs/eventStreamParser.test.ts web/src/features/jobs/jobReducer.test.ts && git commit -m "feat: parse and reduce job events"`.
+5. - [ ] **Commit the SSE pure boundary.** Run `git add web/vite.config.ts web/src/api/generated/jobEventPayloadSchema.ts web/src/features/jobs/eventStreamParser.ts web/src/features/jobs/jobReducer.ts web/src/features/jobs/eventStreamParser.test.ts web/src/features/jobs/jobReducer.test.ts && git commit -m "feat: parse and reduce job events"`.
 
 ### Task 6: Consume authenticated SSE with deterministic reconnect and cleanup
 
@@ -436,15 +398,15 @@ The server remains authoritative and rechecks conditions before queueing; disabl
    const stream = (chunks: string[]) => new ReadableStream<Uint8Array>({ start(controller) { chunks.forEach((chunk) => controller.enqueue(new TextEncoder().encode(chunk))); controller.close(); } });
    it('reacquires once after 401, validates chunked events, and stops at VerificationFailed', async () => {
      vi.useFakeTimers();
-     const request = vi.fn().mockResolvedValueOnce(new Response('', { status: 401 })).mockResolvedValueOnce(new Response(stream(['id: 1\nevent: state\ndata: {"state":"Verification', 'Failed","rowsTransferred":9,"bytesTransferred":40}\n\n']), { status: 200 }));
+      const request = vi.fn().mockResolvedValueOnce(new Response('', { status: 401 })).mockResolvedValueOnce(new Response(stream(['id: 1\nevent: state\ndata: {"State":"verification', 'failed","RowsTransferred":9,"BytesTransferred":40}\n\n']), { status: 200 }));
      const accepted = vi.fn(); const terminal = vi.fn(); const clock = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn() };
      const handle = openJobEventStream({ job: jobWire as never, request, authentication: createDevelopmentAuthenticationAdapter({ subjectId: 'operator-1', tenantId: 'tenant-1' }, 'memory-token'), clock, random: () => 0, onAccepted: accepted, onGap: vi.fn(async () => jobWire as never), onForbidden: vi.fn(), onTerminal: terminal, onError: vi.fn() });
      await handle.done;
-     expect(request).toHaveBeenCalledTimes(2); expect(accepted).toHaveBeenCalledWith(expect.objectContaining({ state: 'VerificationFailed' })); expect(terminal).toHaveBeenCalledOnce(); expect(clock.setTimeout).not.toHaveBeenCalled(); vi.useRealTimers();
+      expect(request).toHaveBeenCalledTimes(2); expect(accepted).toHaveBeenCalledWith(expect.objectContaining({ state: 'verificationfailed' })); expect(terminal).toHaveBeenCalledOnce(); expect(clock.setTimeout).not.toHaveBeenCalled(); vi.useRealTimers();
    });
    it('refetches a gap and permanently invalidates permissions on 403', async () => {
      const gap = vi.fn(async () => jobWire as never); const forbidden = vi.fn(); const clock = { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn() };
-     const handle = openJobEventStream({ job: jobWire as never, request: vi.fn().mockResolvedValueOnce(new Response(stream(['id: 2\ndata: {"state":"Running","rowsTransferred":4,"bytesTransferred":10}\n\n']), { status: 200 })).mockResolvedValueOnce(new Response('', { status: 403 })), authentication: createDevelopmentAuthenticationAdapter({ subjectId: 'operator-1', tenantId: 'tenant-1' }, 'memory-token'), clock, random: () => 0, onAccepted: vi.fn(), onGap: gap, onForbidden: forbidden, onTerminal: vi.fn(), onError: vi.fn() });
+      const handle = openJobEventStream({ job: jobWire as never, request: vi.fn().mockResolvedValueOnce(new Response(stream(['id: 2\ndata: {"State":"running","RowsTransferred":4,"BytesTransferred":10}\n\n']), { status: 200 })).mockResolvedValueOnce(new Response('', { status: 403 })), authentication: createDevelopmentAuthenticationAdapter({ subjectId: 'operator-1', tenantId: 'tenant-1' }, 'memory-token'), clock, random: () => 0, onAccepted: vi.fn(), onGap: gap, onForbidden: forbidden, onTerminal: vi.fn(), onError: vi.fn() });
      await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); expect(gap).toHaveBeenCalledOnce(); expect(clock.setTimeout).toHaveBeenCalledOnce(); (clock.setTimeout.mock.calls[0]![0] as () => void)(); await handle.done; expect(forbidden).toHaveBeenCalledOnce(); expect(request.mock.calls[1]![1]).toEqual(expect.objectContaining({ headers: expect.objectContaining({ 'Last-Event-ID': '2' }) }));
    });
    it('stops after consecutive 401 responses', async () => {
@@ -510,7 +472,7 @@ The server remains authoritative and rechecks conditions before queueing; disabl
    import { jobWire } from '../../test/planFixtures';
    it('refetches the canonical job for a gap and writes it into Query', async () => {
      const client = new QueryClient(); client.setQueryData(jobKey(jobWire.jobId), jobWire);
-     const request = vi.fn().mockResolvedValueOnce(new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('id: 2\ndata: {"state":"VerificationFailed","rowsTransferred":9,"bytesTransferred":40}\n\n')); controller.close(); } }), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify(jobWire), { status: 200 }));
+      const request = vi.fn().mockResolvedValueOnce(new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('id: 2\ndata: {"State":"verificationfailed","RowsTransferred":9,"BytesTransferred":40}\n\n')); controller.close(); } }), { status: 200 })).mockResolvedValueOnce(new Response(JSON.stringify(jobWire), { status: 200 }));
      const monitor = monitorJob(client, jobWire as never, request, createDevelopmentAuthenticationAdapter({ subjectId: 'operator-1', tenantId: 'tenant-1' }, 'memory-token'), { setTimeout: vi.fn(() => 1), clearTimeout: vi.fn() }, () => 0);
      await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); expect(client.getQueryData(jobKey(jobWire.jobId))).toMatchObject({ state: 'Running' }); monitor.close(); await monitor.done;
    });
@@ -525,7 +487,7 @@ The server remains authoritative and rechecks conditions before queueing; disabl
    // web/src/features/jobs/TransferMonitorView.test.tsx
    import { expect, it } from 'vitest'; import { render, screen } from '@testing-library/react';
    import { TransferMonitorView } from './TransferMonitorView'; import { jobWire } from '../../test/planFixtures';
-   it('never presents VerificationFailed as success', () => { render(<TransferMonitorView job={{ ...jobWire, state: 'VerificationFailed' } as never} />); expect(screen.getByText(/verification failed.*not successful/i)).toBeVisible(); expect(screen.queryByText('Verification passed. Transfer succeeded.')).not.toBeInTheDocument(); });
+    it('never presents verificationfailed as success', () => { render(<TransferMonitorView job={{ ...jobWire, state: 'verificationfailed' } as never} />); expect(screen.getByText(/verification failed.*not successful/i)).toBeVisible(); expect(screen.queryByText('Verification passed. Transfer succeeded.')).not.toBeInTheDocument(); });
    ```
 
 2. - [ ] **Run the missing monitor tests.** Run `npm --prefix web test -- --run src/features/jobs/jobMonitor.test.ts src/features/jobs/TransferMonitorView.test.tsx`; expect non-zero exit and `Failed to resolve import "./jobMonitor"`.
@@ -562,4 +524,4 @@ The server remains authoritative and rechecks conditions before queueing; disabl
 - [ ] Confirm happy-dom Vitest 4 `coverage.include` reports 100% all four ways in every same-task gate; no handwritten module is deferred.
 - [ ] Confirm review covers totals/bytes, mapping/grid/order, eight states, paths, risks, sealing/invalidation, export, and the `TargetSatisfied` non-refresh/upsert warning. Start is advisory; server rechecks it.
 - [ ] Confirm no token enters Zustand, storage, URL, key, export, or log; jobs stay in Query. Confirm validated SSE handles watermark/gap/401/403/terminal/cleanup, and `VerificationFailed` never displays success or exceeds ADR 0002.
-- [ ] Confirm `PlanReviewResponse`, `InclusionPathResponse`, `OperationReceiptResponse`, `JobResponse`, `JobEventPayloadResponse`, and all five URL helpers; defer graph, Selection Workbench, routing, and unrelated screens.
+- [ ] Confirm `PlanReviewResponse`, `PlanInclusionPathResponse`, `StartPlanJobResponse`, `JobResponse`, `JobEventsResponse`, and all five URL helpers; defer graph, Selection Workbench, routing, and unrelated screens. Do not mistake `JobEventsResponse` for a payload validator.

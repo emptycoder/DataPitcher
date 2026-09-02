@@ -159,6 +159,204 @@ export interface CountResponse {
   distinctStableKeyCount: number;
 }
 
+export interface Counts {
+  included: number;
+  plannedWrites: number;
+  inserts: number;
+  updates: number;
+  estimatedBytes: number;
+}
+
+export interface Address {
+  schema: string;
+  name: string;
+}
+
+export interface ColumnMapping {
+  source: string;
+  target: string;
+}
+
+export type PreconditionCode = typeof PreconditionCode[keyof typeof PreconditionCode];
+
+
+export const PreconditionCode = {
+  permission: 'permission',
+  sourceHealthy: 'sourceHealthy',
+  targetHealthy: 'targetHealthy',
+  schemaValid: 'schemaValid',
+  noBlockers: 'noBlockers',
+  safeMappings: 'safeMappings',
+  cycleSupported: 'cycleSupported',
+  authenticated: 'authenticated',
+} as const;
+
+export interface Precondition {
+  code: PreconditionCode;
+  satisfied: boolean;
+  message: string;
+}
+
+export type PlanTableState = typeof PlanTableState[keyof typeof PlanTableState];
+
+
+export const PlanTableState = {
+  Root: 'Root',
+  RequiredDependency: 'RequiredDependency',
+  ExplicitDependent: 'ExplicitDependent',
+  TargetSatisfied: 'TargetSatisfied',
+  Excluded: 'Excluded',
+  Blocked: 'Blocked',
+  Conflict: 'Conflict',
+  CycleMember: 'CycleMember',
+} as const;
+
+export interface PlanTable {
+  source: Address;
+  target: Address;
+  state: PlanTableState;
+  transferOrder: number;
+  included: number;
+  plannedWrites: number;
+  inserts: number;
+  updates: number;
+  estimatedBytes: number;
+  columns: ColumnMapping[];
+}
+
+export interface Message {
+  code: string;
+  message: string;
+}
+
+export interface Conflict {
+  table: string;
+  policy: string;
+  message: string;
+}
+
+export interface Cycle {
+  tables: string[];
+  strategy: string;
+  message: string;
+}
+
+export type SealStatus = typeof SealStatus[keyof typeof SealStatus];
+
+
+export const SealStatus = {
+  sealed: 'sealed',
+  invalidated: 'invalidated',
+} as const;
+
+export interface Seal {
+  status: SealStatus;
+  invalidationReasons: Message[];
+}
+
+export interface PlanReview {
+  planId: string;
+  version: number;
+  canonicalHash: string;
+  seal: Seal;
+  totals: Counts;
+  startPreconditions: Precondition[];
+  tables: PlanTable[];
+  conflicts: Conflict[];
+  cycles: Cycle[];
+  warnings: Message[];
+  blockers: Message[];
+}
+
+export interface InclusionPathRequest {
+  /** @minLength 1 */
+  table: string;
+  /** @minLength 1 */
+  stableKey: string;
+}
+
+export interface InclusionStep {
+  relationship: string;
+  from: string;
+  to: string;
+  reason: string;
+}
+
+export interface InclusionPath {
+  table: string;
+  stableKey: string;
+  rootSelection: string;
+  steps: InclusionStep[];
+}
+
+export interface OperationReceipt {
+  operationId: string;
+  state: string;
+  jobId: string;
+}
+
+export type JobState = typeof JobState[keyof typeof JobState];
+
+
+export const JobState = {
+  Draft: 'Draft',
+  Queued: 'Queued',
+  Preparing: 'Preparing',
+  Running: 'Running',
+  Pausing: 'Pausing',
+  Paused: 'Paused',
+  Cancelling: 'Cancelling',
+  Cancelled: 'Cancelled',
+  Verifying: 'Verifying',
+  Succeeded: 'Succeeded',
+  Failed: 'Failed',
+  VerificationFailed: 'VerificationFailed',
+  draft: 'draft',
+  queued: 'queued',
+  preparing: 'preparing',
+  running: 'running',
+  pausing: 'pausing',
+  paused: 'paused',
+  cancelling: 'cancelling',
+  cancelled: 'cancelled',
+  verifying: 'verifying',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  verificationfailed: 'verificationfailed',
+} as const;
+
+export interface Job {
+  jobId: string;
+  planId: string;
+  state: JobState;
+  rowsTransferred: number;
+  bytesTransferred: number;
+}
+
+export type JobEventPayloadState = typeof JobEventPayloadState[keyof typeof JobEventPayloadState];
+
+
+export const JobEventPayloadState = {
+  draft: 'draft',
+  queued: 'queued',
+  preparing: 'preparing',
+  running: 'running',
+  pausing: 'pausing',
+  paused: 'paused',
+  cancelling: 'cancelling',
+  cancelled: 'cancelled',
+  verifying: 'verifying',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  verificationfailed: 'verificationfailed',
+} as const;
+
+export interface JobEventPayload {
+  State: JobEventPayloadState;
+  RowsTransferred: number;
+  BytesTransferred: number;
+}
+
 export type effectivePermissionsResponse200 = {
   data: EffectivePermissions
   status: 200
@@ -499,4 +697,211 @@ const res = await fetch(getSaveSelectionUrl(),
 
   const data: saveSelectionResponse['data'] = body ? JSON.parse(body) : {}
   return { data, status: res.status, headers: res.headers } as saveSelectionResponse
+}
+
+
+
+export type planReviewResponse200 = {
+  data: PlanReview
+  status: 200
+}
+
+export type planReviewResponseSuccess = (planReviewResponse200) & {
+  headers: Headers;
+};
+;
+
+export type planReviewResponse = (planReviewResponseSuccess)
+
+export const getPlanReviewUrl = (planId: string,) => {
+
+
+
+
+  return `/api/plans/${planId}/review`
+}
+
+export const planReview = async (planId: string, options?: RequestInit): Promise<planReviewResponse> => {
+
+  const res = await fetch(getPlanReviewUrl(planId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: planReviewResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as planReviewResponse
+}
+
+
+
+export type planInclusionPathResponse200 = {
+  data: InclusionPath
+  status: 200
+}
+
+export type planInclusionPathResponseSuccess = (planInclusionPathResponse200) & {
+  headers: Headers;
+};
+;
+
+export type planInclusionPathResponse = (planInclusionPathResponseSuccess)
+
+export const getPlanInclusionPathUrl = (planId: string,) => {
+
+
+
+
+  return `/api/plans/${planId}/inclusion-paths`
+}
+
+export const planInclusionPath = async (planId: string,
+    inclusionPathRequest: InclusionPathRequest, options?: RequestInit): Promise<planInclusionPathResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+const res = await fetch(getPlanInclusionPathUrl(planId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(inclusionPathRequest)
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: planInclusionPathResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as planInclusionPathResponse
+}
+
+
+
+export type startPlanJobResponse202 = {
+  data: OperationReceipt
+  status: 202
+}
+
+export type startPlanJobResponseSuccess = (startPlanJobResponse202) & {
+  headers: Headers;
+};
+;
+
+export type startPlanJobResponse = (startPlanJobResponseSuccess)
+
+export const getStartPlanJobUrl = (planId: string,) => {
+
+
+
+
+  return `/api/plans/${planId}/jobs`
+}
+
+export const startPlanJob = async (planId: string, options?: RequestInit): Promise<startPlanJobResponse> => {
+
+  const res = await fetch(getStartPlanJobUrl(planId),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: startPlanJobResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as startPlanJobResponse
+}
+
+
+
+export type jobResponse200 = {
+  data: Job
+  status: 200
+}
+
+export type jobResponseSuccess = (jobResponse200) & {
+  headers: Headers;
+};
+;
+
+export type jobResponse = (jobResponseSuccess)
+
+export const getJobUrl = (jobId: string,) => {
+
+
+
+
+  return `/api/jobs/${jobId}`
+}
+
+export const job = async (jobId: string, options?: RequestInit): Promise<jobResponse> => {
+
+  const res = await fetch(getJobUrl(jobId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: jobResponse['data'] = body ? JSON.parse(body) : {}
+  return { data, status: res.status, headers: res.headers } as jobResponse
+}
+
+
+
+export type jobEventsResponse200 = {
+  data: string
+  status: 200
+}
+
+export type jobEventsResponseSuccess = (jobEventsResponse200) & {
+  headers: Headers;
+};
+;
+
+export type jobEventsResponse = (jobEventsResponseSuccess)
+
+export const getJobEventsUrl = (jobId: string,) => {
+
+
+
+
+  return `/api/jobs/${jobId}/events`
+}
+
+export const jobEvents = async (jobId: string, options?: RequestInit): Promise<jobEventsResponse> => {
+
+  const res = await fetch(getJobEventsUrl(jobId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+)
+
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: jobEventsResponse['data'] = body !== null ? body : ''
+  return { data, status: res.status, headers: res.headers } as jobEventsResponse
 }
