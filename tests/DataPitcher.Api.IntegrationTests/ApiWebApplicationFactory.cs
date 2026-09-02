@@ -24,11 +24,14 @@ public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
     public FakeDataPitcherApplication Application { get; } = new();
     public TestClock Clock { get; } = new(new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero));
     public JobEventStore Events { get; }
-    public IJobEventSignal EventSignal { get; } = new JobEventSignal();
+    public IJobEventSignal EventSignal { get; }
     public TestResourceAccessGrantReader Grants => Services.GetRequiredService<TestResourceAccessGrantReader>();
 
-    public ApiWebApplicationFactory()
+    public ApiWebApplicationFactory() : this(new JobEventSignal()) { }
+
+    internal ApiWebApplicationFactory(IJobEventSignal eventSignal)
     {
+        EventSignal = eventSignal;
         var database = new ControlDatabase($"Data Source={_databasePath}");
         new ControlDatabaseMigrator(database, Clock).Apply();
         Events = new(database, Clock, EventSignal);

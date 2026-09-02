@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
 using DataPitcher.Api.Errors;
 using DataPitcher.Core.Closure;
@@ -60,6 +61,15 @@ public sealed class ProblemDetailsTests(ApiWebApplicationFactory factory) : ICla
         Assert.Equal(code, problem.Extensions["code"]);
         Assert.Equal("correlation-01", problem.Extensions["correlationId"]);
         Assert.Same(resources, problem.Extensions["resources"]);
+    }
+
+    [Fact]
+    public void ApiProblemMapper_WhenErrorClassIsUnknown_MapsToTheSafeInternalProblem()
+    {
+        var problem = ApiProblemMapper.Map(new ApiFault((ApiErrorClass)99, new ResourceIdentifiers(null, null, null, null, null)), "correlation-01");
+
+        Assert.Equal(StatusCodes.Status500InternalServerError, problem.Status);
+        Assert.Equal("internal_error", problem.Extensions["code"]);
     }
 
     [Fact]

@@ -21,13 +21,21 @@ public sealed class EventCursorExpiredException(long oldestAvailableEventId) : I
 
 public sealed class JobEventSignal : IJobEventSignal
 {
+    private readonly ConcurrentDictionary<Guid, long> _latestEventIds = [];
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource<long>> _waiters = [];
 
-    public Task WaitAsync(Guid jobId, long lastObservedEventId, CancellationToken cancellationToken) =>
-        _waiters.GetOrAdd(jobId, static _ => new(TaskCreationOptions.RunContinuationsAsynchronously)).Task.WaitAsync(cancellationToken);
+    public Task WaitAsync(Guid jobId, long lastObservedEventId, CancellationToken cancellationToken)
+    {
+        if (_latestEventIds.TryGetValue(jobId, out var latestEventId) && latestEventId > lastObservedEventId) return Task.CompletedTask;
+        var waiter = _waiters.GetOrAdd(jobId, static _ => new(TaskCreationOptions.RunContinuationsAsynchronously));
+        return _latestEventIds.TryGetValue(jobId, out latestEventId) && latestEventId > lastObservedEventId
+            ? Task.CompletedTask
+            : waiter.Task.WaitAsync(cancellationToken);
+    }
 
     public void Publish(JobEvent jobEvent)
     {
+        _latestEventIds.AddOrUpdate(jobEvent.JobId, jobEvent.EventId, (_, current) => Math.Max(current, jobEvent.EventId));
         while (true)
         {
             var current = _waiters.GetOrAdd(jobEvent.JobId, static _ => new(TaskCreationOptions.RunContinuationsAsynchronously));

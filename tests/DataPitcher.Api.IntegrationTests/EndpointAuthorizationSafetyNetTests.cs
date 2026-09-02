@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
+using DataPitcher.Api.Endpoints;
 using DataPitcher.Core.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -122,6 +123,34 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
         grantedRequest.Headers.Add("X-Test-Denied-Resource", deniedPlanId.ToString());
         using var grantedResponse = await _client.SendAsync(grantedRequest, CancellationToken.None);
         Assert.Equal(HttpStatusCode.Accepted, grantedResponse.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("snapshot")]
+    [InlineData("schema-scan")]
+    [InlineData("plan-save")]
+    [InlineData("job-start")]
+    [InlineData("job-command")]
+    public async Task ResourceAuthorization_WhenRouteResourceIsDenied_DoesNotInvokeTheApplication(string operation)
+    {
+        var resourceId = Guid.NewGuid();
+        var invocationCount = _factory.Application.Invocations.Count;
+        using var request = operation switch
+        {
+            "snapshot" => new HttpRequestMessage(HttpMethod.Get, $"/api/connections/{resourceId}/snapshots/{Guid.NewGuid()}"),
+            "schema-scan" => new HttpRequestMessage(HttpMethod.Post, $"/api/connections/{resourceId}/schema-scans"),
+            "plan-save" => new HttpRequestMessage(HttpMethod.Put, $"/api/plans/{resourceId}") { Content = JsonContent.Create(new SavePlanRequest("Plan", null, "etag-1")) },
+            "job-start" => new HttpRequestMessage(HttpMethod.Post, $"/api/plans/{resourceId}/jobs"),
+            "job-command" => new HttpRequestMessage(HttpMethod.Post, $"/api/jobs/{resourceId}/commands") { Content = JsonContent.Create(new JobCommandRequest(JobCommand.Pause)) },
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
+        if (operation == "job-start") request.Headers.Add("Idempotency-Key", "request-authorization");
+        request.Headers.Add("X-Test-Denied-Resource", resourceId.ToString());
+
+        using var response = await _client.SendAsync(request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(invocationCount, _factory.Application.Invocations.Count);
     }
 
     [Fact]

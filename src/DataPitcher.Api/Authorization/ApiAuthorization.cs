@@ -90,14 +90,11 @@ public static class ApiAuthorizationResults
 
 public sealed class ApiAuthorizationMiddlewareResultHandler : IAuthorizationMiddlewareResultHandler
 {
-    private static readonly AuthorizationMiddlewareResultHandler Default = new();
-
     public async Task HandleAsync(RequestDelegate next, HttpContext context, AuthorizationPolicy policy, PolicyAuthorizationResult authorizeResult)
     {
         if (authorizeResult.Succeeded) { await next(context); return; }
         if (authorizeResult.Challenged) { await ApiAuthorizationResults.Unauthenticated(context).ExecuteAsync(context); return; }
         if (authorizeResult.Forbidden) { await ApiAuthorizationResults.Forbidden(context).ExecuteAsync(context); return; }
-        await Default.HandleAsync(next, context, policy, authorizeResult);
     }
 }
 

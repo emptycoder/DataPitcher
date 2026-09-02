@@ -54,9 +54,13 @@ public static class EndpointGroups
         IDataPitcherApplication application, CancellationToken cancellationToken) =>
         TypedResults.Ok(await application.ListConnectionsAsync(cancellationToken));
 
-    private static async Task<Ok<ConnectionResponse>> CreateConnectionAsync(
-        CreateConnectionRequest request, IDataPitcherApplication application, CancellationToken cancellationToken) =>
-        TypedResults.Ok(await application.CreateConnectionAsync(request, cancellationToken));
+    private static async Task<Results<Ok<ConnectionResponse>, ProblemHttpResult>> CreateConnectionAsync(
+        CreateConnectionRequest request, IDataPitcherApplication application, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.IfMatch))
+            return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "If-Match is required.");
+        return TypedResults.Ok(await application.CreateConnectionAsync(request, cancellationToken));
+    }
 
     private static async Task<Results<Accepted<OperationReceiptResponse>, ProblemHttpResult>> QueueConnectionCheckAsync(
         Guid connectionId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)

@@ -40,6 +40,15 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     }
 
     [Fact]
+    public async Task JobEvents_WhenTrimBoundaryExceedsTheNextEventId_RejectsTheInvalidRetentionBoundary()
+    {
+        var jobId = Guid.NewGuid();
+        await _factory.Events.AppendAsync(new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)), CancellationToken.None);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => _factory.Events.TrimBeforeAsync(jobId, 3, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task JobEventSignal_WhenCommittedEventIsPublished_WakesWaitingStream()
     {
         var jobId = Guid.NewGuid();
@@ -77,6 +86,19 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
         var appended = await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)), CancellationToken.None);
 
         Assert.Equal($"id: {appended.EventId}\nevent: progress\ndata: {{\"State\":\"running\",\"RowsTransferred\":10,\"BytesTransferred\":100}}\n\n", await frame);
+    }
+
+    [Fact]
+    public async Task JobEvents_WhenAnEventArrivesBeforeWaiting_RechecksTheDurableStore()
+    {
+        var signal = new AppendDuringWaitSignal();
+        using var factory = new ApiWebApplicationFactory(signal);
+        var jobId = Guid.NewGuid();
+        signal.AppendOnFirstWait = () => factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)), CancellationToken.None);
+        using var request = EventRequest(jobId);
+        using var response = await factory.CreateClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+
+        Assert.Contains("data: {\"State\":\"running\",\"RowsTransferred\":10,\"BytesTransferred\":100}", await ReadFrameAsync(response), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -171,6 +193,19 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
         Assert.DoesNotContain("data:", await response.Content.ReadAsStringAsync().WaitAsync(TimeSpan.FromSeconds(1)), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task JobEvents_WhenTokenIsAlreadyExpired_ClosesWithoutWritingEvents()
+    {
+        var jobId = Guid.NewGuid();
+        using var request = EventRequest(jobId);
+        request.Headers.Add("X-Test-Token-Expiry", DateTimeOffset.UtcNow.AddSeconds(-1).ToString("O"));
+        using var response = await _factory.CreateClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+        await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)), CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("data:", await response.Content.ReadAsStringAsync().WaitAsync(TimeSpan.FromSeconds(1)), StringComparison.Ordinal);
+    }
+
     private static HttpRequestMessage EventRequest(Guid jobId, long? lastEventId = null)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{jobId}/events");
@@ -185,5 +220,20 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
         var length = await stream.ReadAsync(buffer, timeout.Token);
         return Encoding.UTF8.GetString(buffer, 0, length);
+    }
+
+    private sealed class AppendDuringWaitSignal : IJobEventSignal
+    {
+        private readonly JobEventSignal _signal = new();
+        private int _waits;
+        public Func<Task>? AppendOnFirstWait { get; set; }
+
+        public async Task WaitAsync(Guid jobId, long lastObservedEventId, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _waits) == 1 && AppendOnFirstWait is { } append) await append();
+            await _signal.WaitAsync(jobId, lastObservedEventId, cancellationToken);
+        }
+
+        public void Publish(JobEvent jobEvent) => _signal.Publish(jobEvent);
     }
 }

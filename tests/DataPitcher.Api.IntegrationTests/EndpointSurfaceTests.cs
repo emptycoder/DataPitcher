@@ -31,6 +31,17 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task CreateConnection_WhenIfMatchIsMissing_ReturnsValidationProblemDetails()
+    {
+        var request = new CreateConnectionRequest("Target", "postgresql", Guid.NewGuid(), "");
+
+        using var response = await _client.PostAsJsonAsync("/api/connections", request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
+    }
+
+    [Fact]
     public async Task QueueConnectionCheck_ReturnsAcceptedReceipt()
     {
         var connectionId = Guid.NewGuid();

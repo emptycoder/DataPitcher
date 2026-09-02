@@ -45,6 +45,8 @@ public sealed class JobEventStore(ControlDatabase database, IClock clock, IJobEv
         using var db = database.Open();
         using var transaction = db.BeginTransaction();
         db.Execute("INSERT OR IGNORE INTO JobEventStreams (JobId, NextEventId, OldestAvailableEventId) VALUES (@job, 1, 1)", new DataParameter("job", jobId.ToString()));
+        var nextEventId = db.Query<long>("SELECT NextEventId FROM JobEventStreams WHERE JobId = @job", new DataParameter("job", jobId.ToString())).Single();
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(oldestAvailableEventId, nextEventId);
         db.Execute("DELETE FROM JobEvents WHERE JobId = @job AND EventId < @oldest", new DataParameter("job", jobId.ToString()), new DataParameter("oldest", oldestAvailableEventId));
         db.Execute("UPDATE JobEventStreams SET OldestAvailableEventId = @oldest WHERE JobId = @job AND OldestAvailableEventId < @oldest", new DataParameter("oldest", oldestAvailableEventId), new DataParameter("job", jobId.ToString()));
         transaction.Commit();
