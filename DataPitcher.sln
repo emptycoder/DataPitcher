@@ -17,6 +17,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataPitcher.PostgreSql.Inte
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataPitcher.PostgreSql", "src\DataPitcher.PostgreSql\DataPitcher.PostgreSql.csproj", "{0B42F98C-7409-4BCE-87C2-AB4353C8F729}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataPitcher.Auth.Abstractions", "src\DataPitcher.Auth.Abstractions\DataPitcher.Auth.Abstractions.csproj", "{9C495137-4752-4088-B870-C3C0F50D7D11}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -87,6 +89,18 @@ Global
 		{0B42F98C-7409-4BCE-87C2-AB4353C8F729}.Release|x64.Build.0 = Release|Any CPU
 		{0B42F98C-7409-4BCE-87C2-AB4353C8F729}.Release|x86.ActiveCfg = Release|Any CPU
 		{0B42F98C-7409-4BCE-87C2-AB4353C8F729}.Release|x86.Build.0 = Release|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Debug|x64.Build.0 = Debug|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Debug|x86.Build.0 = Debug|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Release|x64.ActiveCfg = Release|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Release|x64.Build.0 = Release|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Release|x86.ActiveCfg = Release|Any CPU
+		{9C495137-4752-4088-B870-C3C0F50D7D11}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -97,5 +111,6 @@ Global
 		{C7035578-2A34-4F62-B758-7A5C9D992014} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{B8D49501-86F1-4EFD-A346-557ED01AD749} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{0B42F98C-7409-4BCE-87C2-AB4353C8F729} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{9C495137-4752-4088-B870-C3C0F50D7D11} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal
