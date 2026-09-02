@@ -28,5 +28,12 @@ public sealed class GenericOpenIdConnectProviderTests
         Assert.Equal("Required scopes cannot be empty. (Parameter 'options')", exception.Message);
     }
 
+    [Fact]
+    public void GenericRegistration_WhenRequiredFieldsAreMissing_RejectsConfiguration()
+    {
+        var exception = Assert.Throws<ArgumentException>(() => new GenericOpenIdConnectProviderRegistration(Section(new Dictionary<string, string?> { ["SchemeName"] = "", ["ProviderInstance"] = "provider", ["Issuer"] = "https://issuer.test", ["Audience"] = "api", ["PrincipalKind"] = "User" })));
+        Assert.Equal("Generic OIDC scheme, provider instance, absolute issuer, and audience are required. (Parameter 'options')", exception.Message);
+    }
+
     private static IConfigurationSection Section(Dictionary<string, string?> values) => new ConfigurationBuilder().AddInMemoryCollection(values.ToDictionary(pair => "Authentication:Generic:" + pair.Key, pair => pair.Value)).Build().GetSection("Authentication:Generic");
 }
