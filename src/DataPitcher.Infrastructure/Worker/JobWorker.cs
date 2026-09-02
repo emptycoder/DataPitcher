@@ -6,7 +6,7 @@ using Microsoft.Extensions.Hosting;
 namespace DataPitcher.Infrastructure.Worker;
 
 public sealed class JobWorker(
-    IJobControl jobs, IJobRunCatalog catalog, ITargetRunSessionFactory targets,
+    IJobControl jobs, IJobRunCatalog catalog, ITransferConnectionRevalidator revalidator, ITargetRunSessionFactory targets,
     ITransferReadSessionFactory sources, RecoveryCoordinator recovery, LeaseRenewer renewer,
     IControlCheckpointMirror mirror, IJobEventWriter events, IWorkerFaults faults, IWorkerDelay delay, IClock clock,
     string ownerId, TimeSpan leaseTtl, TimeSpan pollInterval) : BackgroundService
@@ -31,6 +31,7 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
         await jobs.PrepareAsync(claim, leaseLost.Token);
         await events.AppendAsync(new JobEventAppend(claim.Job.JobId, "state", new JobEventPayload("preparing", 0, 0)), leaseLost.Token);
         var run = await catalog.LoadAsync(claim.Job, leaseLost.Token);
+        await revalidator.RevalidateAsync(run, leaseLost.Token);
         await using var target = await targets.OpenAsync(run, leaseLost.Token);
         var checkpoint = await recovery.RecoverAsync(claim, run, target, leaseLost.Token);
         await jobs.MarkRunningAsync(claim.Lease, leaseLost.Token);

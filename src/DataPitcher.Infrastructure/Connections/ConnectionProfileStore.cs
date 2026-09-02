@@ -114,6 +114,15 @@ public sealed class ConnectionProfileStore(ControlDatabase database, IClock cloc
         return Task.FromResult(ToSummary(profile));
     }
 
+    internal Task MarkCheckingAsync(Guid connectionId, TransferMode mode, ConnectionRole role, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        var affected = db.Execute("UPDATE ConnectionProfiles SET HealthState = @healthState, AssessmentMode = @assessmentMode, AssessmentRole = @assessmentRole, Version = Version + 1, UpdatedUtc = @updatedUtc WHERE ConnectionId = @connectionId", new DataParameter[] { new("healthState", ConnectionHealthState.Checking.ToString()), new("assessmentMode", mode.ToString()), new("assessmentRole", role.ToString()), new("updatedUtc", Stamp(clock.UtcNow)), new("connectionId", connectionId.ToString()) });
+        if (affected != 1) throw new InvalidOperationException("Connection profile was not found.");
+        return Task.CompletedTask;
+    }
+
     private void EmitAssessment(ConnectionProfileRow profile, ConnectionHealthState state, IEnumerable<ConnectionCapability> available, string? failureCode)
     {
         var capabilities = string.Join(',', available.Select(capability => capability.ToString()).OrderBy(capability => capability, StringComparer.Ordinal));

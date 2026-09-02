@@ -1,11 +1,13 @@
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
+using DataPitcher.Core.Plans;
 using DataPitcher.Infrastructure.Leasing;
 using DataPitcher.Infrastructure.Persistence;
 
 namespace DataPitcher.Infrastructure.Worker;
 
-public sealed record TransferRun(Guid JobId, Guid RunId, string ManifestSealHash, bool SupportsDurableResume);
+public sealed record TransferRun(Guid JobId, Guid RunId, string ManifestSealHash, bool SupportsDurableResume, Guid SourceConnectionId, Guid TargetConnectionId, TransferMode TransferMode);
+public interface ITransferConnectionRevalidator { Task RevalidateAsync(TransferRun run, CancellationToken cancellationToken); }
 public sealed record TargetCheckpoint(Guid JobId, Guid RunId, long BatchSequence, StableKey? LastStableKey, long RowCount, string ManifestSealHash, long FenceToken, long BytesTransferred = 0);
 public enum TransferUnitKind { Batch, AtomicComponent }
 public sealed record TransferUnit(long BatchSequence, StableKey LastStableKey, long RowCount, TransferUnitKind Kind, long BytesTransferred = 0)

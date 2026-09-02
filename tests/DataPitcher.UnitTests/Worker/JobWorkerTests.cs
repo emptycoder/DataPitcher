@@ -1,5 +1,7 @@
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
+using DataPitcher.Core.Plans;
+using DataPitcher.Infrastructure.Connections;
 using DataPitcher.Infrastructure.Leasing;
 using DataPitcher.Infrastructure.Events;
 using DataPitcher.Infrastructure.Persistence;
@@ -62,7 +64,7 @@ public sealed class JobWorkerTests
     [Fact]
     public async Task JobWorker_WhenStartTokenIsAlreadyCancelled_NeverClaimsAJob()
     {
-        var worker = new JobWorker(null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, "worker-a", TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+        var worker = new JobWorker(null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, "worker-a", TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
         using var cts = new CancellationTokenSource(); cts.Cancel();
 
         await worker.StartAsync(cts.Token);
@@ -73,7 +75,7 @@ public sealed class JobWorkerTests
     public async Task JobWorker_WhenNoJobIsQueued_WaitsForTheNextPollInterval()
     {
         using var fixture = new ControlDatabaseFixture(); var pollInterval = TimeSpan.FromMinutes(1); var delay = new GateWorkerDelay();
-        var worker = new JobWorker(new NeverClaimsJobControl(), null!, null!, null!, null!, null!, null!, null!, null!, delay, fixture.Clock, "worker-a", TimeSpan.FromMinutes(1), pollInterval);
+        var worker = new JobWorker(new NeverClaimsJobControl(), null!, null!, null!, null!, null!, null!, null!, null!, null!, delay, fixture.Clock, "worker-a", TimeSpan.FromMinutes(1), pollInterval);
 
         await worker.StartAsync(CancellationToken.None);
         var due = await delay.FirstDue;
@@ -86,10 +88,10 @@ public sealed class JobWorkerTests
     public async Task JobWorker_WhenClaimRunsNormally_MirrorsTheTargetCheckpointAndDisposesItsSessions()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var jobId = fixture.SeedJob(); var runId = Guid.NewGuid(); var ttl = TimeSpan.FromMinutes(1); var lease = new LeaseGrant(jobId, "worker-a", 1, fixture.Clock.UtcNow.Add(ttl), fixture.Clock.UtcNow.AddMinutes(1));
-        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "normal-run", JobState.Queued); var run = new TransferRun(jobId, runId, "seal", true); var unit = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch); var checkpoint = new TargetCheckpoint(jobId, runId, 1, unit.LastStableKey, 1, "seal", lease.FenceToken);
+        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "normal-run", JobState.Queued); var run = new TransferRun(jobId, runId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast); var unit = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch); var checkpoint = new TargetCheckpoint(jobId, runId, 1, unit.LastStableKey, 1, "seal", lease.FenceToken);
         var recoveredKey = new StableKey([new KeyComponent("Id", 700)]); var recoveredCheckpoint = new TargetCheckpoint(jobId, runId, 7, recoveredKey, 700, "seal", lease.FenceToken);
         var calls = new List<string>(); var jobs = new SingleClaimJobControl(new JobClaim(job, lease, false), calls); var source = new TestTransferReadSession(unit, "source-connection"); var sourceFactory = new TestTransferReadSessionFactory(source); var target = new TestTargetRunSession(checkpoint, "target-connection", calls) { Snapshot = new(recoveredCheckpoint, []) }; var mirror = new RecordingCheckpointMirror(calls);
-        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), new TestTargetRunSessionFactory(target), sourceFactory, new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
+        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), new NoopConnectionRevalidator(), new TestTargetRunSessionFactory(target), sourceFactory, new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
 
         await worker.StartAsync(CancellationToken.None);
         await jobs.MarkedVerifying;
@@ -102,9 +104,9 @@ public sealed class JobWorkerTests
     public async Task Pause_WhenRequestedAtACommitBoundary_DiscardsThePrefetchedUnitAndPauses()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var jobId = fixture.SeedJob(); var runId = Guid.NewGuid(); var ttl = TimeSpan.FromMinutes(1); var lease = new LeaseGrant(jobId, "worker-a", 1, fixture.Clock.UtcNow.Add(ttl), fixture.Clock.UtcNow.AddMinutes(1));
-        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "pause-run", JobState.Queued); var run = new TransferRun(jobId, runId, "seal", true); var first = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch); var prefetched = new TransferUnit(2, new StableKey([new KeyComponent("Id", 2)]), 1, TransferUnitKind.Batch); var checkpoint = new TargetCheckpoint(jobId, runId, 0, null, 0, "seal", lease.FenceToken);
+        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "pause-run", JobState.Queued); var run = new TransferRun(jobId, runId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast); var first = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch); var prefetched = new TransferUnit(2, new StableKey([new KeyComponent("Id", 2)]), 1, TransferUnitKind.Batch); var checkpoint = new TargetCheckpoint(jobId, runId, 0, null, 0, "seal", lease.FenceToken);
         var jobs = new BoundaryJobControl(new JobClaim(job, lease, false)); var source = new PrefetchedReadSession(first, prefetched); var target = new CommitBarrierTargetSession(checkpoint); var calls = new List<string>(); var mirror = new RecordingCheckpointMirror(calls);
-        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), new CommitBarrierTargetSessionFactory(target), new PrefetchedReadSessionFactory(source), new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
+        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), new NoopConnectionRevalidator(), new CommitBarrierTargetSessionFactory(target), new PrefetchedReadSessionFactory(source), new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
 
         await worker.StartAsync(CancellationToken.None);
         await target.ApplyStarted;
@@ -120,9 +122,9 @@ public sealed class JobWorkerTests
     public async Task Cancel_WhenRequestedDuringApply_CommitsAtTheBoundaryAndUsesAnUncancelledCleanupToken()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var jobId = fixture.SeedJob(); var runId = Guid.NewGuid(); var ttl = TimeSpan.FromMinutes(1); var lease = new LeaseGrant(jobId, "worker-a", 1, fixture.Clock.UtcNow.Add(ttl), fixture.Clock.UtcNow.AddMinutes(1));
-        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "cancel-run", JobState.Queued); var run = new TransferRun(jobId, runId, "seal", true); var first = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch); var prefetched = new TransferUnit(2, new StableKey([new KeyComponent("Id", 2)]), 1, TransferUnitKind.Batch); var checkpoint = new TargetCheckpoint(jobId, runId, 0, null, 0, "seal", lease.FenceToken);
+        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "cancel-run", JobState.Queued); var run = new TransferRun(jobId, runId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast); var first = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch); var prefetched = new TransferUnit(2, new StableKey([new KeyComponent("Id", 2)]), 1, TransferUnitKind.Batch); var checkpoint = new TargetCheckpoint(jobId, runId, 0, null, 0, "seal", lease.FenceToken);
         var jobs = new BoundaryJobControl(new JobClaim(job, lease, false)); var source = new PrefetchedReadSession(first, prefetched); var target = new CommitBarrierTargetSession(checkpoint); var mirror = new RecordingCheckpointMirror([]);
-        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), new CommitBarrierTargetSessionFactory(target), new PrefetchedReadSessionFactory(source), new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
+        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), new NoopConnectionRevalidator(), new CommitBarrierTargetSessionFactory(target), new PrefetchedReadSessionFactory(source), new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
 
         await worker.StartAsync(CancellationToken.None);
         await target.ApplyStarted;
@@ -139,8 +141,8 @@ public sealed class JobWorkerTests
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock); var ttl = TimeSpan.FromMinutes(1); var job = store.Start(new StartJobRequest(Guid.NewGuid(), "resume-run")).Job; var pausedClaim = (await store.TryClaimNextAsync("worker-a", ttl, CancellationToken.None))!;
         await store.PrepareAsync(pausedClaim, CancellationToken.None); await store.MarkRunningAsync(pausedClaim.Lease, CancellationToken.None); await store.RequestPauseAsync(job.JobId, CancellationToken.None); await store.MarkPausedAsync(pausedClaim.Lease, CancellationToken.None); await store.RequestResumeAsync(job.JobId, CancellationToken.None);
-        var stableKey = new StableKey([new KeyComponent("Id", 1)]); var run = new TransferRun(job.JobId, job.RunId, "seal", true); var source = new PrefetchedReadSession(new TransferUnit(2, new StableKey([new KeyComponent("Id", 2)]), 1, TransferUnitKind.Batch), new TransferUnit(3, new StableKey([new KeyComponent("Id", 3)]), 1, TransferUnitKind.Batch)); var target = new CommitBarrierTargetSession(new TargetCheckpoint(job.JobId, job.RunId, 1, stableKey, 1, "seal", 2)); var sourceFactory = new PrefetchedReadSessionFactory(source); var mirror = new RecordingCheckpointMirror([]);
-        var worker = new JobWorker(store, new TestJobRunCatalog(run), new CommitBarrierTargetSessionFactory(target), sourceFactory, new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-b", ttl, TimeSpan.FromMinutes(1));
+        var stableKey = new StableKey([new KeyComponent("Id", 1)]); var run = new TransferRun(job.JobId, job.RunId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast); var source = new PrefetchedReadSession(new TransferUnit(2, new StableKey([new KeyComponent("Id", 2)]), 1, TransferUnitKind.Batch), new TransferUnit(3, new StableKey([new KeyComponent("Id", 3)]), 1, TransferUnitKind.Batch)); var target = new CommitBarrierTargetSession(new TargetCheckpoint(job.JobId, job.RunId, 1, stableKey, 1, "seal", 2)); var sourceFactory = new PrefetchedReadSessionFactory(source); var mirror = new RecordingCheckpointMirror([]);
+        var worker = new JobWorker(store, new TestJobRunCatalog(run), new NoopConnectionRevalidator(), new CommitBarrierTargetSessionFactory(target), sourceFactory, new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-b", ttl, TimeSpan.FromMinutes(1));
 
         await worker.StartAsync(CancellationToken.None);
         await target.ApplyStarted;
@@ -156,9 +158,9 @@ public sealed class JobWorkerTests
     public async Task AtomicComponent_WhenPauseIsRequestedDuringApply_PausesAfterItsSingleCommit()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var jobId = fixture.SeedJob(); var runId = Guid.NewGuid(); var ttl = TimeSpan.FromMinutes(1); var lease = new LeaseGrant(jobId, "worker-a", 1, fixture.Clock.UtcNow.Add(ttl), fixture.Clock.UtcNow.AddMinutes(1));
-        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "atomic-pause-run", JobState.Queued); var run = new TransferRun(jobId, runId, "seal", true); var component = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 2, TransferUnitKind.AtomicComponent); var checkpoint = new TargetCheckpoint(jobId, runId, 0, null, 0, "seal", lease.FenceToken);
+        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "atomic-pause-run", JobState.Queued); var run = new TransferRun(jobId, runId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast); var component = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 2, TransferUnitKind.AtomicComponent); var checkpoint = new TargetCheckpoint(jobId, runId, 0, null, 0, "seal", lease.FenceToken);
         var jobs = new BoundaryJobControl(new JobClaim(job, lease, false)); var source = new PrefetchedReadSession(component, new TransferUnit(2, new StableKey([new KeyComponent("Id", 2)]), 1, TransferUnitKind.Batch)); var target = new CommitBarrierTargetSession(checkpoint); var mirror = new RecordingCheckpointMirror([]);
-        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), new CommitBarrierTargetSessionFactory(target), new PrefetchedReadSessionFactory(source), new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
+        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), new NoopConnectionRevalidator(), new CommitBarrierTargetSessionFactory(target), new PrefetchedReadSessionFactory(source), new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
 
         await worker.StartAsync(CancellationToken.None);
         await target.ApplyStarted;
@@ -175,9 +177,9 @@ public sealed class JobWorkerTests
     public async Task JobWorker_WhenTargetBatchCommits_PublishesCheckpointByteProgress()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var jobId = fixture.SeedJob(); var runId = Guid.NewGuid(); var ttl = TimeSpan.FromMinutes(1); var lease = new LeaseGrant(jobId, "worker-a", 1, fixture.Clock.UtcNow.Add(ttl), fixture.Clock.UtcNow.AddMinutes(1));
-        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "byte-progress", JobState.Queued); var run = new TransferRun(jobId, runId, "seal", true); var unit = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch, BytesTransferred: 100); var checkpoint = new TargetCheckpoint(jobId, runId, 1, unit.LastStableKey, 1, "seal", lease.FenceToken, BytesTransferred: 100);
+        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "byte-progress", JobState.Queued); var run = new TransferRun(jobId, runId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast); var unit = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch, BytesTransferred: 100); var checkpoint = new TargetCheckpoint(jobId, runId, 1, unit.LastStableKey, 1, "seal", lease.FenceToken, BytesTransferred: 100);
         var calls = new List<string>(); var jobs = new SingleClaimJobControl(new JobClaim(job, lease, false), calls); var source = new TestTransferReadSession(unit, "source-connection"); var sourceFactory = new TestTransferReadSessionFactory(source); var target = new TestTargetRunSession(checkpoint, "target-connection", calls) { Snapshot = new(new(jobId, runId, 0, null, 0, "seal", lease.FenceToken), []) }; var mirror = new RecordingCheckpointMirror(calls); var events = new RecordingJobEventWriter();
-        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), new TestTargetRunSessionFactory(target), sourceFactory, new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, events, new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
+        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), new NoopConnectionRevalidator(), new TestTargetRunSessionFactory(target), sourceFactory, new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, events, new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
 
         await worker.StartAsync(CancellationToken.None);
         await jobs.MarkedVerifying;
@@ -188,6 +190,30 @@ public sealed class JobWorkerTests
         Assert.Equal(["preparing", "running", "verifying"], events.Appends.Where(item => item.EventType == "state").Select(item => item.Payload.State));
     }
 
+    [Fact]
+    public async Task JobWorker_WhenConnectionRevalidationFails_DoesNotOpenEitherDatabaseSession()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var jobId = fixture.SeedJob(); var runId = Guid.NewGuid(); var ttl = TimeSpan.FromMinutes(1);
+        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "revalidate-run", JobState.Queued);
+        var lease = new LeaseGrant(jobId, "worker-a", 1, fixture.Clock.UtcNow.Add(ttl), fixture.Clock.UtcNow.AddMinutes(1));
+        var run = new TransferRun(jobId, runId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast);
+        var calls = new List<string>(); var jobs = new SingleClaimJobControl(new JobClaim(job, lease, false), calls);
+        var revalidator = new FailingConnectionRevalidator(); var targets = new CountingTargetFactory(); var sources = new CountingSourceFactory();
+        var mirror = new RecordingCheckpointMirror(calls);
+        var worker = new JobWorker(jobs, new TestJobRunCatalog(run), revalidator, targets, sources, new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), new BlockingWorkerDelay(), fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
+
+        await worker.StartAsync(CancellationToken.None);
+        await revalidator.Called;
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal(1, revalidator.Calls);
+        Assert.Equal(run.SourceConnectionId, revalidator.Run!.SourceConnectionId);
+        Assert.Equal(run.TargetConnectionId, revalidator.Run.TargetConnectionId);
+        Assert.Equal(0, targets.OpenCalls);
+        Assert.Equal(0, sources.OpenCalls);
+    }
+
     private sealed class RecordingJobEventWriter : IJobEventWriter
     {
         public List<JobEventAppend> Appends { get; } = [];
@@ -195,6 +221,46 @@ public sealed class JobWorkerTests
         {
             Appends.Add(append);
             return Task.FromResult(new JobEvent(append.JobId, Appends.Count, append.EventType, append.Payload, DateTimeOffset.UnixEpoch));
+        }
+    }
+
+    private sealed class FailingConnectionRevalidator : ITransferConnectionRevalidator
+    {
+        private readonly TaskCompletionSource<bool> _called = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Called => _called.Task;
+        public int Calls { get; private set; }
+        public TransferRun? Run { get; private set; }
+        public Task RevalidateAsync(TransferRun run, CancellationToken cancellationToken)
+        {
+            Calls++;
+            Run = run;
+            _called.TrySetResult(true);
+            throw new ConnectionNotHealthyException();
+        }
+    }
+
+    private sealed class NoopConnectionRevalidator : ITransferConnectionRevalidator
+    {
+        public Task RevalidateAsync(TransferRun run, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class CountingTargetFactory : ITargetRunSessionFactory
+    {
+        public int OpenCalls { get; private set; }
+        public Task<ITargetRunSession> OpenAsync(TransferRun run, CancellationToken cancellationToken)
+        {
+            OpenCalls++;
+            return Task.FromException<ITargetRunSession>(new NotSupportedException());
+        }
+    }
+
+    private sealed class CountingSourceFactory : ITransferReadSessionFactory
+    {
+        public int OpenCalls { get; private set; }
+        public Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken)
+        {
+            OpenCalls++;
+            return Task.FromException<ITransferReadSession>(new NotSupportedException());
         }
     }
 }

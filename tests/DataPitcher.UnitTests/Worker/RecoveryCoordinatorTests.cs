@@ -1,5 +1,6 @@
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
+using DataPitcher.Core.Plans;
 using DataPitcher.Infrastructure.Leasing;
 using DataPitcher.Infrastructure.Persistence;
 using DataPitcher.Infrastructure.Worker;
@@ -14,7 +15,7 @@ public sealed class RecoveryCoordinatorTests
         var jobId = Guid.NewGuid(); var runId = Guid.NewGuid();
         var job = new TransferJob(jobId, runId, Guid.NewGuid(), "key", JobState.Running);
         var lease = new LeaseGrant(jobId, "worker-a", 3, DateTimeOffset.UnixEpoch.AddMinutes(1), DateTimeOffset.UnixEpoch);
-        return (new JobClaim(job, lease, isInterrupted), new TransferRun(jobId, runId, sealHash, supportsDurableResume));
+        return (new JobClaim(job, lease, isInterrupted), new TransferRun(jobId, runId, sealHash, supportsDurableResume, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast));
     }
 
     [Fact]
