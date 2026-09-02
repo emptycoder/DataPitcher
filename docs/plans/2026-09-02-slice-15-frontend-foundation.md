@@ -36,8 +36,7 @@
 - `web/src/api/parseJson.ts`, `web/src/api/parseJson.test.ts` — pure runtime response-validation boundary.
 - `web/src/api/effectivePermissionsApi.ts`, `web/src/api/effectivePermissionsQuery.ts` — injected-fetch shell and Query option factory.
 - `web/src/app/AppProviders.tsx`, `web/src/api/effectivePermissionsQuery.test.tsx` — thin Query client shell and server-state tests.
-- `web/src/app/ciContract.test.ts` — local assertion that CI invokes the separate frontend lane and generated-artifact drift check.
-- `.github/workflows/ci.yml` — distinct backend and frontend CI jobs.
+- `.github/workflows/ci.yml` — distinct backend and frontend CI jobs that directly enforce generation drift and the frontend lane.
 
 ## Scope and Deferrals
 
@@ -621,28 +620,11 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
 ### Task 7: Add CI drift enforcement and complete the foundation review
 
 **Files:**
-- Create: `web/src/app/ciContract.test.ts`, `.github/workflows/ci.yml`
+- Create: `.github/workflows/ci.yml`
 - Modify: none
-- Test: `web/src/app/ciContract.test.ts`
+- Test: none; the workflow is the executable enforcement, not source under test.
 
-1. - [ ] **Write the failing CI-contract test.** Create `web/src/app/ciContract.test.ts` with this complete test. The absent workflow is the intended first failure.
-
-   ```ts
-   import { readFileSync } from 'node:fs';
-   import { expect, it } from 'vitest';
-
-   it('keeps backend, frontend, and generation checks explicit in CI', () => {
-     const workflow = readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8');
-     expect(workflow).toContain('./scripts/test-all.sh');
-     expect(workflow).toContain('./scripts/test-frontend.sh');
-     expect(workflow).toContain('npm --prefix web run generate:api');
-     expect(workflow).toContain('git diff --exit-code -- web/src/api/generated');
-   });
-   ```
-
-2. - [ ] **Run the missing-workflow contract test.** Run `npm --prefix web test -- --run src/app/ciContract.test.ts`; expect non-zero exit and an `ENOENT` message for `.github/workflows/ci.yml`.
-
-3. - [ ] **Implement the separate CI jobs.** Create this workflow. Regeneration is local against the committed OpenAPI document, so the drift check neither calls a service nor weakens the no-network test rule. Keeping jobs separate preserves meaningful toolchain-specific failure output and thresholds.
+1. - [ ] **Implement the separate CI jobs.** Create this workflow. The workflow directly runs the generation, drift, and frontend-lane commands, so a filesystem-reading test is neither needed nor authoritative. A Vite transformation rule cannot enforce GitHub Actions job execution; resolving a workflow path from a unit test would only reproduce the fragile filesystem coupling. Regeneration is local against the committed OpenAPI document, so the drift check neither calls a service nor weakens the no-network test rule. Keeping jobs separate preserves meaningful toolchain-specific failure output and thresholds.
 
    ```yaml
    name: ci
@@ -667,9 +649,9 @@ Zustand selectors must return primitives or use an explicit shallow comparator. 
          - run: ./scripts/test-frontend.sh
    ```
 
-4. - [ ] **Run the CI-contract test and complete the local gate.** Run `npm --prefix web test -- --run src/app/ciContract.test.ts && scripts/test-frontend.sh`; expect exit 0, the CI-contract assertions to pass, and all handwritten frontend coverage totals to remain 100%.
+2. - [ ] **Run the generation drift check and complete the local gate.** Run `npm --prefix web run generate:api && git diff --exit-code -- web/src/api/generated && scripts/test-frontend.sh`; expect exit 0 and all handwritten frontend coverage totals to remain 100%.
 
-5. - [ ] **Commit the CI enforcement.** Run `git add web/src/app/ciContract.test.ts .github/workflows/ci.yml && git commit -m "ci: verify frontend generation and coverage"`.
+3. - [ ] **Commit the CI enforcement.** Run `git add .github/workflows/ci.yml && git commit -m "ci: verify frontend generation and coverage"`.
 
 ## Self-Review
 
