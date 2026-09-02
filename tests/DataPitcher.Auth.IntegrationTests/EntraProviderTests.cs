@@ -19,6 +19,14 @@ public sealed class EntraProviderTests
     }
 
     [Fact]
+    public void EntraNormalizer_PreservesConfiguredPresentationClaims()
+    {
+        var normalizer = new EntraPrincipalNormalizer(new EntraProviderOptions { SchemeName = "entra", ProviderInstance = "entra-prod", Instance = "https://login.test/", TenantId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", ClientId = "client" });
+        var normalized = normalizer.Normalize(Principal(new Claim("idtyp", "user"), new Claim("name", "Display Name"), new Claim("email", "user@example.test"), new Claim("preferred_username", "user"), new Claim("upn", "user@tenant.test")), "https://login.test/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/v2.0");
+        Assert.Equal(new PrincipalPresentation("Display Name", "user@example.test", "user", "user@tenant.test"), normalized.Principal.Presentation);
+    }
+
+    [Fact]
     public void EntraNormalizer_MatchesOnlyExactOverageClaimNamesAndNeverUsesClaimSourcesEndpoint()
     {
         var normalizer = new EntraPrincipalNormalizer(new EntraProviderOptions { SchemeName = "entra", ProviderInstance = "entra-prod", Instance = "https://login.test/", TenantId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", ClientId = "client" });
@@ -58,6 +66,10 @@ public sealed class EntraProviderTests
         var singleTenant = new EntraProviderRegistration(Section(new() { ["SchemeName"] = "entra", ["ProviderInstance"] = "entra-prod", ["Instance"] = "https://login.test/", ["TenantId"] = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", ["ClientId"] = "client" }));
         Assert.Equal("entra", singleTenant.SchemeName);
     }
+
+    [Fact]
+    public void EntraProviderRegistration_WhenConfigurationSectionIsEmpty_RejectsConfiguration() =>
+        Assert.Throws<ArgumentException>(() => new EntraProviderRegistration(new ConfigurationBuilder().Build().GetSection("Authentication:Entra")));
 
     private static IConfigurationSection Section(Dictionary<string, string?> values) => new ConfigurationBuilder().AddInMemoryCollection(values.ToDictionary(pair => "Authentication:Entra:" + pair.Key, pair => pair.Value)).Build().GetSection("Authentication:Entra");
 

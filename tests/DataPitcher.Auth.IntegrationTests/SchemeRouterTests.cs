@@ -38,6 +38,42 @@ public sealed class SchemeRouterTests
         Assert.Equal("generic", IssuerSchemeRouter.SelectScheme(Context(null), new[] { IssuerRoute.Exact("generic", "https://issuer.test") }, "generic"));
     }
 
+    [Fact]
+    public void Router_WhenAuthorizationIsNotBearer_UsesTheSingleConfiguredFallback()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Basic credentials";
+        Assert.Equal("generic", IssuerSchemeRouter.SelectScheme(context, new[] { IssuerRoute.Exact("generic", "https://issuer.test") }, "generic"));
+    }
+
+    [Fact]
+    public void IssuerRoute_OverlapDetectionDistinguishesEveryRouteCombination()
+    {
+        var exact = IssuerRoute.Exact("exact", "https://login.test/tenant/v2.0");
+        var otherExact = IssuerRoute.Exact("other", "https://other.test");
+        var entra = IssuerRoute.EntraV2("entra", "https://login.test");
+        var otherEntra = IssuerRoute.EntraV2("other-entra", "https://other.test");
+        Assert.False(exact.Overlaps(otherExact));
+        Assert.True(exact.Overlaps(entra));
+        Assert.True(entra.Overlaps(exact));
+        Assert.False(entra.Overlaps(otherEntra));
+    }
+
+    [Fact]
+    public void Router_WhenNoRegistrationsExist_RejectsConfiguration()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() => new ServiceCollection().AddDataPitcherAuthentication("DataPitcher.Router", "generic", Array.Empty<IAuthProviderRegistration>()));
+        Assert.Equal("Authentication schemes must be non-empty, unique, and include the fallback.", exception.Message);
+    }
+
+    [Fact]
+    public void Router_WhenSchemeNamesAreDuplicated_RejectsConfiguration()
+    {
+        var registrations = new IAuthProviderRegistration[] { new Stub("generic", IssuerRoute.Exact("generic", "https://issuer.test")), new Stub("generic", IssuerRoute.Exact("other", "https://other.test")) };
+        var exception = Assert.Throws<InvalidOperationException>(() => new ServiceCollection().AddDataPitcherAuthentication("DataPitcher.Router", "generic", registrations));
+        Assert.Equal("Authentication schemes must be non-empty, unique, and include the fallback.", exception.Message);
+    }
+
     [Theory]
     [InlineData(AuthorizationOutcome.Denied, 403, "authorization_denied")]
     [InlineData(AuthorizationOutcome.Indeterminate, 503, "authorization_indeterminate")]
@@ -52,6 +88,10 @@ public sealed class SchemeRouterTests
     [Fact]
     public void AuthorizationOutcomeProblemDetailsFactory_LeavesGrantForTheLaterEndpointLayer() =>
         Assert.Null(AuthorizationOutcomeProblemDetailsFactory.Create(new AuthorizationDecision(AuthorizationOutcome.Granted, PermissionSet.Empty)));
+
+    [Fact]
+    public void AuthorizationOutcomeProblemDetailsFactory_RejectsUnknownOutcomes() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => AuthorizationOutcomeProblemDetailsFactory.Create(new AuthorizationDecision((AuthorizationOutcome)999, PermissionSet.Empty)));
 
     private static DefaultHttpContext Context(string? issuer)
     {
