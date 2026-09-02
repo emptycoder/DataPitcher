@@ -205,3 +205,64 @@ public sealed class SelectionExecutionServiceTests
         public override Task<SelectionPreview> PreviewAsync(GeneratedSelectionSql selection, int rowLimit, int textLimit, int binaryLimit, CancellationToken cancellationToken) => Task.FromResult(preview);
     }
 }
+
+public sealed class RawSqlSafetyValidatorTests
+{
+    [Theory]
+    [InlineData(RawSqlDialect.PostgreSql, "WITH roots AS (SELECT 7 AS __datapitcher_key_0) SELECT __datapitcher_key_0 FROM roots;")]
+    [InlineData(RawSqlDialect.SqlServer, "WITH roots AS (SELECT 7 AS __datapitcher_key_0) SELECT __datapitcher_key_0 FROM roots;")]
+    public void Validate_AcceptsOneReadOnlySelect(RawSqlDialect dialect, string sql) => RawSqlSafetyValidator.Validate(dialect, sql);
+
+    [Theory]
+    [InlineData(RawSqlDialect.PostgreSql, "DELETE FROM orders", "Raw SQL must start with SELECT or WITH.")]
+    [InlineData(RawSqlDialect.PostgreSql, "SELECT 1; SELECT 2", "Raw SQL may contain only one statement.")]
+    [InlineData(RawSqlDialect.PostgreSql, "SELECT 1; SELECT 2;", "Raw SQL may contain only one statement.")]
+    [InlineData(RawSqlDialect.PostgreSql, "WITH roots AS (DELETE FROM orders RETURNING order_id) SELECT order_id AS __datapitcher_key_0 FROM roots", "Raw SQL contains a data-modifying token: DELETE.")]
+    [InlineData(RawSqlDialect.PostgreSql, "SELECT INTO archive FROM orders", "Raw SQL contains a data-modifying token: INTO.")]
+    [InlineData(RawSqlDialect.SqlServer, "SELECT 1\nGO\nSELECT 2", "SQL Server batch separators are not allowed.")]
+    public void Validate_RejectsUnsafeSql(RawSqlDialect dialect, string sql, string message)
+    {
+        Assert.Equal(message, Assert.Throws<RawSqlValidationException>(() => RawSqlSafetyValidator.Validate(dialect, sql)).Message);
+    }
+
+    [Fact]
+    public void Validate_IgnoresKeywordsAndBatchSeparatorsInsideQuotedContentAndComments()
+    {
+        RawSqlSafetyValidator.Validate(RawSqlDialect.SqlServer, "SELECT 'DELETE; INSERT\nGO' AS [value]]name] /* UPDATE GO /* DROP */ */ -- ALTER\n");
+    }
+
+    [Fact]
+    public void Validate_IgnoresALineCommentAtEndOfInput()
+    {
+        RawSqlSafetyValidator.Validate(RawSqlDialect.SqlServer, "SELECT 1 -- DELETE");
+    }
+
+    [Theory]
+    [InlineData("SELECT 'unterminated", "Raw SQL has an unterminated quoted value.")]
+    [InlineData("SELECT [unterminated", "Raw SQL has an unterminated bracket identifier.")]
+    [InlineData("SELECT /* unterminated", "Raw SQL has an unterminated block comment.")]
+    public void Validate_RejectsUnterminatedLexicalContent(string sql, string message)
+    {
+        Assert.Equal(message, Assert.Throws<RawSqlValidationException>(() => RawSqlSafetyValidator.Validate(RawSqlDialect.SqlServer, sql)).Message);
+    }
+
+    [Fact]
+    public void Validate_AcceptsEscapedQuotedValuesAndIdentifiers()
+    {
+        RawSqlSafetyValidator.Validate(RawSqlDialect.SqlServer, "SELECT 'it''s read-only', \"quoted\" FROM [escaped]]name]");
+    }
+
+    [Fact]
+    public void Validate_AcceptsAQuotedValueAtEndOfInput()
+    {
+        RawSqlSafetyValidator.Validate(RawSqlDialect.SqlServer, "SELECT 'read-only'");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("VALUES (1)")]
+    public void Validate_RejectsSqlThatDoesNotStartWithSelectOrWith(string sql)
+    {
+        Assert.Equal("Raw SQL must start with SELECT or WITH.", Assert.Throws<RawSqlValidationException>(() => RawSqlSafetyValidator.Validate(RawSqlDialect.PostgreSql, sql)).Message);
+    }
+}
