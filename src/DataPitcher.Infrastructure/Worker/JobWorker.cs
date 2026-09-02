@@ -5,7 +5,7 @@ namespace DataPitcher.Infrastructure.Worker;
 
 public sealed class JobWorker(
     IJobControl jobs, IJobRunCatalog catalog, ITargetRunSessionFactory targets,
-    ITransferReadSessionFactory sources, LeaseRenewer renewer,
+    ITransferReadSessionFactory sources, RecoveryCoordinator recovery, LeaseRenewer renewer,
     IControlCheckpointMirror mirror, IWorkerFaults faults, IWorkerDelay delay, IClock clock,
     string ownerId, TimeSpan leaseTtl, TimeSpan pollInterval) : BackgroundService
 {
@@ -29,8 +29,9 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
         await jobs.PrepareAsync(claim, leaseLost.Token);
         var run = await catalog.LoadAsync(claim.Job, leaseLost.Token);
         await using var target = await targets.OpenAsync(run, leaseLost.Token);
+        var recovered = await recovery.RecoverAsync(claim, run, target, leaseLost.Token);
         await jobs.MarkRunningAsync(claim.Lease, leaseLost.Token);
-        await using var source = await sources.OpenKeysetAsync(run, null, leaseLost.Token);
+        await using var source = await sources.OpenKeysetAsync(run, recovered.LastStableKey, leaseLost.Token);
         for (TransferUnit? unit; (unit = await source.ReadNextAsync(leaseLost.Token)) is not null;)
         {
             await faults.HitAsync(TransferFaultPoint.BeforeTargetCommit, leaseLost.Token);

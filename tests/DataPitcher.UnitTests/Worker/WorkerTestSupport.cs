@@ -92,17 +92,22 @@ internal sealed class TestTransferReadSession(TransferUnit unit, string connecti
 
 internal sealed class TestTransferReadSessionFactory(TestTransferReadSession session) : ITransferReadSessionFactory
 {
-    public Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken) => Task.FromResult<ITransferReadSession>(session);
+    public StableKey? LastRequestedStartAfter { get; private set; }
+    public Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken) { LastRequestedStartAfter = startAfter; return Task.FromResult<ITransferReadSession>(session); }
 }
 
 internal sealed class TestTargetRunSession(TargetCheckpoint checkpoint, string connectionOwnerId, List<string> calls) : ITargetRunSession
 {
     public string ConnectionOwnerId { get; } = connectionOwnerId;
     public bool Disposed { get; private set; }
+    public RecoverySnapshot Snapshot { get; set; } = new(checkpoint, []);
+    public IReadOnlyList<MutationJournalEntry> RepairResult { get; set; } = [];
+    public List<TargetMutation> QuarantinedMutations { get; } = [];
+    public LeaseGrant? LastFenceLease { get; private set; }
     public Task<TargetCheckpoint> ApplyAsync(TransferRun run, LeaseGrant lease, TransferUnit unit, CancellationToken cancellationToken) { calls.Add("Apply"); return Task.FromResult(checkpoint); }
-    public Task<RecoverySnapshot> AcquireFenceReadCheckpointAndJournalAsync(TransferRun run, LeaseGrant lease, CancellationToken cancellationToken) => Task.FromException<RecoverySnapshot>(new NotSupportedException());
-    public Task<IReadOnlyList<MutationJournalEntry>> RepairMutationsAsync(IReadOnlyList<MutationJournalEntry> mutations, CancellationToken cancellationToken) => Task.FromException<IReadOnlyList<MutationJournalEntry>>(new NotSupportedException());
-    public Task QuarantineAsync(TargetMutation mutation, string reason, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
+    public Task<RecoverySnapshot> AcquireFenceReadCheckpointAndJournalAsync(TransferRun run, LeaseGrant lease, CancellationToken cancellationToken) { calls.Add("Fence"); LastFenceLease = lease; return Task.FromResult(Snapshot); }
+    public Task<IReadOnlyList<MutationJournalEntry>> RepairMutationsAsync(IReadOnlyList<MutationJournalEntry> mutations, CancellationToken cancellationToken) { calls.Add("Repair"); return Task.FromResult(RepairResult); }
+    public Task QuarantineAsync(TargetMutation mutation, string reason, CancellationToken cancellationToken) { calls.Add("Quarantine"); QuarantinedMutations.Add(mutation); return Task.CompletedTask; }
     public Task DiscardUncommittedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
 }
