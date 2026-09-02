@@ -73,15 +73,18 @@ public sealed class RecoveryCoordinatorTests
         var checkpoint = new TargetCheckpoint(run.JobId, run.RunId, 2, null, 2, "seal", claim.Lease.FenceToken);
         var repairedTrigger = new TargetMutation("dbo.Orders", "TR_Orders", TargetMutationKind.DisabledTrigger);
         var unrepairedConstraint = new TargetMutation("dbo.Orders", "FK_Orders_Customers", TargetMutationKind.UntrustedConstraint);
+        var unrepairedWithoutDetail = new TargetMutation("dbo.Orders", "CK_Orders_Total", TargetMutationKind.DisabledConstraint);
         var pendingEntries = new List<MutationJournalEntry>
         {
             new(Guid.NewGuid(), repairedTrigger, MutationJournalState.PendingRepair, null),
             new(Guid.NewGuid(), unrepairedConstraint, MutationJournalState.PendingRepair, null),
+            new(Guid.NewGuid(), unrepairedWithoutDetail, MutationJournalState.PendingRepair, null),
         };
         var repairResult = new List<MutationJournalEntry>
         {
             pendingEntries[0] with { State = MutationJournalState.Repaired },
             pendingEntries[1] with { State = MutationJournalState.Quarantined, Detail = "Constraint could not be verified trusted." },
+            pendingEntries[2] with { State = MutationJournalState.Quarantined, Detail = null },
         };
         var calls = new List<string>();
         var target = new TestTargetRunSession(checkpoint, "target-connection", calls) { Snapshot = new(checkpoint, pendingEntries), RepairResult = repairResult };
@@ -91,6 +94,7 @@ public sealed class RecoveryCoordinatorTests
         await coordinator.RecoverAsync(claim, run, target, CancellationToken.None);
 
         Assert.Single(target.QuarantinedMutations, mutation => mutation == unrepairedConstraint);
+        Assert.Single(target.QuarantinedMutations, mutation => mutation == unrepairedWithoutDetail);
         Assert.DoesNotContain(target.QuarantinedMutations, mutation => mutation == repairedTrigger);
     }
 }
