@@ -1,0 +1,189 @@
+using System.Collections.Concurrent;
+using System.Security.Claims;
+using System.Text.Encodings.Web;
+using DataPitcher.Api.Authorization;
+using DataPitcher.Api.Contracts;
+using DataPitcher.Core.Authorization;
+using DataPitcher.Infrastructure.Events;
+using DataPitcher.Infrastructure.Migrations;
+using DataPitcher.Infrastructure.Storage;
+using DataPitcher.Infrastructure.Time;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace DataPitcher.Api.IntegrationTests;
+
+public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
+{
+    private readonly string _databasePath = Path.Combine(Path.GetTempPath(), $"datapitcher-api-{Guid.NewGuid():N}.db");
+    public FakeDataPitcherApplication Application { get; } = new();
+    public TestClock Clock { get; } = new(new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero));
+    public JobEventStore Events { get; }
+    public IJobEventSignal EventSignal { get; }
+    public TestResourceAccessGrantReader Grants => Services.GetRequiredService<TestResourceAccessGrantReader>();
+
+    public ApiWebApplicationFactory() : this(new JobEventSignal()) { }
+
+    internal ApiWebApplicationFactory(IJobEventSignal eventSignal)
+    {
+        EventSignal = eventSignal;
+        var database = new ControlDatabase($"Data Source={_databasePath}");
+        new ControlDatabaseMigrator(database, Clock).Apply();
+        Events = new(database, Clock, EventSignal);
+    }
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IDataPitcherApplication>(Application);
+            services.AddSingleton<TestResourceAccessGrantReader>();
+            services.AddSingleton<IResourceAccessGrantReader>(serviceProvider => serviceProvider.GetRequiredService<TestResourceAccessGrantReader>());
+            services.AddSingleton<IValidatedAccessTokenLifetime, TestValidatedAccessTokenLifetime>();
+            services.AddSingleton<IJobEventWriter>(Events);
+            services.AddSingleton<IJobEventReader>(Events);
+            services.AddSingleton(EventSignal);
+            services.AddAuthentication(TestAuthenticationHandler.SchemeName)
+                .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>(TestAuthenticationHandler.SchemeName, _ => { });
+        });
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        if (disposing && File.Exists(_databasePath)) File.Delete(_databasePath);
+    }
+}
+
+public sealed class TestClock(DateTimeOffset utcNow) : IClock
+{
+    public DateTimeOffset UtcNow { get; private set; } = utcNow;
+    public void Advance(TimeSpan elapsed) => UtcNow = UtcNow.Add(elapsed);
+}
+
+public sealed class TestAuthenticationHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
+    : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+{
+    public const string SchemeName = "ApiBoundaryAuthorizationTest";
+
+    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+    {
+        if (Request.Headers.ContainsKey("X-Test-Unauthenticated")) return Task.FromResult(AuthenticateResult.NoResult());
+
+        var permissions = Request.Headers.TryGetValue("X-Test-Permissions", out var values)
+            ? values.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries)
+            : Permissions.All.Select(permission => permission.Value).ToArray();
+
+        var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, "test-principal") };
+        claims.AddRange(permissions.Select(permission => new Claim(ApiClaimTypes.Permission, permission)));
+        if (Request.Headers.TryGetValue("X-Test-Raw-Claim", out var rawClaim))
+            claims.Add(new Claim("test-raw-claim", rawClaim.ToString()));
+        if (Request.Headers.TryGetValue("X-Test-Token-Expiry", out var expiry))
+            claims.Add(new Claim(TestValidatedAccessTokenLifetime.ExpiryClaim, expiry.ToString()));
+        var identity = new ClaimsIdentity(claims, SchemeName);
+        var ticket = new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName);
+        return Task.FromResult(AuthenticateResult.Success(ticket));
+    }
+}
+
+public sealed class TestResourceAccessGrantReader(IHttpContextAccessor accessor) : IResourceAccessGrantReader
+{
+    private readonly ConcurrentDictionary<Guid, bool> _jobGrants = [];
+    private int _jobAuthorizationCalls;
+
+    public int JobAuthorizationCalls => _jobAuthorizationCalls;
+    public void AllowJob(Guid jobId, bool allowed) => _jobGrants[jobId] = allowed;
+
+    public Task<bool> IsGrantedAsync(ClaimsPrincipal principal, ApiResource resource, CancellationToken cancellationToken)
+    {
+        if (resource is JobResource job)
+        {
+            Interlocked.Increment(ref _jobAuthorizationCalls);
+            if (_jobGrants.TryGetValue(job.JobId, out var allowed)) return Task.FromResult(allowed);
+        }
+        var deniedHeader = accessor.HttpContext?.Request.Headers["X-Test-Denied-Resource"].ToString();
+        var deniedId = Guid.TryParse(deniedHeader, out var parsed) ? parsed : (Guid?)null;
+        var resourceId = resource switch
+        {
+            ConnectionResource connection => connection.ConnectionId,
+            PlanResource plan => plan.PlanId,
+            JobResource jobResource => jobResource.JobId,
+            _ => (Guid?)null,
+        };
+        return Task.FromResult(deniedId is null || resourceId != deniedId);
+    }
+}
+
+public sealed class TestValidatedAccessTokenLifetime : IValidatedAccessTokenLifetime
+{
+    public const string ExpiryClaim = "test-expiry";
+
+    public DateTimeOffset GetExpiryUtc(ClaimsPrincipal principal) =>
+        DateTimeOffset.TryParse(principal.FindFirst(ExpiryClaim)?.Value, out var expiry) ? expiry : DateTimeOffset.UtcNow.AddMinutes(5);
+}
+
+public sealed class FakeDataPitcherApplication : IDataPitcherApplication
+{
+    public List<string> Invocations { get; } = [];
+    public CancellationToken? LastCancellationToken { get; private set; }
+    public string? LastIdempotencyKey { get; private set; }
+    public Func<CancellationToken, Task>? Delay { get; set; }
+
+    public Task<IReadOnlyList<ConnectionResponse>> ListConnectionsAsync(CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(ListConnectionsAsync), cancellationToken,
+            () => (IReadOnlyList<ConnectionResponse>)[new ConnectionResponse(Guid.NewGuid(), "Source", "sqlserver", "Healthy", "etag-1")]);
+
+    public Task<ConnectionResponse> CreateConnectionAsync(CreateConnectionRequest request, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(CreateConnectionAsync), cancellationToken,
+            () => new ConnectionResponse(Guid.NewGuid(), request.DisplayName, request.ProviderId, "Unknown", "etag-1"));
+
+    public Task<OperationReceiptResponse> QueueConnectionCheckAsync(Guid connectionId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(QueueConnectionCheckAsync), cancellationToken, () => Receipt(connectionId: connectionId));
+
+    public Task<OperationReceiptResponse> QueueSchemaScanAsync(Guid connectionId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(QueueSchemaScanAsync), cancellationToken, () => Receipt(connectionId: connectionId));
+
+    public Task<SchemaSnapshotResponse> GetSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(GetSnapshotAsync), cancellationToken,
+            () => new SchemaSnapshotResponse(connectionId, snapshotId, "hash-1", DateTimeOffset.UnixEpoch));
+
+    public Task<SelectionResponse> SaveSelectionAsync(Guid selectionId, SaveSelectionRequest request, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(SaveSelectionAsync), cancellationToken, () => new SelectionResponse(selectionId, 1, "etag-1"));
+
+    public Task<OperationReceiptResponse> QueueSelectionEvaluationAsync(Guid selectionId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(QueueSelectionEvaluationAsync), cancellationToken, () => Receipt());
+
+    public Task<PlanResponse> SavePlanAsync(Guid planId, SavePlanRequest request, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(SavePlanAsync), cancellationToken, () => new PlanResponse(planId, 1, null, "etag-1"));
+
+    public Task<OperationReceiptResponse> QueuePlanSealAsync(Guid planId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(QueuePlanSealAsync), cancellationToken, () => Receipt(planId: planId));
+
+    public Task<OperationReceiptResponse> StartJobAsync(Guid planId, string idempotencyKey, CancellationToken cancellationToken)
+    {
+        LastIdempotencyKey = idempotencyKey;
+        return ObserveAsync(nameof(StartJobAsync), cancellationToken, () => Receipt(planId: planId));
+    }
+
+    public Task<JobResponse> GetJobAsync(Guid jobId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(GetJobAsync), cancellationToken, () => new JobResponse(jobId, Guid.NewGuid(), "Running", 10, 100));
+
+    public Task<OperationReceiptResponse> QueueJobCommandAsync(Guid jobId, JobCommand command, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(QueueJobCommandAsync), cancellationToken, () => Receipt(jobId: jobId));
+
+    private static OperationReceiptResponse Receipt(Guid? connectionId = null, Guid? planId = null, Guid? jobId = null) =>
+        new(Guid.NewGuid(), "queued", new Uri("https://example.test/api/operations/status"), connectionId, planId, jobId);
+
+    private async Task<T> ObserveAsync<T>(string name, CancellationToken cancellationToken, Func<T> result)
+    {
+        Invocations.Add(name);
+        LastCancellationToken = cancellationToken;
+        if (Delay is not null) await Delay(cancellationToken);
+        return result();
+    }
+}

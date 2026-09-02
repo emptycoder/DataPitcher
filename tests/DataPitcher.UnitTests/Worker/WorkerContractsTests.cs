@@ -42,6 +42,16 @@ public sealed class WorkerContractsTests
     }
 
     [Fact]
+    public void TransferProgressContracts_WhenBatchIsCommitted_PreserveByteCounts()
+    {
+        var unit = new TransferUnit(6, new StableKey([new KeyComponent("Id", 12)]), 6, TransferUnitKind.Batch, BytesTransferred: 600);
+        var checkpoint = new TargetCheckpoint(Guid.NewGuid(), Guid.NewGuid(), 6, unit.LastStableKey, 60, "seal", 3, BytesTransferred: 6000);
+
+        Assert.Equal(600, unit.BytesTransferred);
+        Assert.Equal(6000, checkpoint.BytesTransferred);
+    }
+
+    [Fact]
     public async Task ClockWorkerDelay_WhenDueHasPassed_CompletesFromTheInjectedClock()
     {
         var clock = new FixedClock(new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero));
