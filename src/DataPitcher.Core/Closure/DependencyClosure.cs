@@ -21,6 +21,16 @@ public sealed class DependencyClosure(IClosureStore store)
         if (blocked is not null)
             throw new BlockedTableException(blocked);
 
+        var rootPolicies = new Dictionary<RowAddress, RootConflictPolicy>();
+        foreach (var root in request.Roots)
+            foreach (var key in root.Keys)
+            {
+                var address = new RowAddress(root.Table, key);
+                if (rootPolicies.TryGetValue(address, out var policy) && policy != root.ConflictPolicy)
+                    throw new InvalidOperationException($"Conflicting root conflict policies for {root.Table.Schema}.{root.Table.Name}.");
+                rootPolicies[address] = root.ConflictPolicy;
+            }
+
         var frontier = new List<Frontier>();
         var included = new Dictionary<RowAddress, ClosureRow>();
         var warnings = new HashSet<TargetConstraintWarning>();
@@ -31,6 +41,7 @@ public sealed class DependencyClosure(IClosureStore store)
 
         for (var generation = 0; frontier.Count > 0; generation++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var expandable = new Dictionary<TableDefinition, List<StableKey>>();
             foreach (var group in frontier.GroupBy(item => item.Table))
             {
@@ -49,7 +60,7 @@ public sealed class DependencyClosure(IClosureStore store)
                         {
                             if (!probe.Constraints.TryGetValue(relationship, out var state))
                                 warnings.Add(new TargetConstraintWarning(relationship.Name));
-                            else if (!state.IsPresent || !state.IsTrusted)
+                            else if (!state.IsPresent || !state.IsEnforced || !state.IsTrusted)
                                 warnings.Add(new TargetConstraintWarning(state.ConstraintName));
                         }
                     }

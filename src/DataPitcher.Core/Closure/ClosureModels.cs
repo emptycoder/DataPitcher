@@ -11,7 +11,7 @@ public enum RootConflictPolicy
     Upsert,
 }
 
-public sealed class ClosureRelationship
+public sealed class ClosureRelationship : IEquatable<ClosureRelationship>
 {
     private ClosureRelationship(string name, TableDefinition fromTable, TableDefinition toTable, ForeignKeyDefinition? foreignKey, bool isInbound, bool isEnabled)
     {
@@ -42,6 +42,27 @@ public sealed class ClosureRelationship
     public bool IsInbound { get; }
 
     public bool IsEnabled { get; }
+
+    public bool Equals(ClosureRelationship? other) =>
+        other is not null &&
+        StringComparer.Ordinal.Equals(Name, other.Name) &&
+        FromTable.Equals(other.FromTable) &&
+        ToTable.Equals(other.ToTable) &&
+        IsInbound == other.IsInbound &&
+        IsEnabled == other.IsEnabled;
+
+    public override bool Equals(object? obj) => Equals(obj as ClosureRelationship);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Name, StringComparer.Ordinal);
+        hash.Add(FromTable);
+        hash.Add(ToTable);
+        hash.Add(IsInbound);
+        hash.Add(IsEnabled);
+        return hash.ToHashCode();
+    }
 }
 
 public sealed class ClosureRoot
