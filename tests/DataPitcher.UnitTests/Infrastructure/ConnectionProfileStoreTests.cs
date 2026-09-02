@@ -257,6 +257,17 @@ public sealed class ConnectionProfileStoreTests
         Assert.DoesNotContain("DP_TEST_SECRET", zero.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ConnectionProfileStore_WhenMarkingAMissingProfileAsChecking_FailsWithTheFixedNotFoundError()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var store = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => store.MarkCheckingAsync(Guid.NewGuid(), TransferMode.DirectFast, ConnectionRole.Source, CancellationToken.None));
+
+        Assert.Equal("Connection profile was not found.", exception.Message);
+    }
+
     private static ConnectionProfileDraft Draft(string displayName = "Source") => new(displayName, "postgresql", new(SecretReferenceKind.EnvironmentVariable, "DP_TEST_SECRET"), "app", "__datapitcher");
 
     private sealed class CapturingLogger<T> : ILogger<T>

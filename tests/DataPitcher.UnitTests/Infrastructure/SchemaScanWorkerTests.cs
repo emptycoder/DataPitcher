@@ -3,6 +3,7 @@ using DataPitcher.Core.Connections;
 using DataPitcher.Core.Schema;
 using DataPitcher.Infrastructure.Connections;
 using DataPitcher.Infrastructure.Schema;
+using LinqToDB.Data;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;
@@ -100,7 +101,131 @@ public sealed class SchemaScanWorkerTests
         Assert.DoesNotContain("scan-secret-sentinel", JsonSerializer.Serialize(failed), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ProcessNextAsync_WhenTheProviderIsNotRegistered_StoresTheUnsupportedProviderFailure()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(new ConnectionProfileDraft("Source", "unregistered", new SecretReference(SecretReferenceKind.EnvironmentVariable, "DP_SCAN_SECRET"), "app", "__datapitcher"), "profile-unsupported-provider", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+        var scan = await snapshots.QueueAsync(profile.ConnectionId, "scan-unsupported-provider", CancellationToken.None);
+        var worker = new SchemaScanWorker(snapshots, profiles, new Resolver(), new ConnectionProviderRegistry(Array.Empty<IConnectionProvider>()));
+
+        await worker.ProcessNextAsync(CancellationToken.None);
+
+        var failed = await snapshots.GetScanAsync(profile.ConnectionId, scan.ScanId, CancellationToken.None);
+        Assert.Equal(SchemaScanState.Failed, failed.State);
+        Assert.Equal("unsupported_provider", failed.FailureCode);
+    }
+
+    [Fact]
+    public async Task ProcessNextAsync_WhenSecretResolutionFails_StoresTheFixedConnectionFailure()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-resolution-failure", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+        var scan = await snapshots.QueueAsync(profile.ConnectionId, "scan-resolution-failure", CancellationToken.None);
+        var worker = new SchemaScanWorker(snapshots, profiles, new ThrowingResolver(), new ConnectionProviderRegistry(new IConnectionProvider[] { new Provider(new ThrowingIntrospector()) }));
+
+        await worker.ProcessNextAsync(CancellationToken.None);
+
+        var failed = await snapshots.GetScanAsync(profile.ConnectionId, scan.ScanId, CancellationToken.None);
+        Assert.Equal(SchemaScanState.Failed, failed.State);
+        Assert.Equal("connection_failed", failed.FailureCode);
+    }
+
+    [Fact]
+    public async Task GetScanAsync_WhenTheScanDoesNotBelongToTheConnection_FailsWithTheFixedNotFoundError()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => snapshots.GetScanAsync(Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None));
+
+        Assert.Equal("Schema scan was not found.", exception.Message);
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenTheSnapshotDoesNotBelongToTheConnection_FailsWithTheFixedNotFoundError()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-missing-snapshot", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => snapshots.GetAsync(profile.ConnectionId, Guid.NewGuid(), CancellationToken.None));
+
+        Assert.Equal("Schema snapshot was not found.", exception.Message);
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenPersistedSnapshotContentIsNull_FailsWithTheFixedInvalidSnapshotError()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-invalid-snapshot", CancellationToken.None);
+        var snapshotId = Guid.NewGuid();
+        using (var db = fixture.Database.Open())
+            db.Execute("INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)", new DataParameter[] { new("snapshotId", snapshotId.ToString()), new("connectionId", profile.ConnectionId.ToString()), new("snapshotHash", "invalid"), new("contentJson", "null"), new("createdUtc", fixture.Clock.UtcNow.ToString("O")) });
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => snapshots.GetAsync(profile.ConnectionId, snapshotId, CancellationToken.None));
+
+        Assert.Equal("Schema snapshot is invalid.", exception.Message);
+    }
+
+    [Fact]
+    public async Task GetNeighbourhoodAsync_WhenDepthIsZero_RejectsTheInvalidProjectionRequest()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-zero-depth", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+        var snapshot = await StoreSnapshotAsync(snapshots, profile, Content());
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => snapshots.GetNeighbourhoodAsync(profile.ConnectionId, snapshot.SnapshotId, "app", "Orders", 0, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GetNeighbourhoodAsync_WhenStartingAtTheParent_IncludesTheReferencingChild()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-parent-neighbourhood", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+        var snapshot = await StoreSnapshotAsync(snapshots, profile, Content());
+
+        var neighbourhood = await snapshots.GetNeighbourhoodAsync(profile.ConnectionId, snapshot.SnapshotId, "app", "Customers", 1, CancellationToken.None);
+
+        Assert.Contains(neighbourhood.Tables, table => table == new SchemaTableAddress("app", "Orders"));
+        Assert.Single(neighbourhood.Edges, edge => edge.Child == new SchemaTableAddress("app", "Orders") && edge.Parent == new SchemaTableAddress("app", "Customers"));
+    }
+
+    [Fact]
+    public async Task GetTableAsync_WhenTheTableHasNoPrimaryKey_PreservesTheAbsentKey()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var profile = await profiles.CreateAsync(Draft(), "profile-keyless-table", CancellationToken.None);
+        var snapshots = new SchemaSnapshotStore(fixture.Database, fixture.Clock);
+        var content = new SchemaSnapshotContent(new[] { new SchemaTable("app", "Audit", new[] { new SchemaColumn("Message", "text", "System.String", true) }, null, Array.Empty<SchemaKey>()) }, Array.Empty<SchemaForeignKey>());
+        var snapshot = await StoreSnapshotAsync(snapshots, profile, content);
+
+        var table = await snapshots.GetTableAsync(profile.ConnectionId, snapshot.SnapshotId, "app", "Audit", CancellationToken.None);
+
+        Assert.Null(table.Table.PrimaryKey);
+    }
+
     private static ConnectionProfileDraft Draft() => new("Source", "postgresql", new SecretReference(SecretReferenceKind.EnvironmentVariable, "DP_SCAN_SECRET"), "app", "__datapitcher");
+    private static async Task<StoredSchemaSnapshot> StoreSnapshotAsync(SchemaSnapshotStore snapshots, ConnectionProfile profile, SchemaSnapshotContent content)
+    {
+        _ = await snapshots.QueueAsync(profile.ConnectionId, Guid.NewGuid().ToString("N"), CancellationToken.None);
+        var scan = await snapshots.ClaimNextAsync(CancellationToken.None) ?? throw new InvalidOperationException("Schema scan was not claimed.");
+        await snapshots.CompleteAsync(scan, content, CancellationToken.None);
+        var completed = await snapshots.GetScanAsync(profile.ConnectionId, scan.ScanId, CancellationToken.None);
+        return await snapshots.GetAsync(profile.ConnectionId, completed.SnapshotId!.Value, CancellationToken.None);
+    }
     private static SchemaSnapshotContent Content() => new(new[] { Orders(), Customers() }, new[] { ForeignKey() });
     private static SchemaTable Orders(string column = "CustomerId") => new("app", "Orders", new[] { new SchemaColumn("Id", "int", "System.Int32", false), new SchemaColumn(column, "int", "System.Int32", false) }, new SchemaKey("PK_Orders", new[] { "Id" }), Array.Empty<SchemaKey>());
     private static SchemaTable Customers() => new("app", "Customers", new[] { new SchemaColumn("Id", "int", "System.Int32", false) }, new SchemaKey("PK_Customers", new[] { "Id" }), Array.Empty<SchemaKey>());
@@ -110,6 +235,11 @@ public sealed class SchemaScanWorkerTests
     {
         public int Calls { get; private set; }
         public Task<string> ResolveAsync(SecretReference reference, CancellationToken cancellationToken) { Calls++; return Task.FromResult("resolved-secret"); }
+    }
+
+    private sealed class ThrowingResolver : ISecretReferenceResolver
+    {
+        public Task<string> ResolveAsync(SecretReference reference, CancellationToken cancellationToken) => Task.FromException<string>(new InvalidOperationException("secret unavailable"));
     }
 
     private sealed class Provider(ISchemaIntrospector introspector) : IConnectionProvider
