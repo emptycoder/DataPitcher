@@ -227,14 +227,18 @@ Each `/api` group must call `RequireAuthorization` with its named policy, and ro
 
 5. - [ ] **Commit the authorization safety net.** Run: `git add src/DataPitcher.Api/Authorization/ApiAuthorization.cs src/DataPitcher.Api/Endpoints/EndpointGroups.cs src/DataPitcher.Api/Program.cs tests/DataPitcher.Api.IntegrationTests/ApiWebApplicationFactory.cs tests/DataPitcher.Api.IntegrationTests/EndpointAuthorizationSafetyNetTests.cs && git commit -m "feat: protect API endpoints by default"`.
 
-### Task 4: Map every architecture error to safe Problem Details and prove redaction
+#### Redaction proof task ordering
+
+Task 4 proves runtime redaction in successful responses and Problem Details errors: no response, error message, or error payload carries a password, token, client secret, full connection string, or secret-reference content. The generated OpenAPI document does not exist until Task 6, so Task 6 proves redaction in that document and its examples. A test cannot assert about a document that does not exist yet; splitting by artefact keeps each task's red step observable.
+
+### Task 4: Map every architecture error to safe Problem Details and prove runtime redaction
 
 **Files:**
 - Create: `src/DataPitcher.Api/Errors/ApiProblems.cs`
 - Modify: `src/DataPitcher.Api/Authorization/ApiAuthorization.cs`, `src/DataPitcher.Api/Program.cs`, `tests/DataPitcher.Api.IntegrationTests/ApiWebApplicationFactory.cs`
 - Test: `tests/DataPitcher.Api.IntegrationTests/ProblemDetailsTests.cs`
 
-1. - [ ] **Write failing complete classification and redaction tests.** Create one representative `ApiFault` for every architecture class: Validation, Unauthenticated, Forbidden, IdentityProviderUnavailable, InvalidToken, TenantRejected, GroupResolutionFailed, AuthenticationConfiguration, Connection, SchemaDrift, UnsupportedProviderFeature, QuerySyntax, QueryTimeout, SourceIntegrity, TargetConflict, TypeConversion, ConstraintCycle, BulkWrite, TransientDatabaseFailure, Cancelled, Verification, and Internal. Assert the mapper returns the specified status and stable lower-case error code for each, contains a fixed human-readable detail, one correlation identifier, and only the relevant typed GUID identifiers. Drive a representative exception through the host and assert `application/problem+json`, not an HTML, empty, or raw-exception response. Configure the fake to throw an exception whose message includes all forbidden sentinel values; assert neither that message nor the sentinel appears in a normal response, Problem Details body, response headers, or generated OpenAPI document.
+1. - [ ] **Write failing complete classification and runtime-redaction tests.** Create one representative `ApiFault` for every architecture class: Validation, Unauthenticated, Forbidden, IdentityProviderUnavailable, InvalidToken, TenantRejected, GroupResolutionFailed, AuthenticationConfiguration, Connection, SchemaDrift, UnsupportedProviderFeature, QuerySyntax, QueryTimeout, SourceIntegrity, TargetConflict, TypeConversion, ConstraintCycle, BulkWrite, TransientDatabaseFailure, Cancelled, Verification, and Internal. Assert the mapper returns the specified status and stable lower-case error code for each, contains a fixed human-readable detail, one correlation identifier, and only the relevant typed GUID identifiers. Drive a representative exception through the host and assert `application/problem+json`, not an HTML, empty, or raw-exception response. Configure the fake to throw an exception whose message includes all forbidden sentinel values; assert neither that message nor the sentinel appears in a successful response, Problem Details body, error message, or response headers.
 
 ```csharp
 public static readonly IReadOnlyDictionary<ApiErrorClass, (int Status, string Code)> Expected =
@@ -384,7 +388,7 @@ Map `GET /api/jobs/{jobId:guid}/events`; accept only the `Last-Event-ID` header,
 - Modify: `src/DataPitcher.Api/Program.cs`, `src/DataPitcher.Api/Endpoints/EndpointGroups.cs`, `src/DataPitcher.Api/Errors/ApiProblems.cs`, `scripts/test-unit.sh`
 - Test: `tests/DataPitcher.Api.IntegrationTests/OpenApiTests.cs`
 
-1. - [ ] **Write the failing generated-document and redaction tests.** Request the protected `/openapi/v1.json` through the authenticated test client and parse it as JSON. Assert an HTTP bearer security scheme exists; every protected route operation has a matching security requirement; `/health/live` and `/api/providers` alone are anonymous and carry a non-empty anonymous-justification extension; each operation documents `application/problem+json` for its declared error statuses; and the SSE operation advertises `text/event-stream` plus `Last-Event-ID`. Recursively inspect every OpenAPI example, default, enum value, description, and response body collected from representative error calls; assert none contains any forbidden credential sentinel. Assert a unauthenticated OpenAPI request is a 401 Problem Details response.
+1. - [ ] **Write the failing generated-document and redaction tests.** Request the protected `/openapi/v1.json` through the authenticated test client and parse it as JSON. Assert an HTTP bearer security scheme exists; every protected route operation has a matching security requirement; `/health/live` and `/api/providers` alone are anonymous and carry a non-empty anonymous-justification extension; each operation documents `application/problem+json` for its declared error statuses; and the SSE operation advertises `text/event-stream` plus `Last-Event-ID`. Recursively inspect every OpenAPI example, default, enum value, description, and response body collected from representative error calls; assert none contains any forbidden credential sentinel. This task owns generated-document and example redaction because the document is introduced here. Assert a unauthenticated OpenAPI request is a 401 Problem Details response.
 
 ```csharp
 [Fact]
