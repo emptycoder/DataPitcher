@@ -38,4 +38,74 @@ public sealed class StableKeyTests
     {
         Assert.Throws<ArgumentException>(() => new StableKey(Array.Empty<KeyComponent>()));
     }
+
+    [Fact] public void StableKey_Equals_WhenOtherIsNull_ReturnsFalse()
+    {
+        var key = new StableKey([new("A", 1)]);
+        Assert.False(key.Equals((StableKey?)null));
+    }
+
+    [Fact] public void StableKey_EqualsObject_WhenSameValue_AgreesWithTypedEquals()
+    {
+        var left = new StableKey([new("A", 1)]);
+        var right = new StableKey([new("A", 1)]);
+        Assert.True(left.Equals((object)right));
+        Assert.Equal(left.Equals(right), left.Equals((object)right));
+    }
+
+    [Fact] public void StableKey_EqualsObject_WhenComparedToNullOrUnrelatedType_ReturnsFalse()
+    {
+        var key = new StableKey([new("A", 1)]);
+        Assert.False(key.Equals((object?)null));
+        Assert.False(key.Equals("not a stable key"));
+    }
+
+    [Fact] public void StableKey_EqualityOperators_WhenValuesEqual_ReturnTrueAndFalse()
+    {
+        var left = new StableKey([new("A", 1)]);
+        var right = new StableKey([new("A", 1)]);
+        Assert.True(left == right);
+        Assert.False(left != right);
+    }
+
+    [Fact] public void StableKey_EqualityOperators_WhenValuesDiffer_ReturnFalseAndTrue()
+    {
+        var left = new StableKey([new("A", 1)]);
+        var right = new StableKey([new("A", 2)]);
+        Assert.False(left == right);
+        Assert.True(left != right);
+    }
+
+    [Fact] public void StableKey_EqualityOperator_WhenBothSidesAreNull_ReturnsTrue()
+    {
+        StableKey? left = null;
+        StableKey? right = null;
+        Assert.True(left == right);
+    }
+
+    [Fact] public void StableKey_EqualityOperator_WhenOnlyOneSideIsNull_ReturnsFalse()
+    {
+        StableKey? nullKey = null;
+        var actualKey = new StableKey([new("A", 1)]);
+        Assert.False(nullKey == actualKey);
+        Assert.False(actualKey == nullKey);
+    }
+
+    [Fact] public void StableKey_CompareTo_WhenOtherIsNull_ReturnsPositive()
+    {
+        var key = new StableKey([new("A", 1)]);
+        Assert.True(key.CompareTo(null) > 0);
+    }
+
+    [Fact] public void StableKey_CompareTo_WhenValueRuntimeTypesDiffer_OrdersConsistentlyAndDisagreesWithEquality()
+    {
+        var intKey = new StableKey([new("A", 1)]);
+        var stringKey = new StableKey([new("A", "1")]);
+
+        Assert.NotEqual(intKey, stringKey);
+        var forward = intKey.CompareTo(stringKey);
+        var backward = stringKey.CompareTo(intKey);
+        Assert.NotEqual(0, forward);
+        Assert.Equal(Math.Sign(forward), -Math.Sign(backward));
+    }
 }
