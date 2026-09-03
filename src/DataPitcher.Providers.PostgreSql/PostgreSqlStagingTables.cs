@@ -181,7 +181,7 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
     )
     {
         var columns = KeyColumns(table);
-        var metadata = _schema.Table(table.Name);
+        var metadata = _schema.Table(table.Schema, table.Name);
         var declarations = string.Join(
             ", ",
             columns.Select((column, i) => $"k{i} {ColumnType(metadata.Column(column).ClrType).Sql} NOT NULL")
@@ -205,7 +205,7 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
     )
     {
         var columns = KeyColumns(table);
-        var metadata = _schema.Table(table.Name);
+        var metadata = _schema.Table(table.Schema, table.Name);
         var names = string.Join(", ", columns.Select((_, i) => $"k{i}").Append("__generation"));
         await using var connection = await dataSource.OpenConnectionAsync(ct);
         await using var importer = await connection.BeginBinaryImportAsync(

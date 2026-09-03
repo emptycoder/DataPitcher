@@ -144,7 +144,7 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
     private async Task EnsureAsync(string cs, string name, TableDefinition t, CancellationToken ct)
     {
         var columns = Columns(t);
-        var metadata = _schema.Table(t.Name);
+        var metadata = _schema.Table(t.Schema, t.Name);
         var declarations = string.Join(
             ", ",
             columns.Select((column, i) => $"[k{i}] {metadata.Column(column).StoreType} NOT NULL")
@@ -170,7 +170,7 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
     )
     {
         var columns = Columns(t);
-        var metadata = _schema.Table(t.Name);
+        var metadata = _schema.Table(t.Schema, t.Name);
         var data = new DataTable();
         foreach (var pair in columns.Select((column, i) => (column, i)))
             data.Columns.Add($"k{pair.i}", metadata.Column(pair.column).ClrType);

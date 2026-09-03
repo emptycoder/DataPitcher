@@ -26,6 +26,13 @@ public sealed class PostgreSqlSchemaSnapshot
     public IReadOnlyList<PostgreSqlTable> Tables { get; }
     public IReadOnlyList<ForeignKeyDefinition> ForeignKeys { get; }
 
+    public PostgreSqlTable Table(string schema, string name) =>
+        Tables.Single(x =>
+            string.Equals(x.Definition.Schema, schema, StringComparison.Ordinal)
+            && string.Equals(x.Definition.Name, name, StringComparison.Ordinal)
+        );
+
+    /// <summary>Lookup by name alone; unambiguous only while a single schema is loaded.</summary>
     public PostgreSqlTable Table(string name) =>
         Tables.Single(x => string.Equals(x.Definition.Name, name, StringComparison.Ordinal));
 
@@ -49,13 +56,14 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         + "FROM pg_constraint con "
         + "JOIN pg_class c ON c.oid = con.conrelid "
         + "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        + "JOIN pg_namespace pn ON pn.oid = p.relnamespace "
         + "JOIN unnest(con.conkey) WITH ORDINALITY k(attnum, ordinality) ON true "
         + "JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum "
         + "WHERE n.nspname = @schema AND con.contype IN ('p','u') "
         + "GROUP BY c.relname, con.conname, con.contype";
 
     private const string ForeignKeysSql =
-        "/* DataPitcher.Catalog.ForeignKeys */ SELECT con.conname, c.relname, p.relname, "
+        "/* DataPitcher.Catalog.ForeignKeys */ SELECT con.conname, n.nspname, c.relname, pn.nspname, p.relname, "
         + "array_agg(ca.attname ORDER BY ck.ordinality), array_agg(pa.attname ORDER BY ck.ordinality), "
         + "COALESCE((SELECT bool_and(tr.tgenabled <> 'D') FROM pg_trigger tr WHERE tr.tgconstraint = con.oid), true), "
         + "con.convalidated "
@@ -63,29 +71,76 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         + "JOIN pg_class c ON c.oid = con.conrelid "
         + "JOIN pg_class p ON p.oid = con.confrelid "
         + "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        + "JOIN pg_namespace pn ON pn.oid = p.relnamespace "
         + "JOIN unnest(con.conkey) WITH ORDINALITY ck(attnum, ordinality) ON true "
         + "JOIN unnest(con.confkey) WITH ORDINALITY pk(attnum, ordinality) ON pk.ordinality = ck.ordinality "
         + "JOIN pg_attribute ca ON ca.attrelid = c.oid AND ca.attnum = ck.attnum "
         + "JOIN pg_attribute pa ON pa.attrelid = p.oid AND pa.attnum = pk.attnum "
         + "WHERE n.nspname = @schema AND con.contype = 'f' "
-        + "GROUP BY con.oid, con.conname, c.relname, p.relname, con.convalidated";
+        + "GROUP BY con.oid, con.conname, n.nspname, c.relname, pn.nspname, p.relname, con.convalidated";
 
+    /// <summary>
+    /// Reads <paramref name="schema"/> and, transitively, every schema its tables reference through foreign keys, so
+    /// cross-schema parents are part of the snapshot and the dependency closure.
+    /// </summary>
     public async Task<PostgreSqlSchemaSnapshot> ReadAsync(string schema, CancellationToken ct)
     {
-        var columns = await ReadColumnsAsync(schema, ct);
-        var keys = await ReadKeysAsync(schema, columns.Keys, ct);
-        var definitions = columns.ToDictionary(
-            x => x.Key,
-            x => new TableDefinition(schema, x.Key, x.Value, keys[x.Key].Primary, keys[x.Key].Unique),
-            StringComparer.Ordinal
-        );
+        var definitions = new Dictionary<(string Schema, string Name), TableDefinition>();
+        var rawForeignKeys = new List<RawForeignKey>();
+        var loaded = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<string>([schema]);
+        while (pending.TryDequeue(out var current))
+        {
+            if (!loaded.Add(current))
+                continue;
+            var columns = await ReadColumnsAsync(current, ct);
+            var keys = await ReadKeysAsync(current, columns.Keys, ct);
+            foreach (var (name, tableColumns) in columns)
+                definitions[(current, name)] = new TableDefinition(
+                    current,
+                    name,
+                    tableColumns,
+                    keys[name].Primary,
+                    keys[name].Unique
+                );
+            var foreignKeys = await ReadForeignKeysAsync(current, ct);
+            rawForeignKeys.AddRange(foreignKeys);
+            foreach (var foreignKey in foreignKeys)
+                if (!loaded.Contains(foreignKey.ParentSchema))
+                    pending.Enqueue(foreignKey.ParentSchema);
+        }
         var tables = definitions
-            .Values.OrderBy(x => x.Name, StringComparer.Ordinal)
+            .Values.OrderBy(x => x.Schema, StringComparer.Ordinal)
+            .ThenBy(x => x.Name, StringComparer.Ordinal)
             .Select(x => new PostgreSqlTable(x))
             .ToArray();
-        var foreignKeys = await ReadForeignKeysAsync(schema, definitions, ct);
-        return new PostgreSqlSchemaSnapshot(tables, foreignKeys);
+        var resolved = rawForeignKeys
+            .Where(f =>
+                definitions.ContainsKey((f.ChildSchema, f.Child)) && definitions.ContainsKey((f.ParentSchema, f.Parent))
+            )
+            .Select(f => new ForeignKeyDefinition(
+                f.Name,
+                definitions[(f.ChildSchema, f.Child)],
+                definitions[(f.ParentSchema, f.Parent)],
+                f.ChildColumns,
+                f.ParentColumns,
+                f.Enabled,
+                f.Validated
+            ));
+        return new PostgreSqlSchemaSnapshot(tables, resolved);
     }
+
+    private sealed record RawForeignKey(
+        string Name,
+        string ChildSchema,
+        string Child,
+        string ParentSchema,
+        string Parent,
+        string[] ChildColumns,
+        string[] ParentColumns,
+        bool Enabled,
+        bool Validated
+    );
 
     private async Task<Dictionary<string, List<ColumnDefinition>>> ReadColumnsAsync(string schema, CancellationToken ct)
     {
@@ -136,30 +191,25 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         return keys;
     }
 
-    private async Task<List<ForeignKeyDefinition>> ReadForeignKeysAsync(
-        string schema,
-        IReadOnlyDictionary<string, TableDefinition> tables,
-        CancellationToken ct
-    )
+    private async Task<List<RawForeignKey>> ReadForeignKeysAsync(string schema, CancellationToken ct)
     {
-        var foreignKeys = new List<ForeignKeyDefinition>();
+        var foreignKeys = new List<RawForeignKey>();
         await using var command = Command(ForeignKeysSql, schema);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
-        {
             foreignKeys.Add(
-                new ForeignKeyDefinition(
+                new RawForeignKey(
                     reader.GetString(0),
-                    tables[reader.GetString(1)],
-                    tables[reader.GetString(2)],
-                    reader.GetFieldValue<string[]>(3),
-                    reader.GetFieldValue<string[]>(4),
-                    reader.GetBoolean(5),
-                    reader.GetBoolean(6)
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    reader.GetFieldValue<string[]>(5),
+                    reader.GetFieldValue<string[]>(6),
+                    reader.GetBoolean(7),
+                    reader.GetBoolean(8)
                 )
             );
-        }
-
         return foreignKeys;
     }
 

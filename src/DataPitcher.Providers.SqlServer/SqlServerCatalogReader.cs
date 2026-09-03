@@ -28,6 +28,13 @@ public sealed class SqlServerSchemaSnapshot
     public IReadOnlyList<SqlServerTable> Tables { get; }
     public IReadOnlyList<ForeignKeyDefinition> ForeignKeys { get; }
 
+    public SqlServerTable Table(string schema, string name) =>
+        Tables.Single(t =>
+            string.Equals(t.Definition.Schema, schema, StringComparison.Ordinal)
+            && string.Equals(t.Definition.Name, name, StringComparison.Ordinal)
+        );
+
+    /// <summary>Lookup by name alone; unambiguous only while a single schema is loaded.</summary>
     public SqlServerTable Table(string name) =>
         Tables.Single(t => string.Equals(t.Definition.Name, name, StringComparison.Ordinal));
 
@@ -60,38 +67,87 @@ public sealed class SqlServerCatalogReader(string connectionString)
         + "ORDER BY t.name, k.name, i.key_ordinal";
 
     private const string ForeignKeysSql =
-        "/* DataPitcher.Catalog.ForeignKeys */ SELECT f.name, ct.name, pt.name, cc.name, pc.name, x.constraint_column_id, f.is_disabled, f.is_not_trusted "
+        "/* DataPitcher.Catalog.ForeignKeys */ SELECT f.name, s.name, ct.name, ps.name, pt.name, cc.name, pc.name, x.constraint_column_id, f.is_disabled, f.is_not_trusted "
         + "FROM sys.foreign_keys f "
         + "JOIN sys.tables ct ON ct.object_id = f.parent_object_id "
         + "JOIN sys.schemas s ON s.schema_id = ct.schema_id "
         + "JOIN sys.tables pt ON pt.object_id = f.referenced_object_id "
+        + "JOIN sys.schemas ps ON ps.schema_id = pt.schema_id "
         + "JOIN sys.foreign_key_columns x ON x.constraint_object_id = f.object_id "
         + "JOIN sys.columns cc ON cc.object_id = x.parent_object_id AND cc.column_id = x.parent_column_id "
         + "JOIN sys.columns pc ON pc.object_id = x.referenced_object_id AND pc.column_id = x.referenced_column_id "
         + "WHERE s.name = @schema "
         + "ORDER BY f.object_id, x.constraint_column_id";
 
+    /// <summary>
+    /// Reads <paramref name="schema"/> and, transitively, every schema its tables reference through foreign keys, so
+    /// cross-schema parents (lookup and reference tables) are part of the snapshot and the dependency closure.
+    /// </summary>
     public async Task<SqlServerSchemaSnapshot> ReadAsync(string schema, CancellationToken ct)
     {
-        var columns = await ReadColumnsAsync(schema, ct);
-        var keys = await ReadKeysAsync(schema, columns.Keys, ct);
-        var definitions = columns.ToDictionary(
-            x => x.Key,
-            x => new TableDefinition(
-                schema,
-                x.Key,
-                x.Value.Select(c => new ColumnDefinition(c.Name, c.ClrType, c.IsNullable, c.IsGenerated)).ToArray(),
-                keys[x.Key].Primary,
-                keys[x.Key].Unique
-            ),
-            StringComparer.Ordinal
-        );
+        var definitions = new Dictionary<(string Schema, string Name), TableDefinition>();
+        var columnsByTable = new Dictionary<(string Schema, string Name), List<SqlServerColumn>>();
+        var rawForeignKeys = new List<RawForeignKey>();
+        var loaded = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<string>([schema]);
+        while (pending.TryDequeue(out var current))
+        {
+            if (!loaded.Add(current))
+                continue;
+            var columns = await ReadColumnsAsync(current, ct);
+            var keys = await ReadKeysAsync(current, columns.Keys, ct);
+            foreach (var (name, tableColumns) in columns)
+            {
+                definitions[(current, name)] = new TableDefinition(
+                    current,
+                    name,
+                    tableColumns
+                        .Select(c => new ColumnDefinition(c.Name, c.ClrType, c.IsNullable, c.IsGenerated))
+                        .ToArray(),
+                    keys[name].Primary,
+                    keys[name].Unique
+                );
+                columnsByTable[(current, name)] = tableColumns;
+            }
+            var foreignKeys = await ReadForeignKeysAsync(current, ct);
+            rawForeignKeys.AddRange(foreignKeys);
+            foreach (var foreignKey in foreignKeys)
+                if (!loaded.Contains(foreignKey.ParentSchema))
+                    pending.Enqueue(foreignKey.ParentSchema);
+        }
         var tables = definitions
-            .Values.OrderBy(d => d.Name, StringComparer.Ordinal)
-            .Select(d => new SqlServerTable(d, columns[d.Name]));
-        var foreignKeys = await ReadForeignKeysAsync(schema, definitions, ct);
-        return new SqlServerSchemaSnapshot(tables, foreignKeys);
+            .Values.OrderBy(d => d.Schema, StringComparer.Ordinal)
+            .ThenBy(d => d.Name, StringComparer.Ordinal)
+            .Select(d => new SqlServerTable(d, columnsByTable[(d.Schema, d.Name)]));
+        // A parent the login cannot see is absent from the catalog; the foreign key is then left out rather than
+        // failing the whole scan.
+        var resolved = rawForeignKeys
+            .Where(f =>
+                definitions.ContainsKey((f.ChildSchema, f.Child)) && definitions.ContainsKey((f.ParentSchema, f.Parent))
+            )
+            .Select(f => new ForeignKeyDefinition(
+                f.Name,
+                definitions[(f.ChildSchema, f.Child)],
+                definitions[(f.ParentSchema, f.Parent)],
+                f.ChildColumns,
+                f.ParentColumns,
+                !f.Disabled,
+                !f.NotTrusted
+            ));
+        return new SqlServerSchemaSnapshot(tables, resolved);
     }
+
+    private sealed record RawForeignKey(
+        string Name,
+        string ChildSchema,
+        string Child,
+        string ParentSchema,
+        string Parent,
+        List<string> ChildColumns,
+        List<string> ParentColumns,
+        bool Disabled,
+        bool NotTrusted
+    );
 
     private async Task<Dictionary<string, List<SqlServerColumn>>> ReadColumnsAsync(string schema, CancellationToken ct)
     {
@@ -161,57 +217,35 @@ public sealed class SqlServerCatalogReader(string connectionString)
         return keys;
     }
 
-    private async Task<List<ForeignKeyDefinition>> ReadForeignKeysAsync(
-        string schema,
-        IReadOnlyDictionary<string, TableDefinition> tables,
-        CancellationToken ct
-    )
+    private async Task<List<RawForeignKey>> ReadForeignKeysAsync(string schema, CancellationToken ct)
     {
-        var groups =
-            new List<(
-                string Name,
-                string Child,
-                string Parent,
-                List<string> ChildColumns,
-                List<string> ParentColumns,
-                bool Disabled,
-                bool NotTrusted
-            )>();
+        var groups = new List<RawForeignKey>();
         await using var connection = await OpenAsync(ct);
         await using var command = Command(connection, ForeignKeysSql, schema);
         await using var rows = await command.ExecuteReaderAsync(ct);
         while (await rows.ReadAsync(ct))
         {
-            var group = groups.LastOrDefault(x => string.Equals(x.Name, rows.GetString(0), StringComparison.Ordinal));
-            if (group.ChildColumns is null)
+            var name = rows.GetString(0);
+            var group = groups.LastOrDefault(x => string.Equals(x.Name, name, StringComparison.Ordinal));
+            if (group is null)
             {
-                group = (
-                    rows.GetString(0),
+                group = new RawForeignKey(
+                    name,
                     rows.GetString(1),
                     rows.GetString(2),
+                    rows.GetString(3),
+                    rows.GetString(4),
                     [],
                     [],
-                    rows.GetBoolean(6),
-                    rows.GetBoolean(7)
+                    rows.GetBoolean(8),
+                    rows.GetBoolean(9)
                 );
                 groups.Add(group);
             }
-
-            group.ChildColumns.Add(rows.GetString(3));
-            group.ParentColumns.Add(rows.GetString(4));
+            group.ChildColumns.Add(rows.GetString(5));
+            group.ParentColumns.Add(rows.GetString(6));
         }
-
-        return groups
-            .Select(g => new ForeignKeyDefinition(
-                g.Name,
-                tables[g.Child],
-                tables[g.Parent],
-                g.ChildColumns,
-                g.ParentColumns,
-                !g.Disabled,
-                !g.NotTrusted
-            ))
-            .ToList();
+        return groups;
     }
 
     private async Task<SqlConnection> OpenAsync(CancellationToken ct)

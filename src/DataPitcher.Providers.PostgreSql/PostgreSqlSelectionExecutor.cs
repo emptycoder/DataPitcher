@@ -59,7 +59,7 @@ public sealed class PostgreSqlSelectionExecutor(NpgsqlDataSource source, Postgre
         CancellationToken cancellationToken
     )
     {
-        var root = schema.Table(selection.RootTable.Name).Definition;
+        var root = schema.Table(selection.RootTable.Schema, selection.RootTable.Name).Definition;
         var aliases = Aliases(selection.RootStableKey);
         var rootAlias = PostgreSqlIdentifier.Quote("root");
         var keys = SelectionKeyAliases.ForKey(selection.RootStableKey);

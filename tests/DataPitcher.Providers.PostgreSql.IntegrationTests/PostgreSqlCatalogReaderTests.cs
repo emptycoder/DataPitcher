@@ -30,6 +30,35 @@ public sealed class PostgreSqlCatalogReaderTests : IClassFixture<PostgreSqlClosu
     }
 
     [Fact]
+    public async Task ReadAsync_FollowsForeignKeysIntoOtherSchemas()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        var other = scope.Schema + "_ref";
+        await scope.ExecuteAsync($"CREATE SCHEMA \"{other}\"");
+        try
+        {
+            await scope.ExecuteAsync(
+                $"CREATE TABLE \"{other}\".statuses (code integer PRIMARY KEY, label text NOT NULL)"
+            );
+            await scope.ExecuteAsync(
+                $"CREATE TABLE tickets (id integer PRIMARY KEY, status integer NOT NULL CONSTRAINT fk_tickets_status REFERENCES \"{other}\".statuses(code))"
+            );
+            var reader = new PostgreSqlCatalogReader(scope.Source);
+
+            var catalog = await reader.ReadAsync(scope.Schema, CancellationToken.None);
+
+            Assert.Contains(catalog.Tables, t => t.Definition.Schema == other && t.Definition.Name == "statuses");
+            var foreignKey = catalog.ForeignKey("fk_tickets_status");
+            Assert.Equal(scope.Schema, foreignKey.ChildTable.Schema);
+            Assert.Equal(other, foreignKey.ParentTable.Schema);
+        }
+        finally
+        {
+            await scope.ExecuteAsync($"DROP SCHEMA \"{other}\" CASCADE");
+        }
+    }
+
+    [Fact]
     public async Task ReadAsync_MapsCommonTypesAndNeverFailsOnExoticOnes()
     {
         await using var scope = await _fixture.CreateScopeAsync();

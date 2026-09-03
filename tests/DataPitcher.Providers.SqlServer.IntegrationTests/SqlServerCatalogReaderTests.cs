@@ -38,6 +38,28 @@ public sealed class SqlServerCatalogReaderTests(SqlServerClosureFixture fixture)
     }
 
     [Fact]
+    public async Task ReadAsync_FollowsForeignKeysIntoOtherSchemas()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync("CREATE SCHEMA ref;");
+        await scope.ExecuteAsync(
+            "CREATE TABLE ref.statuses (code int NOT NULL PRIMARY KEY, label nvarchar(40) NOT NULL)"
+        );
+        await scope.ExecuteAsync(
+            "CREATE TABLE dbo.tickets (id int NOT NULL PRIMARY KEY, status int NOT NULL CONSTRAINT FK_tickets_status REFERENCES ref.statuses(code))"
+        );
+        var reader = new SqlServerCatalogReader(scope.SourceConnectionString);
+
+        var catalog = await reader.ReadAsync("dbo", CancellationToken.None);
+
+        Assert.Contains(catalog.Tables, t => t.Definition.Schema == "ref" && t.Definition.Name == "statuses");
+        var foreignKey = catalog.ForeignKey("FK_tickets_status");
+        Assert.Equal("dbo", foreignKey.ChildTable.Schema);
+        Assert.Equal("ref", foreignKey.ParentTable.Schema);
+        Assert.Same(catalog.Table("ref", "statuses").Definition, foreignKey.ParentTable);
+    }
+
+    [Fact]
     public async Task ReadAsync_MapsCommonTypesAndNeverFailsOnExoticOnes()
     {
         await using var scope = await fixture.CreateScopeAsync();

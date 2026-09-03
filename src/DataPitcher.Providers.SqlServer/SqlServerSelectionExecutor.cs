@@ -65,7 +65,7 @@ public sealed class SqlServerSelectionExecutor(string sourceConnectionString, Sq
         CancellationToken cancellationToken
     )
     {
-        var root = schema.Table(selection.RootTable.Name).Definition;
+        var root = schema.Table(selection.RootTable.Schema, selection.RootTable.Name).Definition;
         var aliases = Aliases(selection.RootStableKey);
         var rootAlias = SqlServerIdentifier.Quote("root");
         var keys = SelectionKeyAliases.ForKey(selection.RootStableKey);

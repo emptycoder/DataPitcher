@@ -163,7 +163,7 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
     private void ValidateKeyTypes(TableDefinition table, IReadOnlyCollection<StableKey> keys)
     {
         var columns = KeyColumns(table);
-        var metadata = _source.Table(table.Name);
+        var metadata = _source.Table(table.Schema, table.Name);
         foreach (var key in keys)
         foreach (var column in columns)
         {
