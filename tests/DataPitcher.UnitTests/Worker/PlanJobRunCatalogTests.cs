@@ -1,7 +1,9 @@
+using DataPitcher.Application.Plans;
+using DataPitcher.Application.Worker;
+using DataPitcher.ControlStore;
+using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
-using DataPitcher.Infrastructure.Persistence;
-using DataPitcher.Infrastructure.Plans;
-using DataPitcher.Infrastructure.Worker;
+using DataPitcher.Core.Transfer;
 using DataPitcher.UnitTests.Infrastructure;
 using DataPitcher.UnitTests.Plans;
 using LinqToDB.Data;
@@ -39,11 +41,7 @@ public sealed class PlanJobRunCatalogTests
                 new DataParameter("planId", planId.ToString())
             );
         var job = new TransferJob(Guid.NewGuid(), Guid.NewGuid(), planId, "job", DataPitcher.Core.Jobs.JobState.Queued);
-        var catalogType = Assert.Single(
-            typeof(PlanStore).Assembly.GetTypes(),
-            item => item.FullName == "DataPitcher.Infrastructure.Worker.PlanJobRunCatalog"
-        );
-        var catalog = Assert.IsAssignableFrom<IJobRunCatalog>(Activator.CreateInstance(catalogType, plans));
+        IJobRunCatalog catalog = new PlanJobRunCatalog(plans);
 
         var run = await catalog.LoadAsync(job, CancellationToken.None);
 

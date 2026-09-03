@@ -37,7 +37,9 @@ Both connections are revalidated on the server immediately before transfer begin
 | Area | Responsibility |
 | --- | --- |
 | `src/DataPitcher.Core` | Provider-independent domain: graph algorithms, dependency rules, selection and plan semantics, state machines, conflict and verification rules, and the permission vocabulary. |
-| `src/DataPitcher.Infrastructure` | Control-database persistence, job orchestration and queue ownership, auditing, schema snapshot and plan storage, and retry coordination. |
+| `src/DataPitcher.Core` also defines every contract the layers above implement: repository interfaces for connections, selections, plans, schema snapshots, jobs, leases and job events; provider contracts for introspection, capability probing, sealing sessions and transfer run sessions; and the records they exchange (`TransferRun`, `TargetCheckpoint`, `LeaseGrant`, `TransferJob`). |
+| `src/DataPitcher.Application` | Orchestration over Core contracts only: plan sealing, schema scanning, connection health, the job worker with leasing and recovery, and provider routing. It contains no SQL and references no database driver. |
+| `src/DataPitcher.ControlStore` | The library that communicates with and stores connections and state: SQLite implementations of the Core repository contracts, migrations, and file-mounted secrets. It is the only source project that knows the control database exists. |
 | `src/DataPitcher.Providers.SqlServer` | SQL Server catalog queries, dialect and identifier handling, typed staging DDL, native bulk writing, conflict and constraint handling, and verification SQL. |
 | `src/DataPitcher.Providers.PostgreSql` | PostgreSQL catalog queries, dialect and identifier handling, typed staging DDL, native bulk writing, conflict and constraint handling, and verification SQL. |
 | `src/DataPitcher.Auth.Abstractions` | External identity model and authentication-provider contracts. |
@@ -58,12 +60,13 @@ Both connections are revalidated on the server immediately before transfer begin
 | `scripts` | Development, test, maintenance, and operational scripts. |
 | `docs`, including `docs/adr` | Architecture documentation and decision records. |
 
-The control database is folded into Infrastructure rather than given its own project because it is SQLite-only with a single implementation; a project boundary around one implementation is ceremony. The four authentication projects are separate not for symmetry: the Development provider must be excludable from a production build artifact, and the Entra provider carries a dependency that generic OIDC must not inherit.
+The control store is a separate library so that state persistence can be re-implemented (for example over a non-relational or file-based store) without touching orchestration; the contracts it implements are deliberately free of SQL notions. The four authentication projects are separate not for symmetry: the Development provider must be excludable from a production build artifact, and the Entra provider carries a dependency that generic OIDC must not inherit.
 
 The following assertions are enforceable, and `DataPitcher.ArchitectureTests` exists to enforce them:
 
 - Core depends on nothing: no ASP.NET, data-access library, or provider package.
-- Infrastructure depends on Core.
+- Application depends on Core only and carries no data-access package.
+- ControlStore depends on Core only, and only Api references it.
 - Each provider project depends on Core only.
 - Auth.Abstractions depends on Core.
 - Each authentication provider depends on Auth.Abstractions.
@@ -90,7 +93,7 @@ The Core rule permits the closure algorithm, graph algorithms, plan hashing, and
 | `ISequenceReseeder` | Reseeds generated-key sequences where required. |
 | `IServerSideTransferStrategy` | Executes provider-supported server-side transfer paths. |
 
-Provider-native code remains inside provider projects and never leaks into Core or Infrastructure. `ICapabilityDetector` reports: CanConnect, CanReadSchema, CanReadBusinessRows, CanCreateSourceStaging, CanDropSourceStaging, CanCreateTargetStaging, CanDropTargetStaging, CanBulkInsert, CanPreserveIdentity, CanUseTransactions, CanUseSnapshotIsolation, CanDeferConstraints, CanDisableConstraints, CanRevalidateConstraints, CanFireTriggers, CanSuppressTriggers, CanReseedGeneratedKeys, CanUseServerSideTransfer, and SupportsDurableResume. These general connection-level capabilities are distinct from ADR 0003's per-strongly-connected-component strategy flags: `SupportsDeferrableForeignKeys`, `CanDeferCycleBreakingFks`, `CanUseNullableFkTwoPhase`, `CanSafelySuspendFks`, and `MustBlockScc`.
+Provider-native code remains inside provider projects and never leaks into Core or Application. `ICapabilityDetector` reports: CanConnect, CanReadSchema, CanReadBusinessRows, CanCreateSourceStaging, CanDropSourceStaging, CanCreateTargetStaging, CanDropTargetStaging, CanBulkInsert, CanPreserveIdentity, CanUseTransactions, CanUseSnapshotIsolation, CanDeferConstraints, CanDisableConstraints, CanRevalidateConstraints, CanFireTriggers, CanSuppressTriggers, CanReseedGeneratedKeys, CanUseServerSideTransfer, and SupportsDurableResume. These general connection-level capabilities are distinct from ADR 0003's per-strongly-connected-component strategy flags: `SupportsDeferrableForeignKeys`, `CanDeferCycleBreakingFks`, `CanUseNullableFkTwoPhase`, `CanSafelySuspendFks`, and `MustBlockScc`.
 
 ## 5. Schema discovery and the graph
 

@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using DataPitcher.Api.Contracts;
-using DataPitcher.Infrastructure.Selections;
+using DataPitcher.ControlStore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 

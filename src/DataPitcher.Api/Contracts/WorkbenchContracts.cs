@@ -1,3 +1,11 @@
+using DataPitcher.Core.Connections;
+using DataPitcher.Core.Jobs;
+using DataPitcher.Core.Plans;
+using DataPitcher.Core.Schema;
+using DataPitcher.Core.Selection;
+using DataPitcher.Core.Time;
+using DataPitcher.Core.Transfer;
+
 namespace DataPitcher.Api.Contracts;
 
 public sealed record PlanSchemaDependencyGraphTableResponse(

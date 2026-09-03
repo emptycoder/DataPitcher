@@ -1,4 +1,4 @@
-using DataPitcher.Infrastructure.Time;
+using DataPitcher.Core.Time;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;

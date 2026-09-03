@@ -1,9 +1,9 @@
+using DataPitcher.Application.Worker;
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
-using DataPitcher.Infrastructure.Leasing;
-using DataPitcher.Infrastructure.Persistence;
-using DataPitcher.Infrastructure.Worker;
+using DataPitcher.Core.Transfer;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Worker;

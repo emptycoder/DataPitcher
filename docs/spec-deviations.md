@@ -192,11 +192,11 @@ DataPitcher was specified in a detailed written specification. During architectu
 
 **SPEC REQUIRED:** A separate `DataPitcher.ControlDb` project.
 
-**INSTEAD:** Fold the control database into `DataPitcher.Infrastructure`.
+**INSTEAD:** Initially folded into `DataPitcher.Infrastructure`; superseded on 2026-09-03 by `DataPitcher.ControlStore`, a dedicated library implementing Core repository contracts.
 
-**REASON:** The control database is SQLite-only with one implementation. A project boundary around one implementation with no variability is ceremony that increases build surface without providing a seam.
+**REASON:** The original fold assumed one SQLite implementation forever. The contracts are now defined in Core without SQL notions so the store can be replaced by non-relational or file-based implementations, which is exactly the seam the specification asked for.
 
-**SEE:** This entry records the architectural rationale.
+**SEE:** `docs/architecture.md` project layout and the architecture tests `ControlStore_ReferencesOnlyCore` and `Application_ReferencesOnlyCoreAndCarriesNoDataAccessPackages`.
 
 ## How to challenge a deviation
 

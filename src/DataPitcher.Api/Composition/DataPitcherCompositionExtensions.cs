@@ -1,17 +1,17 @@
 using DataPitcher.Api.Contracts;
+using DataPitcher.Application.Connections;
+using DataPitcher.Application.Events;
+using DataPitcher.Application.Plans;
+using DataPitcher.Application.Schema;
+using DataPitcher.Application.Worker;
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Connections;
-using DataPitcher.Infrastructure.Checkpoints;
-using DataPitcher.Infrastructure.Connections;
-using DataPitcher.Infrastructure.Events;
-using DataPitcher.Infrastructure.Leasing;
-using DataPitcher.Infrastructure.Migrations;
-using DataPitcher.Infrastructure.Persistence;
-using DataPitcher.Infrastructure.Plans;
-using DataPitcher.Infrastructure.Schema;
-using DataPitcher.Infrastructure.Selections;
-using DataPitcher.Infrastructure.Storage;
-using DataPitcher.Infrastructure.Time;
-using DataPitcher.Infrastructure.Worker;
+using DataPitcher.Core.Jobs;
+using DataPitcher.Core.Plans;
+using DataPitcher.Core.Schema;
+using DataPitcher.Core.Selection;
+using DataPitcher.Core.Time;
+using DataPitcher.Core.Transfer;
 using DataPitcher.Providers.PostgreSql;
 using DataPitcher.Providers.SqlServer;
 using Microsoft.Extensions.Configuration;
@@ -47,10 +47,19 @@ public static class DataPitcherCompositionExtensions
         services.AddSingleton<IJobEventReader>(provider => provider.GetRequiredService<JobEventStore>());
 
         services.AddSingleton<ConnectionProfileStore>();
+        services.AddSingleton<IConnectionProfileRepository>(provider =>
+            provider.GetRequiredService<ConnectionProfileStore>()
+        );
         services.AddSingleton<SchemaSnapshotStore>();
+        services.AddSingleton<ISchemaSnapshotRepository>(provider =>
+            provider.GetRequiredService<SchemaSnapshotStore>()
+        );
         services.AddSingleton<JobStore>();
+        services.AddSingleton<IJobRepository>(provider => provider.GetRequiredService<JobStore>());
         services.AddSingleton<SelectionStore>();
+        services.AddSingleton<ISelectionRepository>(provider => provider.GetRequiredService<SelectionStore>());
         services.AddSingleton<PlanStore>();
+        services.AddSingleton<IPlanRepository>(provider => provider.GetRequiredService<PlanStore>());
         services.AddSingleton<ISealingProvider, SqlServerSealingProvider>();
         services.AddSingleton<ISealingProvider, PostgreSqlSealingProvider>();
         services.AddSingleton<PlanSealingService>();
@@ -73,6 +82,7 @@ public static class DataPitcherCompositionExtensions
             provider.GetRequiredService<ProviderRunSessionRouter>()
         );
         services.AddSingleton<LeaseStore>();
+        services.AddSingleton<ILeaseStore>(provider => provider.GetRequiredService<LeaseStore>());
         services.AddSingleton<LeaseRenewer>();
         services.AddSingleton<RecoveryCoordinator>();
 

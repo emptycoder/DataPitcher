@@ -1,6 +1,5 @@
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Jobs;
-using DataPitcher.Infrastructure.Leasing;
-using DataPitcher.Infrastructure.Persistence;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;

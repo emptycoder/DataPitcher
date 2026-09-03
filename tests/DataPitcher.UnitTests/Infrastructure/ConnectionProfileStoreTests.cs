@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Text.Json;
+using DataPitcher.Application.Connections;
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Plans;
-using DataPitcher.Infrastructure.Connections;
-using DataPitcher.Infrastructure.Persistence;
 using LinqToDB.Data;
 using Microsoft.Extensions.Logging;
 using Xunit;

@@ -1,4 +1,4 @@
-using DataPitcher.Infrastructure.Storage;
+using DataPitcher.ControlStore;
 using LinqToDB.Data;
 using Xunit;
 

@@ -1,10 +1,16 @@
 using System.Security.Claims;
 using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
+using DataPitcher.Application.Schema;
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Authorization;
+using DataPitcher.Core.Connections;
+using DataPitcher.Core.Jobs;
+using DataPitcher.Core.Plans;
+using DataPitcher.Core.Schema;
 using DataPitcher.Core.Selection;
-using DataPitcher.Infrastructure.Schema;
-using DataPitcher.Infrastructure.Selections;
+using DataPitcher.Core.Time;
+using DataPitcher.Core.Transfer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
 
@@ -12,7 +18,7 @@ namespace DataPitcher.Api.Endpoints;
 
 /// <summary>
 /// The six selection-workbench routes the frontend calls. Schema browsing, listing, and saving are real, backed by
-/// the latest captured schema snapshot and <see cref="SelectionStore"/>. Raw-SQL compilation is real, delegating to
+/// the latest captured schema snapshot and <see cref="ISelectionRepository"/>. Raw-SQL compilation is real, delegating to
 /// the existing <see cref="RawSqlSafetyValidator"/>. Visual-mode compilation and live preview/count execution
 /// require an AST-to-domain mapper and a per-request provider execution context that do not exist in this codebase
 /// yet (see <see cref="SelectionExecutionNotWiredException"/>).
@@ -43,7 +49,7 @@ public static class WorkbenchEndpoints
             .ProducesProblem(StatusCodes.Status500InternalServerError);
 
     private static async Task<Ok<SelectionWorkbenchSchemaResponse>> GetWorkbenchSchemaAsync(
-        SchemaSnapshotStore snapshots,
+        ISchemaSnapshotRepository snapshots,
         CancellationToken cancellationToken
     )
     {
@@ -100,7 +106,7 @@ public static class WorkbenchEndpoints
         HttpContext context,
         ClaimsPrincipal user,
         IAuthorizationService authorizationService,
-        SelectionStore selections,
+        ISelectionRepository selections,
         CancellationToken cancellationToken
     )
     {
@@ -151,7 +157,7 @@ public static class WorkbenchEndpoints
     }
 
     private static async Task<Ok<ListSelectionsResponse>> ListAsync(
-        SelectionStore selections,
+        ISelectionRepository selections,
         CancellationToken cancellationToken
     )
     {

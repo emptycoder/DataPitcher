@@ -1,12 +1,13 @@
 using System.Text;
 using DataPitcher.Core.Closure;
+using DataPitcher.Core.Connections;
 using DataPitcher.Core.Identity;
+using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
+using DataPitcher.Core.Schema;
+using DataPitcher.Core.Selection;
+using DataPitcher.Core.Time;
 using DataPitcher.Core.Transfer;
-using DataPitcher.Infrastructure.Connections;
-using DataPitcher.Infrastructure.Leasing;
-using DataPitcher.Infrastructure.Plans;
-using DataPitcher.Infrastructure.Worker;
 using Npgsql;
 
 namespace DataPitcher.Providers.PostgreSql;
@@ -16,8 +17,8 @@ namespace DataPitcher.Providers.PostgreSql;
 /// applies them to the target through the fenced, checkpointed <see cref="PostgreSqlTransferExecutor"/>.
 /// </summary>
 public sealed class PostgreSqlRunSessions(
-    PlanStore plans,
-    ConnectionProfileStore profiles,
+    IPlanRepository plans,
+    IConnectionProfileRepository profiles,
     ISecretReferenceResolver secrets
 ) : IRunSessionProvider
 {

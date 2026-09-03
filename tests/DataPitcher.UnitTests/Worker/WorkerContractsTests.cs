@@ -1,8 +1,8 @@
+using DataPitcher.Application.Worker;
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Plans;
+using DataPitcher.Core.Time;
 using DataPitcher.Core.Transfer;
-using DataPitcher.Infrastructure.Time;
-using DataPitcher.Infrastructure.Worker;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Worker;

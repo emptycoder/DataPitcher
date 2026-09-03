@@ -1,4 +1,4 @@
-using DataPitcher.Infrastructure.Leasing;
+using DataPitcher.ControlStore;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;

@@ -109,10 +109,11 @@ public sealed class DependencyRuleTests
         var api = Project("DataPitcher.Api");
         Assert.Equal(
             [
+                "DataPitcher.Application",
                 "DataPitcher.Auth.Abstractions",
                 "DataPitcher.Auth.Hosting",
+                "DataPitcher.ControlStore",
                 "DataPitcher.Core",
-                "DataPitcher.Infrastructure",
                 "DataPitcher.Providers.PostgreSql",
                 "DataPitcher.Providers.SqlServer",
             ],
@@ -128,6 +129,57 @@ public sealed class DependencyRuleTests
                 .SelectMany(References),
             name => name == "DataPitcher.Api"
         );
+    }
+
+    private static readonly string[] DataAccessPackages =
+    [
+        "Dapper",
+        "linq2db",
+        "LinqToDB",
+        "Microsoft.EntityFrameworkCore",
+        "Npgsql",
+        "Microsoft.Data.SqlClient",
+        "Microsoft.Data.Sqlite",
+    ];
+
+    // The application layer orchestrates through Core contracts only: no persistence, no provider drivers.
+    [Fact]
+    public void Application_ReferencesOnlyCoreAndCarriesNoDataAccessPackages()
+    {
+        var application = Project("DataPitcher.Application");
+        Assert.Equal(["DataPitcher.Core"], References(application));
+        Assert.DoesNotContain(Packages(application), DataAccessPackages.Contains);
+    }
+
+    // The control store is the only source project that persists connections and state; it implements Core contracts.
+    [Fact]
+    public void ControlStore_ReferencesOnlyCore()
+    {
+        Assert.Equal(["DataPitcher.Core"], References(Project("DataPitcher.ControlStore")));
+        Assert.DoesNotContain(
+            Projects()
+                .Where(p =>
+                    Name(p) is not ("DataPitcher.Api" or "DataPitcher.ControlStore")
+                    && Path.GetRelativePath(Root, p)
+                        .StartsWith("src" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                )
+                .SelectMany(References),
+            name => name == "DataPitcher.ControlStore"
+        );
+    }
+
+    // Providers implement Core contracts and never see orchestration or persistence.
+    [Fact]
+    public void Providers_ReferenceOnlyCore()
+    {
+        foreach (
+            var provider in Projects()
+                .Where(p =>
+                    Name(p).StartsWith("DataPitcher.Providers.", StringComparison.Ordinal)
+                    && !Name(p).EndsWith("Tests", StringComparison.Ordinal)
+                )
+        )
+            Assert.Equal(["DataPitcher.Core"], References(provider));
     }
 
     private static string Root { get; } = FindRoot();

@@ -1,7 +1,9 @@
+using DataPitcher.Application.Connections;
+using DataPitcher.Application.Worker;
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Plans;
-using DataPitcher.Infrastructure.Connections;
-using DataPitcher.Infrastructure.Worker;
+using DataPitcher.Core.Transfer;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;

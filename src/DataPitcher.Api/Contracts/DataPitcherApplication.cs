@@ -1,13 +1,15 @@
+using DataPitcher.Application.Connections;
+using DataPitcher.Application.Events;
+using DataPitcher.Application.Plans;
+using DataPitcher.Application.Schema;
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
 using DataPitcher.Core.Schema;
-using DataPitcher.Infrastructure.Connections;
-using DataPitcher.Infrastructure.Events;
-using DataPitcher.Infrastructure.Persistence;
-using DataPitcher.Infrastructure.Plans;
-using DataPitcher.Infrastructure.Schema;
-using DataPitcher.Infrastructure.Selections;
+using DataPitcher.Core.Selection;
+using DataPitcher.Core.Time;
+using DataPitcher.Core.Transfer;
 
 namespace DataPitcher.Api.Contracts;
 
@@ -21,12 +23,12 @@ public sealed class PlanNotSealedException() : InvalidOperationException("Plan m
 /// tested Infrastructure services. Inclusion-path lookup requires persisted closure provenance.
 /// </summary>
 public sealed class DataPitcherApplication(
-    ConnectionProfileStore connections,
+    IConnectionProfileRepository connections,
     ConnectionHealthService health,
-    SchemaSnapshotStore snapshots,
-    SelectionStore selections,
-    PlanStore plans,
-    JobStore jobs,
+    ISchemaSnapshotRepository snapshots,
+    ISelectionRepository selections,
+    IPlanRepository plans,
+    IJobRepository jobs,
     IJobEventReader jobEvents,
     PlanSealingService? sealing = null,
     ISecretWriter? secretWriter = null

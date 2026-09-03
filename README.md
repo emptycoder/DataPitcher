@@ -32,7 +32,7 @@ For Development authentication, run `Authentication__Development__SigningKey="$(
 │   ├── adr/                      Accepted architecture decision records
 │   └── plans/                    Task-level implementation plans
 ├── README.md                     This repository entry point
-└── src/, tests/, web/, docker/, scripts/  Not present yet; Slice 1 creates them
+└── src/ (Core, Application, ControlStore, Providers.*, Auth.*, Api), tests/, web/, scripts/
 ```
 
 ## Getting started

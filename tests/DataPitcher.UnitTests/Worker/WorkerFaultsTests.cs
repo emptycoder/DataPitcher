@@ -1,4 +1,5 @@
-using DataPitcher.Infrastructure.Worker;
+using DataPitcher.Application.Worker;
+using DataPitcher.Core.Transfer;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Worker;

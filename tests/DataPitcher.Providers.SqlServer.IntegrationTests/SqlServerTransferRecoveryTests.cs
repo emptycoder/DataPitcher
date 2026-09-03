@@ -1,3 +1,4 @@
+using DataPitcher.Core.Plans;
 using Xunit;
 
 namespace DataPitcher.Providers.SqlServer.IntegrationTests;

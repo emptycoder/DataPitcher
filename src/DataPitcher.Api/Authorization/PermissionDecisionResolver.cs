@@ -2,6 +2,13 @@ using System.Security.Claims;
 using DataPitcher.Auth.Abstractions.Authorization;
 using DataPitcher.Auth.Abstractions.Identity;
 using DataPitcher.Core.Authorization;
+using DataPitcher.Core.Connections;
+using DataPitcher.Core.Jobs;
+using DataPitcher.Core.Plans;
+using DataPitcher.Core.Schema;
+using DataPitcher.Core.Selection;
+using DataPitcher.Core.Time;
+using DataPitcher.Core.Transfer;
 
 namespace DataPitcher.Api.Authorization;
 

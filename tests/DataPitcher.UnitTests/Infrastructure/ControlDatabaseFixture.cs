@@ -1,6 +1,5 @@
-using DataPitcher.Infrastructure.Migrations;
-using DataPitcher.Infrastructure.Storage;
-using DataPitcher.Infrastructure.Time;
+using DataPitcher.ControlStore;
+using DataPitcher.Core.Time;
 using LinqToDB.Data;
 
 namespace DataPitcher.UnitTests.Infrastructure;

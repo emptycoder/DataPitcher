@@ -1,11 +1,18 @@
 using System.Security.Claims;
 using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
+using DataPitcher.Application.Plans;
+using DataPitcher.Application.Schema;
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Authorization;
+using DataPitcher.Core.Connections;
 using DataPitcher.Core.Graph;
+using DataPitcher.Core.Jobs;
+using DataPitcher.Core.Plans;
 using DataPitcher.Core.Schema;
-using DataPitcher.Infrastructure.Plans;
-using DataPitcher.Infrastructure.Schema;
+using DataPitcher.Core.Selection;
+using DataPitcher.Core.Time;
+using DataPitcher.Core.Transfer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
 
@@ -38,8 +45,8 @@ public static class SchemaTopologyEndpoints
         HttpContext context,
         ClaimsPrincipal user,
         IAuthorizationService authorizationService,
-        PlanStore plans,
-        SchemaSnapshotStore snapshots,
+        IPlanRepository plans,
+        ISchemaSnapshotRepository snapshots,
         CancellationToken cancellationToken
     )
     {

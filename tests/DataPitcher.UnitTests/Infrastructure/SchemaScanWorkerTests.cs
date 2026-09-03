@@ -1,8 +1,9 @@
 using System.Text.Json;
+using DataPitcher.Application.Connections;
+using DataPitcher.Application.Schema;
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Schema;
-using DataPitcher.Infrastructure.Connections;
-using DataPitcher.Infrastructure.Schema;
 using LinqToDB.Data;
 using Xunit;
 

@@ -1,8 +1,7 @@
+using DataPitcher.Application.Worker;
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
-using DataPitcher.Infrastructure.Checkpoints;
-using DataPitcher.Infrastructure.Persistence;
-using DataPitcher.Infrastructure.Worker;
 using LinqToDB;
 using LinqToDB.Data;
 using Xunit;

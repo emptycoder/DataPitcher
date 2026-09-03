@@ -1,13 +1,9 @@
 using System.Text.Json;
+using DataPitcher.Application.Plans;
+using DataPitcher.ControlStore;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Schema;
-using DataPitcher.Infrastructure.Connections;
-using DataPitcher.Infrastructure.Migrations;
-using DataPitcher.Infrastructure.Plans;
-using DataPitcher.Infrastructure.Schema;
-using DataPitcher.Infrastructure.Selections;
-using DataPitcher.Infrastructure.Storage;
-using DataPitcher.Infrastructure.Time;
+using DataPitcher.Core.Time;
 using DataPitcher.Providers.SqlServer;
 using LinqToDB.Data;
 using Xunit;

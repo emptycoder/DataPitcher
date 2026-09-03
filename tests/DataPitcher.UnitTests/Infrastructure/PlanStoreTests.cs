@@ -1,4 +1,5 @@
-using DataPitcher.Infrastructure.Plans;
+using DataPitcher.Application.Plans;
+using DataPitcher.ControlStore;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;

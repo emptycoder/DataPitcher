@@ -1,4 +1,6 @@
-using DataPitcher.Infrastructure.Events;
+using DataPitcher.Application.Events;
+using DataPitcher.ControlStore;
+using DataPitcher.Core.Jobs;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;

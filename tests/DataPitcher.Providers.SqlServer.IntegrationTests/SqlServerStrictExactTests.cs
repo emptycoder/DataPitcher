@@ -1,4 +1,5 @@
 using DataPitcher.Core.Identity;
+using DataPitcher.Core.Plans;
 using Xunit;
 
 namespace DataPitcher.Providers.SqlServer.IntegrationTests;
