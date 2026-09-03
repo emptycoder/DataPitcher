@@ -39,6 +39,20 @@ public sealed class LeaseStoreTests
     }
 
     [Fact]
+    public void LeaseStore_WhenOwnerReacquiresAfterExpiry_RefusesToRenewTheStaleFenceEvenWithMatchingOwner()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var jobId = fixture.SeedJob();
+        var store = new LeaseStore(fixture.Database, fixture.Clock); var ttl = TimeSpan.FromMinutes(1);
+        var first = store.Acquire(jobId, "worker-a", ttl)!;
+        fixture.Clock.Advance(ttl.Add(TimeSpan.FromTicks(1)));
+        var second = store.Acquire(jobId, "worker-a", ttl)!;
+
+        var renewed = store.RenewIfDue(first, ttl);
+
+        Assert.Equal(first.OwnerId, second.OwnerId); Assert.True(second.FenceToken > first.FenceToken); Assert.Null(renewed);
+    }
+
+    [Fact]
     public void LeaseStore_WhenOwnerIsBlank_RejectsAcquire()
     {
         using var fixture = new ControlDatabaseFixture(); var store = new LeaseStore(fixture.Database, fixture.Clock);

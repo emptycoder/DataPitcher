@@ -82,6 +82,21 @@ public sealed class JobStoreRecoveryTests
     }
 
     [Fact]
+    public async Task JobStore_WhenOwnerReacquiresAfterExpiry_RejectsTheStaleFenceEvenWithMatchingOwner()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock); var ttl = TimeSpan.FromMinutes(1); var job = store.Start(new(Guid.NewGuid(), "start-stale-fence-same-owner")).Job;
+        var first = (await store.TryClaimNextAsync("worker-a", ttl, CancellationToken.None))!;
+        await store.PrepareAsync(first, CancellationToken.None);
+        fixture.Clock.Advance(ttl.Add(TimeSpan.FromTicks(1)));
+        var reacquired = (await store.TryClaimNextAsync("worker-a", ttl, CancellationToken.None))!;
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => store.MarkRunningAsync(first.Lease, CancellationToken.None));
+
+        Assert.Equal(first.Lease.OwnerId, reacquired.Lease.OwnerId); Assert.True(reacquired.Lease.FenceToken > first.Lease.FenceToken);
+        Assert.Equal("Worker no longer owns the job.", exception.Message); Assert.Equal(JobState.Preparing, await store.GetStateAsync(job.JobId, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task JobStore_WhenLeaseReleaseIsSuperseded_RejectsTheWorkerTransition()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock); var ttl = TimeSpan.FromMinutes(1); var job = store.Start(new(Guid.NewGuid(), "start-superseded-release")).Job;
