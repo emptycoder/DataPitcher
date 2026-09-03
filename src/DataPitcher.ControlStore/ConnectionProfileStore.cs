@@ -2,14 +2,10 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using DataPitcher.Core.Connections;
-using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
-using DataPitcher.Core.Schema;
-using DataPitcher.Core.Selection;
 using DataPitcher.Core.Time;
 using DataPitcher.Core.Transfer;
-using LinqToDB;
-using LinqToDB.Data;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -21,6 +17,9 @@ public sealed class ConnectionProfileStore(
     ILogger<ConnectionProfileStore>? logger = null
 ) : IConnectionProfileRepository
 {
+    private const string SelectColumns =
+        "SELECT ConnectionId, DisplayName, ProviderId, SecretReferenceKind, SecretReferenceLocator, BusinessSchema, StagingSchema, Version, HealthState FROM ConnectionProfiles";
+
     private static readonly ActivitySource ActivitySource = new("DataPitcher.ConnectionProfiles");
     private readonly ILogger<ConnectionProfileStore> _logger = logger ?? NullLogger<ConnectionProfileStore>.Instance;
 
@@ -32,31 +31,43 @@ public sealed class ConnectionProfileStore(
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
-        using var db = database.Open();
+        using var db = database.OpenNative();
         using var transaction = db.BeginTransaction();
         var now = Stamp(clock.UtcNow);
-        var row = new ConnectionProfileRow
-        {
-            ConnectionId = Guid.NewGuid().ToString(),
-            DisplayName = draft.DisplayName,
-            ProviderId = draft.ProviderId,
-            SecretReferenceKind = draft.SecretReference.Kind.ToString(),
-            SecretReferenceLocator = draft.SecretReference.Locator,
-            BusinessSchema = draft.BusinessSchema,
-            StagingSchema = draft.StagingSchema,
-            Version = 1,
-            HealthState = ConnectionHealthState.Unknown.ToString(),
-            CreatedUtc = now,
-            UpdatedUtc = now,
-        };
+        var row = new Row(
+            Guid.NewGuid().ToString(),
+            draft.DisplayName,
+            draft.ProviderId,
+            draft.SecretReference.Kind.ToString(),
+            draft.SecretReference.Locator,
+            draft.BusinessSchema,
+            draft.StagingSchema,
+            1,
+            ConnectionHealthState.Unknown.ToString()
+        );
         var inserted = db.Execute(
             "INSERT OR IGNORE INTO ConnectionProfiles (ConnectionId, DisplayName, ProviderId, SecretReferenceKind, SecretReferenceLocator, BusinessSchema, StagingSchema, Version, HealthState, CreatedUtc, UpdatedUtc, IdempotencyKey) VALUES (@connectionId, @displayName, @providerId, @secretReferenceKind, @secretReferenceLocator, @businessSchema, @stagingSchema, @version, @healthState, @createdUtc, @updatedUtc, @idempotencyKey)",
-            Parameters(row, idempotencyKey)
+            new ControlParameter("connectionId", row.ConnectionId),
+            new ControlParameter("displayName", row.DisplayName),
+            new ControlParameter("providerId", row.ProviderId),
+            new ControlParameter("secretReferenceKind", row.SecretReferenceKind),
+            new ControlParameter("secretReferenceLocator", row.SecretReferenceLocator),
+            new ControlParameter("businessSchema", row.BusinessSchema),
+            new ControlParameter("stagingSchema", row.StagingSchema),
+            new ControlParameter("version", row.Version),
+            new ControlParameter("healthState", row.HealthState),
+            new ControlParameter("createdUtc", now),
+            new ControlParameter("updatedUtc", now),
+            new ControlParameter("idempotencyKey", idempotencyKey)
         );
         if (inserted == 0)
         {
-            var existing = db.GetTable<ConnectionProfileRow>()
-                .Single(profile => profile.IdempotencyKey == idempotencyKey);
+            var existing =
+                db.Single(
+                    SelectColumns + " WHERE IdempotencyKey = @idempotencyKey",
+                    Map,
+                    new ControlParameter("idempotencyKey", idempotencyKey)
+                ) ?? throw new InvalidOperationException("Sequence contains no elements");
             return Task.FromResult(ToProfile(existing));
         }
         transaction.Commit();
@@ -66,16 +77,15 @@ public sealed class ConnectionProfileStore(
     public Task<ConnectionProfileSummary> GetSummaryAsync(Guid connectionId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         return Task.FromResult(ToSummary(GetRow(db, connectionId)));
     }
 
     public Task<IReadOnlyList<ConnectionProfileSummary>> ListSummariesAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
-        IReadOnlyList<ConnectionProfileSummary> summaries = db.GetTable<ConnectionProfileRow>()
-            .ToArray()
+        using var db = database.OpenNative();
+        IReadOnlyList<ConnectionProfileSummary> summaries = db.Query(SelectColumns, Map)
             .OrderBy(profile => profile.DisplayName, StringComparer.Ordinal)
             .ThenBy(profile => profile.ConnectionId, StringComparer.Ordinal)
             .Select(ToSummary)
@@ -91,25 +101,22 @@ public sealed class ConnectionProfileStore(
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         using var transaction = db.BeginTransaction();
         var existing = GetRow(db, connectionId);
         var version = ParseEtag(ifMatch);
         var now = Stamp(clock.UtcNow);
         var affected = db.Execute(
             "UPDATE ConnectionProfiles SET DisplayName = @displayName, ProviderId = @providerId, SecretReferenceKind = @secretReferenceKind, SecretReferenceLocator = @secretReferenceLocator, BusinessSchema = @businessSchema, StagingSchema = @stagingSchema, Version = Version + 1, UpdatedUtc = @updatedUtc WHERE ConnectionId = @connectionId AND Version = @version",
-            new DataParameter[]
-            {
-                new("displayName", draft.DisplayName),
-                new("providerId", draft.ProviderId),
-                new("secretReferenceKind", draft.SecretReference.Kind.ToString()),
-                new("secretReferenceLocator", draft.SecretReference.Locator),
-                new("businessSchema", draft.BusinessSchema),
-                new("stagingSchema", draft.StagingSchema),
-                new("updatedUtc", now),
-                new("connectionId", connectionId.ToString()),
-                new("version", version),
-            }
+            new ControlParameter("displayName", draft.DisplayName),
+            new ControlParameter("providerId", draft.ProviderId),
+            new ControlParameter("secretReferenceKind", draft.SecretReference.Kind.ToString()),
+            new ControlParameter("secretReferenceLocator", draft.SecretReference.Locator),
+            new ControlParameter("businessSchema", draft.BusinessSchema),
+            new ControlParameter("stagingSchema", draft.StagingSchema),
+            new ControlParameter("updatedUtc", now),
+            new ControlParameter("connectionId", connectionId.ToString()),
+            new ControlParameter("version", version)
         );
         if (affected != 1)
             throw new InvalidOperationException("Connection profile version does not match.");
@@ -130,11 +137,12 @@ public sealed class ConnectionProfileStore(
     public Task DeleteAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         using var transaction = db.BeginTransaction();
         var affected = db.Execute(
             "DELETE FROM ConnectionProfiles WHERE ConnectionId = @connectionId AND Version = @version",
-            new DataParameter[] { new("connectionId", connectionId.ToString()), new("version", ParseEtag(ifMatch)) }
+            new ControlParameter("connectionId", connectionId.ToString()),
+            new ControlParameter("version", ParseEtag(ifMatch))
         );
         if (affected != 1)
             throw new InvalidOperationException("Connection profile version does not match.");
@@ -145,7 +153,7 @@ public sealed class ConnectionProfileStore(
     public Task<ConnectionProfile> GetProfileAsync(Guid connectionId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         return Task.FromResult(ToProfile(GetRow(db, connectionId)));
     }
 
@@ -158,7 +166,7 @@ public sealed class ConnectionProfileStore(
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         using var transaction = db.BeginTransaction();
         var profile = GetRow(db, connectionId);
         var available = JsonSerializer.Serialize(
@@ -169,24 +177,21 @@ public sealed class ConnectionProfileStore(
         var failureCode = SafeFailureCode(assessment.CleanupFailureCode);
         db.Execute(
             "UPDATE ConnectionProfiles SET HealthState = @healthState, AssessmentMode = @assessmentMode, AssessmentRole = @assessmentRole, DatabaseIdentity = @databaseIdentity, ProviderVersion = @providerVersion, CapabilitiesJson = @capabilitiesJson, CleanupFailureCode = @cleanupFailureCode, Version = Version + 1, UpdatedUtc = @updatedUtc WHERE ConnectionId = @connectionId",
-            new DataParameter[]
-            {
-                new("healthState", assessment.State.ToString()),
-                new("assessmentMode", mode.ToString()),
-                new("assessmentRole", role.ToString()),
-                new("databaseIdentity", assessment.DatabaseIdentity),
-                new("providerVersion", assessment.ProviderVersion),
-                new("capabilitiesJson", available),
-                new("cleanupFailureCode", failureCode),
-                new("updatedUtc", Stamp(clock.UtcNow)),
-                new("connectionId", connectionId.ToString()),
-            }
+            new ControlParameter("healthState", assessment.State.ToString()),
+            new ControlParameter("assessmentMode", mode.ToString()),
+            new ControlParameter("assessmentRole", role.ToString()),
+            new ControlParameter("databaseIdentity", assessment.DatabaseIdentity),
+            new ControlParameter("providerVersion", assessment.ProviderVersion),
+            new ControlParameter("capabilitiesJson", available),
+            new ControlParameter("cleanupFailureCode", failureCode),
+            new ControlParameter("updatedUtc", Stamp(clock.UtcNow)),
+            new ControlParameter("connectionId", connectionId.ToString())
         );
         transaction.Commit();
         EmitAssessment(profile, assessment.State, assessment.Available, failureCode);
-        profile.Version++;
-        profile.HealthState = assessment.State.ToString();
-        return Task.FromResult(ToSummary(profile));
+        return Task.FromResult(
+            ToSummary(profile with { Version = profile.Version + 1, HealthState = assessment.State.ToString() })
+        );
     }
 
     public Task MarkCheckingAsync(
@@ -197,17 +202,14 @@ public sealed class ConnectionProfileStore(
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         var affected = db.Execute(
             "UPDATE ConnectionProfiles SET HealthState = @healthState, AssessmentMode = @assessmentMode, AssessmentRole = @assessmentRole, Version = Version + 1, UpdatedUtc = @updatedUtc WHERE ConnectionId = @connectionId",
-            new DataParameter[]
-            {
-                new("healthState", ConnectionHealthState.Checking.ToString()),
-                new("assessmentMode", mode.ToString()),
-                new("assessmentRole", role.ToString()),
-                new("updatedUtc", Stamp(clock.UtcNow)),
-                new("connectionId", connectionId.ToString()),
-            }
+            new ControlParameter("healthState", ConnectionHealthState.Checking.ToString()),
+            new ControlParameter("assessmentMode", mode.ToString()),
+            new ControlParameter("assessmentRole", role.ToString()),
+            new ControlParameter("updatedUtc", Stamp(clock.UtcNow)),
+            new ControlParameter("connectionId", connectionId.ToString())
         );
         if (affected != 1)
             throw new InvalidOperationException("Connection profile was not found.");
@@ -215,7 +217,7 @@ public sealed class ConnectionProfileStore(
     }
 
     private void EmitAssessment(
-        ConnectionProfileRow profile,
+        Row profile,
         ConnectionHealthState state,
         IEnumerable<ConnectionCapability> available,
         string? failureCode
@@ -243,11 +245,27 @@ public sealed class ConnectionProfileStore(
         activity?.SetTag("error.code", failureCode);
     }
 
-    private static ConnectionProfileRow GetRow(DataConnection db, Guid connectionId) =>
-        db.GetTable<ConnectionProfileRow>().SingleOrDefault(profile => profile.ConnectionId == connectionId.ToString())
-        ?? throw new InvalidOperationException("Connection profile was not found.");
+    private static Row GetRow(ControlConnection db, Guid connectionId) =>
+        db.Single(
+            SelectColumns + " WHERE ConnectionId = @connectionId",
+            Map,
+            new ControlParameter("connectionId", connectionId.ToString())
+        ) ?? throw new InvalidOperationException("Connection profile was not found.");
 
-    private static ConnectionProfile ToProfile(ConnectionProfileRow row) =>
+    private static Row Map(SqliteDataReader reader) =>
+        new(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetString(5),
+            reader.GetString(6),
+            reader.GetInt64(7),
+            reader.GetString(8)
+        );
+
+    private static ConnectionProfile ToProfile(Row row) =>
         new(
             Guid.Parse(row.ConnectionId),
             row.DisplayName,
@@ -258,7 +276,7 @@ public sealed class ConnectionProfileStore(
             row.Version
         );
 
-    private static ConnectionProfileSummary ToSummary(ConnectionProfileRow row) =>
+    private static ConnectionProfileSummary ToSummary(Row row) =>
         new(
             Guid.Parse(row.ConnectionId),
             row.DisplayName,
@@ -267,22 +285,6 @@ public sealed class ConnectionProfileStore(
             Enum.Parse<ConnectionHealthState>(row.HealthState),
             Etag(row.Version)
         );
-
-    private static DataParameter[] Parameters(ConnectionProfileRow row, string idempotencyKey) =>
-        [
-            new("connectionId", row.ConnectionId),
-            new("displayName", row.DisplayName),
-            new("providerId", row.ProviderId),
-            new("secretReferenceKind", row.SecretReferenceKind),
-            new("secretReferenceLocator", row.SecretReferenceLocator),
-            new("businessSchema", row.BusinessSchema),
-            new("stagingSchema", row.StagingSchema),
-            new("version", row.Version),
-            new("healthState", row.HealthState),
-            new("createdUtc", row.CreatedUtc),
-            new("updatedUtc", row.UpdatedUtc),
-            new("idempotencyKey", idempotencyKey),
-        ];
 
     private static string Etag(long version) => $"\"{version.ToString(CultureInfo.InvariantCulture)}\"";
 
@@ -297,4 +299,16 @@ public sealed class ConnectionProfileStore(
         : "connection_failed";
 
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
+
+    private sealed record Row(
+        string ConnectionId,
+        string DisplayName,
+        string ProviderId,
+        string SecretReferenceKind,
+        string SecretReferenceLocator,
+        string BusinessSchema,
+        string StagingSchema,
+        long Version,
+        string HealthState
+    );
 }
