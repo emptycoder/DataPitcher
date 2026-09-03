@@ -53,4 +53,19 @@ public sealed class JobStoreTests
         var stale = await staleWrite;
         Assert.True(second.FenceToken > first.FenceToken); Assert.Equal(0, stale.RowsAffected); Assert.DoesNotContain(store.GetHistory(job.JobId), x => x == (JobState.Queued, JobState.Preparing));
     }
+
+    [Fact]
+    public void JobStore_WhenOwnerReacquiresAfterExpiry_RejectsTheStaleFenceEvenWithMatchingOwner()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock);
+        var job = store.Start(new(Guid.NewGuid(), "start-46")).Job; var leases = new LeaseStore(fixture.Database, fixture.Clock); var ttl = TimeSpan.FromMinutes(1);
+        var first = leases.Acquire(job.JobId, "worker-a", ttl)!;
+        fixture.Clock.Advance(ttl.Add(TimeSpan.FromTicks(1)));
+        var reacquired = leases.Acquire(job.JobId, "worker-a", ttl)!;
+
+        var stale = store.TryTransition(first, JobState.Preparing);
+
+        Assert.Equal(first.OwnerId, reacquired.OwnerId); Assert.True(reacquired.FenceToken > first.FenceToken);
+        Assert.Equal(0, stale.RowsAffected); Assert.DoesNotContain(store.GetHistory(job.JobId), x => x == (JobState.Queued, JobState.Preparing));
+    }
 }
