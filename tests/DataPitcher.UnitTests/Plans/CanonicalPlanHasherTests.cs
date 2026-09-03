@@ -26,7 +26,7 @@ public sealed class CanonicalPlanHasherTests
         var content = PlanTestData.Baseline(); var shuffled = PlanTestData.Shuffled(seed);
         Assert.Equal(CanonicalPlanHasher.Hash(content), CanonicalPlanHasher.Hash(shuffled));
     }
-    public static IEnumerable<object[]> MaterialChanges() => new[] { "connection", "database identity", "schema snapshot", "selection", "selection parameter", "stable key", "relationship policy", "conflict policy", "column mapping", "transfer mode", "consistency mode", "trigger strategy", "constraint strategy" }.Select(value => new object[] { value });
+    public static IEnumerable<object[]> MaterialChanges() => new[] { "connection", "database identity", "schema snapshot", "target schema snapshot", "selection", "selection parameter", "stable key", "relationship policy", "relationship column order", "conflict policy", "column mapping", "transfer mode", "consistency mode", "trigger strategy", "constraint strategy" }.Select(value => new object[] { value });
     [Theory] [MemberData(nameof(MaterialChanges))]
     public void Property_AnyMaterialChange_ChangesHash(string material) => Assert.NotEqual(CanonicalPlanHasher.Hash(PlanTestData.Baseline()), CanonicalPlanHasher.Hash(PlanTestData.Changed(material)));
 }
