@@ -58,7 +58,7 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
 
         string? cleanupFailureCode = null;
         if (request.Mode is TransferMode.ResumableStaged && permissions.CanCreateStaging)
-            cleanupFailureCode = await ProbeStagingAsync(connection, request, available, cancellationToken);
+            cleanupFailureCode = await ProbeStagingAsync(connection, request, available, notes, cancellationToken);
         if (
             request.Role is ConnectionRole.Source
             && available.Contains(ConnectionCapability.CanCreateSourceStaging)
@@ -106,7 +106,7 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
             "SELECT "
             + AnyGrant("SELECT")
             + ", "
-            + "COALESCE((SELECT has_schema_privilege(n.oid, 'CREATE') FROM pg_namespace n WHERE n.nspname = @stagingSchema), false), "
+            + "CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = @stagingSchema) THEN COALESCE((SELECT has_schema_privilege(n.oid, 'CREATE') FROM pg_namespace n WHERE n.nspname = @stagingSchema), false) ELSE has_database_privilege(current_database(), 'CREATE') END, "
             + AnyGrant("INSERT")
             + ", current_user::text"
             + ", EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = @businessSchema)"
@@ -162,19 +162,35 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
         }
     }
 
+    /// <summary>
+    /// Proves staging works the way the transfer will use it: the schema is created when it does not exist yet (the
+    /// transfer creates its own on demand too), a table is created and dropped in it, and a schema created only for
+    /// the probe is dropped again so the check leaves nothing behind.
+    /// </summary>
     private static async Task<string?> ProbeStagingAsync(
         NpgsqlConnection connection,
         ConnectionProbeRequest request,
         ISet<ConnectionCapability> available,
+        List<string> notes,
         CancellationToken cancellationToken
     )
     {
         var name = "dp_probe_" + Guid.NewGuid().ToString("N");
         var created = false;
         var verified = false;
+        var createdSchema = false;
         string? cleanupFailureCode = null;
         try
         {
+            createdSchema = await EnsureStagingSchemaAsync(
+                connection,
+                request.Profile.StagingSchema,
+                cancellationToken
+            );
+            if (createdSchema)
+                notes.Add(
+                    $"Staging schema '{request.Profile.StagingSchema}' does not exist yet; the login can create it."
+                );
             await ExecuteAsync(
                 connection,
                 "CREATE TABLE "
@@ -219,8 +235,43 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
                     cleanupFailureCode = "staging_cleanup_failed";
                 }
             }
+            if (createdSchema && cleanupFailureCode is null)
+            {
+                try
+                {
+                    await ExecuteAsync(
+                        connection,
+                        "DROP SCHEMA " + PostgreSqlIdentifier.Quote(request.Profile.StagingSchema) + ";",
+                        cancellationToken
+                    );
+                }
+                catch
+                {
+                    // Leaving an empty schema behind is harmless; the transfer would create it anyway.
+                }
+            }
         }
         return cleanupFailureCode;
+    }
+
+    private static async Task<bool> EnsureStagingSchemaAsync(
+        NpgsqlConnection connection,
+        string schema,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var exists = new NpgsqlCommand(
+            "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = @schema);",
+            connection
+        )
+        {
+            CommandTimeout = ProbeTimeoutSeconds,
+        };
+        exists.Parameters.AddWithValue("schema", schema);
+        if ((bool)(await exists.ExecuteScalarAsync(cancellationToken))!)
+            return false;
+        await ExecuteAsync(connection, "CREATE SCHEMA " + PostgreSqlIdentifier.Quote(schema) + ";", cancellationToken);
+        return true;
     }
 
     private static async Task<bool> StagingObjectExistsAsync(

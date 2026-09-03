@@ -133,6 +133,38 @@ public sealed class PostgreSqlConnectionProbeTests : IClassFixture<PostgreSqlClo
     }
 
     [Fact]
+    public async Task ProbeAsync_WhenStagingSchemaDoesNotExist_CreatesItForTheProbeAndDropsItAgain()
+    {
+        await using var scope = await PostgreSqlProbeScope.CreateAsync(_fixture, ConnectionRole.Target, false);
+        var staging = "dp_missing_" + Guid.NewGuid().ToString("N");
+        var request = new ConnectionProbeRequest(
+            scope.Profile with
+            {
+                StagingSchema = staging,
+            },
+            ConnectionRole.Target,
+            TransferMode.ResumableStaged,
+            scope.AdminConnectionString
+        );
+
+        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(request, CancellationToken.None);
+        var assessment = ConnectionHealthClassifier.Classify(
+            ConnectionRequirements.For(TransferMode.ResumableStaged, ConnectionRole.Target),
+            evidence
+        );
+
+        Assert.Contains(ConnectionCapability.CanCreateTargetStaging, evidence.Available);
+        Assert.Contains(ConnectionCapability.CanDropTargetStaging, evidence.Available);
+        Assert.Equal(ConnectionHealthState.Healthy, assessment.State);
+        Assert.Contains(evidence.Notes, note => note.Contains(staging, StringComparison.Ordinal));
+        await using var admin = new NpgsqlConnection(scope.AdminConnectionString);
+        await admin.OpenAsync();
+        await using var count = new NpgsqlCommand("SELECT count(*) FROM pg_namespace WHERE nspname = @schema", admin);
+        count.Parameters.AddWithValue("schema", staging);
+        Assert.Equal(0L, (long)(await count.ExecuteScalarAsync())!);
+    }
+
+    [Fact]
     public async Task ProbeAsync_WhenBusinessSchemaDoesNotExist_StillReportsReadCapabilitiesForAnAdmin()
     {
         await using var scope = await PostgreSqlProbeScope.CreateAsync(_fixture, ConnectionRole.Source, false);

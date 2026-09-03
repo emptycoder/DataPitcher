@@ -135,7 +135,9 @@ public sealed class ConnectionHealthServiceTests
             service.RevalidateAsync(run, CancellationToken.None)
         );
 
-        Assert.Equal("Connection health revalidation failed.", exception.Message);
+        Assert.Contains("Target connection", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("is missing", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("CanReadSchema", exception.Message, StringComparison.Ordinal);
         Assert.Equal(
             new[] { ConnectionRole.Source, ConnectionRole.Target },
             detector.Requests.Select(request => request.Role)

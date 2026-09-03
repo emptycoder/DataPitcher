@@ -59,7 +59,7 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
 
         string? cleanupFailureCode = null;
         if (request.Mode is TransferMode.ResumableStaged && permissions.CanCreateStaging)
-            cleanupFailureCode = await ProbeStagingAsync(connection, request, available, cancellationToken);
+            cleanupFailureCode = await ProbeStagingAsync(connection, request, available, notes, cancellationToken);
         if (
             request.Role is ConnectionRole.Source
             && available.Contains(ConnectionCapability.CanCreateSourceStaging)
@@ -112,7 +112,7 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
             "SELECT "
             + AnyGrant("SELECT")
             + ", "
-            + "ISNULL(HAS_PERMS_BY_NAME(@stagingSchema, 'SCHEMA', 'ALTER'), 0), "
+            + "CASE WHEN SCHEMA_ID(@stagingSchema) IS NOT NULL THEN ISNULL(HAS_PERMS_BY_NAME(@stagingSchema, 'SCHEMA', 'ALTER'), 0) ELSE ISNULL(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CREATE SCHEMA'), 0) END, "
             + AnyGrant("INSERT")
             + ", "
             + AnyGrant("ALTER")
@@ -197,19 +197,35 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
         }
     }
 
+    /// <summary>
+    /// Proves staging works the way the transfer will use it: the schema is created when it does not exist yet (the
+    /// transfer creates its own on demand too), a table is created and dropped in it, and a schema created only for
+    /// the probe is dropped again so the check leaves nothing behind.
+    /// </summary>
     private static async Task<string?> ProbeStagingAsync(
         SqlConnection connection,
         ConnectionProbeRequest request,
         ISet<ConnectionCapability> available,
+        List<string> notes,
         CancellationToken cancellationToken
     )
     {
         var name = "dp_probe_" + Guid.NewGuid().ToString("N");
         var created = false;
         var verified = false;
+        var createdSchema = false;
         string? cleanupFailureCode = null;
         try
         {
+            createdSchema = await EnsureStagingSchemaAsync(
+                connection,
+                request.Profile.StagingSchema,
+                cancellationToken
+            );
+            if (createdSchema)
+                notes.Add(
+                    $"Staging schema '{request.Profile.StagingSchema}' does not exist yet; the login can create it."
+                );
             await ExecuteAsync(
                 connection,
                 "CREATE TABLE " + SqlServerIdentifier.Qualified(request.Profile.StagingSchema, name) + " (value int);",
@@ -252,8 +268,40 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
                     cleanupFailureCode = "staging_cleanup_failed";
                 }
             }
+            if (createdSchema && cleanupFailureCode is null)
+            {
+                try
+                {
+                    await ExecuteAsync(
+                        connection,
+                        "DROP SCHEMA " + SqlServerIdentifier.Quote(request.Profile.StagingSchema) + ";",
+                        cancellationToken
+                    );
+                }
+                catch
+                {
+                    // Leaving an empty schema behind is harmless; the transfer would create it anyway.
+                }
+            }
         }
         return cleanupFailureCode;
+    }
+
+    private static async Task<bool> EnsureStagingSchemaAsync(
+        SqlConnection connection,
+        string schema,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var command = new SqlCommand(
+            "IF SCHEMA_ID(@schema) IS NULL BEGIN DECLARE @ddl nvarchar(400) = N'CREATE SCHEMA ' + QUOTENAME(@schema); EXEC(@ddl); SELECT CAST(1 AS bit); END ELSE SELECT CAST(0 AS bit);",
+            connection
+        )
+        {
+            CommandTimeout = ProbeTimeoutSeconds,
+        };
+        command.Parameters.AddWithValue("@schema", schema);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 
     private static async Task<bool> StagingObjectExistsAsync(

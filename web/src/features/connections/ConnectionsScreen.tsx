@@ -163,7 +163,9 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                         { providerId: connection.providerId, connectionId: connection.connectionId },
                         authentication,
                     );
-                    setCheckDetail(detail.missingOptional?.length ? detail : null);
+                    setCheckDetail(
+                        detail.missingOptional?.length || detail.targetMissingRequired?.length ? detail : null,
+                    );
                 } catch {
                     setCheckDetail(null);
                 }
@@ -388,10 +390,24 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                 )}
             </div>
 
-            {checkDetail?.succeeded && checkDetail.missingOptional?.length ? (
-                <Alert tone="info">
-                    <div className="font-medium">Healthy, with a note</div>
-                    <div className="mt-0.5 text-xs opacity-80">Optional: {checkDetail.missingOptional.join(', ')}</div>
+            {checkDetail?.succeeded &&
+            (checkDetail.missingOptional?.length || checkDetail.targetMissingRequired?.length) ? (
+                <Alert tone={checkDetail.targetMissingRequired?.length ? 'warning' : 'info'}>
+                    <div className="font-medium">
+                        {checkDetail.targetMissingRequired?.length
+                            ? 'Healthy as a source, not yet usable as a target'
+                            : 'Healthy, with a note'}
+                    </div>
+                    {checkDetail.targetMissingRequired?.length ? (
+                        <div className="mt-0.5 text-xs opacity-80">
+                            As a target, missing: {checkDetail.targetMissingRequired.join(', ')}
+                        </div>
+                    ) : null}
+                    {checkDetail.missingOptional?.length ? (
+                        <div className="mt-0.5 text-xs opacity-80">
+                            Optional: {checkDetail.missingOptional.join(', ')}
+                        </div>
+                    ) : null}
                     <ProbeNotes notes={checkDetail.notes} />
                 </Alert>
             ) : null}
@@ -1017,6 +1033,13 @@ function ConnectionDialog({
                             ) : null}
                             {testResult.providerVersion ? <span> · {testResult.providerVersion}</span> : null}
                             <span> · {testResult.capabilities.length} capabilities verified</span>
+                            <div className="mt-1 text-xs opacity-80">
+                                {testResult.targetMissingRequired?.length
+                                    ? `Not yet usable as a target, missing: ${testResult.targetMissingRequired.join(', ')}`
+                                    : testResult.targetMissingRequired
+                                      ? 'Usable as a source and as a target.'
+                                      : 'Usable as a source.'}
+                            </div>
                             {testResult.missingOptional?.length ? (
                                 <div className="mt-1 text-xs opacity-80">
                                     Optional, not available: {testResult.missingOptional.join(', ')}

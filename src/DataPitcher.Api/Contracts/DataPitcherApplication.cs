@@ -221,15 +221,42 @@ public sealed class DataPitcherApplication(
                 exception.Message
             );
         }
-        var requirements = ConnectionRequirements.For(TransferMode.DirectFast, ConnectionRole.Source);
+        // The same mode plans are sealed with, so the dialog and the pre-transfer revalidation agree.
+        const TransferMode mode = TransferMode.ResumableStaged;
+        var requirements = ConnectionRequirements.For(mode, ConnectionRole.Source);
         try
         {
             var evidence = await provider.CapabilityDetector.ProbeAsync(
-                new ConnectionProbeRequest(profile, ConnectionRole.Source, TransferMode.DirectFast, connectionString),
+                new ConnectionProbeRequest(profile, ConnectionRole.Source, mode, connectionString),
                 cancellationToken
             );
             var assessment = ConnectionHealthClassifier.Classify(requirements, evidence);
             var usable = ConnectionHealthService.IsUsable(assessment.State);
+            // Targets need more (insert, identity, staging); report that readiness separately.
+            IReadOnlyList<string>? targetMissing = null;
+            var notes = evidence.Notes.ToList();
+            try
+            {
+                var asTarget = ConnectionHealthClassifier.Classify(
+                    ConnectionRequirements.For(mode, ConnectionRole.Target),
+                    await provider.CapabilityDetector.ProbeAsync(
+                        new ConnectionProbeRequest(profile, ConnectionRole.Target, mode, connectionString),
+                        cancellationToken
+                    )
+                );
+                targetMissing = asTarget
+                    .MissingRequired.Select(capability => capability.ToString())
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
+                if (asTarget.CleanupFailureCode is not null)
+                    notes.Add("As a target, the staging probe left an object behind: " + asTarget.CleanupFailureCode);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                notes.Add(
+                    "Target-role probe failed: " + Redact(exception.GetBaseException().Message, connectionString)
+                );
+            }
             return new ConnectionTestResponse(
                 usable,
                 assessment.State.ToString(),
@@ -244,11 +271,12 @@ public sealed class DataPitcherApplication(
                     : evidence.CleanupFailureCode is not null
                         ? "The database was reached but a staging object created by the probe could not be removed."
                     : $"The database was reached but required capabilities are missing (probed schema '{profile.BusinessSchema}').",
-                evidence.Notes,
+                notes,
                 assessment
                     .MissingOptional.Select(capability => capability.ToString())
                     .Order(StringComparer.Ordinal)
-                    .ToArray()
+                    .ToArray(),
+                targetMissing
             );
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
@@ -298,7 +326,7 @@ public sealed class DataPitcherApplication(
         CancellationToken cancellationToken
     )
     {
-        await health.TestAsync(connectionId, TransferMode.DirectFast, ConnectionRole.Source, cancellationToken);
+        await health.TestAsync(connectionId, TransferMode.ResumableStaged, ConnectionRole.Source, cancellationToken);
         return Receipt(connectionId: connectionId);
     }
 

@@ -125,6 +125,34 @@ public sealed class SqlServerConnectionProbeTests(SqlServerClosureFixture fixtur
     }
 
     [Fact]
+    public async Task ProbeAsync_WhenStagingSchemaDoesNotExist_CreatesItForTheProbeAndDropsItAgain()
+    {
+        await using var scope = await SqlServerProbeScope.CreateAsync(fixture, ConnectionRole.Target, false);
+        var staging = "dp_missing_" + Guid.NewGuid().ToString("N");
+        var request = new ConnectionProbeRequest(
+            scope.Profile with
+            {
+                StagingSchema = staging,
+            },
+            ConnectionRole.Target,
+            TransferMode.ResumableStaged,
+            scope.AdminConnectionString
+        );
+
+        var evidence = await new SqlServerConnectionProbe().ProbeAsync(request, CancellationToken.None);
+        var assessment = ConnectionHealthClassifier.Classify(
+            ConnectionRequirements.For(TransferMode.ResumableStaged, ConnectionRole.Target),
+            evidence
+        );
+
+        Assert.Contains(ConnectionCapability.CanCreateTargetStaging, evidence.Available);
+        Assert.Contains(ConnectionCapability.CanDropTargetStaging, evidence.Available);
+        Assert.Equal(ConnectionHealthState.Healthy, assessment.State);
+        Assert.Contains(evidence.Notes, note => note.Contains(staging, StringComparison.Ordinal));
+        Assert.Equal(0, await scope.SchemaCountAsync(staging));
+    }
+
+    [Fact]
     public async Task ProbeAsync_WhenBusinessSchemaDoesNotExist_StillReportsReadCapabilitiesForAnAdmin()
     {
         await using var scope = await SqlServerProbeScope.CreateAsync(fixture, ConnectionRole.Source, false);
@@ -224,6 +252,15 @@ internal sealed class SqlServerProbeScope : IAsyncDisposable
     public string ConnectionString { get; }
     public ConnectionProfile Profile { get; }
     public string AdminConnectionString => _scope.SourceConnectionString;
+
+    public async Task<int> SchemaCountAsync(string schema)
+    {
+        await using var connection = new SqlConnection(_scope.SourceConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand("SELECT COUNT(*) FROM sys.schemas WHERE name = @schema", connection);
+        command.Parameters.AddWithValue("@schema", schema);
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
 
     public static async Task<SqlServerProbeScope> CreateAsync(
         SqlServerClosureFixture fixture,
