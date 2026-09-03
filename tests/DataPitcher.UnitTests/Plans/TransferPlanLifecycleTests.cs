@@ -6,10 +6,12 @@ public sealed class TransferPlanLifecycleTests
     [Fact] public void Plan_WhenConnectionChanges_InvalidatesSeal() => AssertInvalidates("connection");
     [Fact] public void Plan_WhenDatabaseIdentityChanges_InvalidatesSeal() => AssertInvalidates("database identity");
     [Fact] public void Plan_WhenSchemaSnapshotChanges_InvalidatesSeal() => AssertInvalidates("schema snapshot");
+    [Fact] public void Plan_WhenTargetSchemaSnapshotChanges_InvalidatesSeal() => AssertInvalidates("target schema snapshot");
     [Fact] public void Plan_WhenSelectionChanges_InvalidatesSeal() => AssertInvalidates("selection");
     [Fact] public void Plan_WhenSelectionParameterChanges_InvalidatesSeal() => AssertInvalidates("selection parameter");
     [Fact] public void Plan_WhenStableKeyDefinitionChanges_InvalidatesSeal() => AssertInvalidates("stable key");
     [Fact] public void Plan_WhenRelationshipPolicyChanges_InvalidatesSeal() => AssertInvalidates("relationship policy");
+    [Fact] public void Plan_WhenRelationshipColumnOrderChanges_InvalidatesSeal() => AssertInvalidates("relationship column order");
     [Fact] public void Plan_WhenConflictPolicyChanges_InvalidatesSeal() => AssertInvalidates("conflict policy");
     [Fact] public void Plan_WhenColumnMappingChanges_InvalidatesSeal() => AssertInvalidates("column mapping");
     [Fact] public void Plan_WhenTransferModeChanges_InvalidatesSeal() => AssertInvalidates("transfer mode");
