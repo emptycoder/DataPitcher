@@ -7,6 +7,14 @@ export type TransferMonitorState = 'connecting' | 'connected' | 'disconnected' |
 export type TransferMonitorScheduler = Readonly<{ setTimeout: (work: () => void, delay: number) => unknown; clearTimeout: (handle: unknown) => void }>;
 export type TransferMonitorRequest = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+export async function fetchTransferJob(jobId: string, request: TransferMonitorRequest, authentication: AuthenticationAdapter, signal?: AbortSignal): Promise<JobSnapshot> {
+  const token = await authentication.getAccessToken();
+  if (!token) throw new StreamResponseError(401);
+  const response = await request(getJobUrl(jobId), { headers: { Authorization: `Bearer ${token}` }, signal });
+  if (!response.ok) throw new StreamResponseError(response.status);
+  return TransferJobSnapshot.parse(await response.json());
+}
+
 type TransferMonitorOptions = Readonly<{
   job: JobSnapshot;
   request: TransferMonitorRequest;
@@ -28,11 +36,7 @@ export function createTransferMonitor(options: TransferMonitorOptions) {
   let timer: unknown;
 
   async function fetchJob(): Promise<JobSnapshot> {
-    const token = await options.authentication.getAccessToken();
-    if (!token) throw new StreamResponseError(401);
-    const response = await options.request(getJobUrl(job.jobId), { headers: { Authorization: `Bearer ${token}` } });
-    if (!response.ok) throw new StreamResponseError(response.status);
-    return TransferJobSnapshot.parse(await response.json());
+    return fetchTransferJob(job.jobId, options.request, options.authentication, controller?.signal);
   }
 
   function scheduleReconnect(state: TransferMonitorState) {
