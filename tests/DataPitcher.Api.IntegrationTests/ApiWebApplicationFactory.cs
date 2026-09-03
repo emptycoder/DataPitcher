@@ -58,6 +58,11 @@ public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
             services.AddSingleton(EventSignal);
             services.AddAuthentication(TestAuthenticationHandler.SchemeName)
                 .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>(TestAuthenticationHandler.SchemeName, _ => { });
+            services.PostConfigure<AuthenticationOptions>(options =>
+            {
+                options.DefaultAuthenticateScheme = TestAuthenticationHandler.SchemeName;
+                options.DefaultChallengeScheme = TestAuthenticationHandler.SchemeName;
+            });
         });
     }
 
@@ -152,6 +157,8 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public List<string> Invocations { get; } = [];
     public CancellationToken? LastCancellationToken { get; private set; }
     public string? LastIdempotencyKey { get; private set; }
+    public SavePlanRequest? LastPlanRequest { get; private set; }
+    public Exception? StartJobException { get; set; }
     public Func<CancellationToken, Task>? Delay { get; set; }
 
     public Task<IReadOnlyList<ConnectionResponse>> ListConnectionsAsync(CancellationToken cancellationToken) =>
@@ -178,8 +185,11 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public Task<OperationReceiptResponse> QueueSelectionEvaluationAsync(Guid selectionId, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(QueueSelectionEvaluationAsync), cancellationToken, () => Receipt());
 
-    public Task<PlanResponse> SavePlanAsync(Guid planId, SavePlanRequest request, CancellationToken cancellationToken) =>
-        ObserveAsync(nameof(SavePlanAsync), cancellationToken, () => new PlanResponse(planId, 1, null, "etag-1"));
+    public Task<PlanResponse> SavePlanAsync(Guid planId, SavePlanRequest request, CancellationToken cancellationToken)
+    {
+        LastPlanRequest = request;
+        return ObserveAsync(nameof(SavePlanAsync), cancellationToken, () => new PlanResponse(planId, 1, null, "etag-1"));
+    }
 
     public Task<OperationReceiptResponse> QueuePlanSealAsync(Guid planId, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(QueuePlanSealAsync), cancellationToken, () => Receipt(planId: planId));
@@ -193,7 +203,7 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public Task<OperationReceiptResponse> StartJobAsync(Guid planId, string idempotencyKey, CancellationToken cancellationToken)
     {
         LastIdempotencyKey = idempotencyKey;
-        return ObserveAsync(nameof(StartJobAsync), cancellationToken, () => Receipt(planId: planId));
+        return ObserveAsync(nameof(StartJobAsync), cancellationToken, () => StartJobException is null ? Receipt(planId: planId) : throw StartJobException);
     }
 
     public Task<JobResponse> GetJobAsync(Guid jobId, CancellationToken cancellationToken) =>

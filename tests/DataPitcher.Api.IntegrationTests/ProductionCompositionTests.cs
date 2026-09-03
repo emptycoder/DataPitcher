@@ -4,6 +4,7 @@ using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Composition;
 using DataPitcher.Api.Contracts;
 using DataPitcher.Core.Connections;
+using DataPitcher.Core.Plans;
 using DataPitcher.Infrastructure.Connections;
 using DataPitcher.Infrastructure.Events;
 using DataPitcher.Infrastructure.Migrations;
@@ -153,11 +154,68 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
-    public async Task DataPitcherApplication_DelegatesJobOperationsAndProjectsTheLatestEvent()
+    public async Task DataPitcherApplication_RefusesUnsealedPlanJobStarts()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var planId = Guid.NewGuid();
+        _ = await fixture.Application.SavePlanAsync(planId, new SavePlanRequest("Plan", null, "ignored-on-create"), CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<PlanNotSealedException>(() => fixture.Application.StartJobAsync(planId, "job-start", CancellationToken.None));
+
+        Assert.Equal("Plan must be sealed before starting a job.", exception.Message);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_RefusesUnknownPlanJobStarts()
     {
         using var fixture = new ProductionApplicationFixture();
 
-        var started = await fixture.Application.StartJobAsync(Guid.NewGuid(), "job-start", CancellationToken.None);
+        var exception = await Assert.ThrowsAsync<PlanNotFoundException>(() => fixture.Application.StartJobAsync(Guid.NewGuid(), "job-start", CancellationToken.None));
+
+        Assert.Equal("Plan was not found.", exception.Message);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_ReviewIncludesThePlanSelectionAndConnections()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var source = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source"), CancellationToken.None);
+        var target = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Target", "postgresql", Guid.NewGuid(), "target"), CancellationToken.None);
+        var selectionId = Guid.NewGuid();
+        var snapshotId = Guid.NewGuid();
+        _ = await fixture.Selections.SaveAsync(selectionId, "Selection", "{}", "ignored-on-create", CancellationToken.None, source.ConnectionId, snapshotId);
+        var planId = Guid.NewGuid();
+        _ = await fixture.Application.SavePlanAsync(planId, new SavePlanRequest("Plan", null, "ignored-on-create", selectionId, source.ConnectionId, target.ConnectionId), CancellationToken.None);
+
+        var review = await fixture.Application.GetPlanReviewAsync(planId, CancellationToken.None);
+
+        Assert.Equal(selectionId, review.Selection?.SelectionId);
+        Assert.Equal("Selection", review.Selection?.DisplayName);
+        Assert.Equal(source.ConnectionId, review.Selection?.ConnectionId);
+        Assert.Equal(snapshotId, review.Selection?.SnapshotId);
+        Assert.Equal(source.ConnectionId, review.Source?.ConnectionId);
+        Assert.Equal(target.ConnectionId, review.Target?.ConnectionId);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_RejectsPlansWithUnknownSelections()
+    {
+        using var fixture = new ProductionApplicationFixture();
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Application.SavePlanAsync(Guid.NewGuid(), new SavePlanRequest("Plan", null, "ignored-on-create", Guid.NewGuid()), CancellationToken.None));
+
+        Assert.Equal("request", exception.ParamName);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_DelegatesJobOperationsAndProjectsTheLatestEvent()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var planId = Guid.NewGuid();
+        _ = await fixture.Application.SavePlanAsync(planId, new SavePlanRequest("Plan", null, "ignored-on-create"), CancellationToken.None);
+        await fixture.Plans.SealAsync(planId, SealedContent(), CancellationToken.None);
+
+        var started = await fixture.Application.StartJobAsync(planId, "job-start", CancellationToken.None);
         var initial = await fixture.Application.GetJobAsync(started.JobId!.Value, CancellationToken.None);
         await fixture.Events.AppendAsync(new JobEventAppend(started.JobId.Value, "progress", new JobEventPayload("Running", 10, 100)), CancellationToken.None);
         var current = await fixture.Application.GetJobAsync(started.JobId.Value, CancellationToken.None);
@@ -191,6 +249,24 @@ public sealed class ProductionCompositionTests
             ["Secrets:Root"] = secretsRoot,
         }).Build();
 
+    private static TransferPlanContent SealedContent() => new(
+        new ConnectionFingerprint("postgresql", "source", "source"),
+        new ConnectionFingerprint("postgresql", "target", "target"),
+        new SchemaSnapshotReference("source"),
+        new SchemaSnapshotReference("target"),
+        [],
+        [],
+        [],
+        ConsistencyMode.FrozenKeys,
+        TransferMode.DirectFast,
+        TriggerStrategy.Fire,
+        ConstraintStrategy.Enforce,
+        [],
+        [],
+        new BatchTarget(1, 1),
+        VerificationStrategy.Standard,
+        new ManifestCounts(0, 0, 0, 0));
+
     private sealed class ProductionApplicationFixture : IDisposable
     {
         private readonly string _databasePath = Path.Combine(Path.GetTempPath(), $"datapitcher-application-{Guid.NewGuid():N}.db");
@@ -204,12 +280,14 @@ public sealed class ProductionCompositionTests
             Jobs = new JobStore(Database, Clock);
             Events = new JobEventStore(Database, Clock, new JobEventSignal());
             var snapshots = new SchemaSnapshotStore(Database, Clock);
+            Selections = new SelectionStore(Database, Clock);
+            Plans = new PlanStore(Database, Clock);
             Application = new DataPitcherApplication(
                 Profiles,
                 new ConnectionHealthService(Profiles, new SecretReferenceResolver(Path.GetTempPath()), new ConnectionProviderRegistry([new PostgreSqlConnectionProvider()])),
                 snapshots,
-                new SelectionStore(Database, Clock),
-                new PlanStore(Database, Clock),
+                Selections,
+                Plans,
                 Jobs,
                 Events);
         }
@@ -220,6 +298,8 @@ public sealed class ProductionCompositionTests
         public JobEventStore Events { get; }
         public JobStore Jobs { get; }
         public ConnectionProfileStore Profiles { get; }
+        public SelectionStore Selections { get; }
+        public PlanStore Plans { get; }
 
         public Guid SeedSnapshot(Guid connectionId)
         {

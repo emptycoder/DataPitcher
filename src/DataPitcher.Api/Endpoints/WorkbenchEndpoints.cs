@@ -1,8 +1,11 @@
+using System.Security.Claims;
 using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
+using DataPitcher.Core.Authorization;
 using DataPitcher.Core.Selection;
 using DataPitcher.Infrastructure.Schema;
 using DataPitcher.Infrastructure.Selections;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace DataPitcher.Api.Endpoints;
@@ -67,10 +70,11 @@ public static class WorkbenchEndpoints
 
     private static Task<CountResponse> CountAsync(SelectionRequestBody request) => throw new SelectionExecutionNotWiredException();
 
-    private static async Task<Ok<SavedSelectionResponse>> SaveAsync(SelectionRequestBody request, SelectionStore selections, CancellationToken cancellationToken)
+    private static async Task<Results<Ok<SavedSelectionResponse>, ProblemHttpResult>> SaveAsync(SelectionRequestBody request, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, SelectionStore selections, CancellationToken cancellationToken)
     {
+        if (request.ConnectionId is Guid connectionId && await EndpointGroups.AuthorizeResourceAsync(context, authorizationService, user, new ConnectionResource(connectionId), Permissions.ConnectionsRead) is { } problem) return problem;
         var selectionId = Guid.NewGuid();
-        var record = await selections.SaveAsync(selectionId, "", System.Text.Json.JsonSerializer.Serialize(request), "\"0\"", cancellationToken);
+        var record = await selections.SaveAsync(selectionId, "", System.Text.Json.JsonSerializer.Serialize(request), "\"0\"", cancellationToken, request.ConnectionId, request.SnapshotId);
         return TypedResults.Ok(new SavedSelectionResponse(record.SelectionId, record.DisplayName, record.Version, ETag(record.Version), request.Mode, []));
     }
 
