@@ -117,8 +117,8 @@ public sealed class DevelopmentProviderTests
     {
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Authentication:Development:Enabled"] = "true" }).Build();
-        var exception = Assert.Throws<ArgumentException>(() => services.AddDataPitcherAuthenticationProviders(configuration, new TestEnvironment { EnvironmentName = "Test" }));
-        Assert.Equal("Development signing key must be at least 32 bytes. (Parameter 'options')", exception.Message);
+        var exception = Assert.Throws<InvalidOperationException>(() => services.AddDataPitcherAuthenticationProviders(configuration, new TestEnvironment { EnvironmentName = "Test" }));
+        Assert.Equal("Development signing key is required. Set Authentication__Development__SigningKey to a local value of at least 32 bytes.", exception.Message);
     }
 
     [Fact]

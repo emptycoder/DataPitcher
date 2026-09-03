@@ -1,7 +1,9 @@
 using DataPitcher.Api.Authorization;
+using DataPitcher.Api.Composition;
 using DataPitcher.Api.Contracts;
 using DataPitcher.Api.Endpoints;
 using DataPitcher.Api.Errors;
+using DataPitcher.Auth.Hosting;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.OpenApi;
 using System.Text.Json.Nodes;
@@ -11,8 +13,11 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddAuthentication();
+builder.Services.AddDataPitcherAuthenticationProviders(builder.Configuration, builder.Environment);
 builder.Services.AddApiAuthorization();
+builder.Services.AddDevelopmentResourceAccessGrantReader(builder.Configuration);
+builder.Services.AddSingleton<IValidatedAccessTokenLifetime, DevelopmentValidatedAccessTokenLifetime>();
+builder.Services.AddDataPitcherComposition(builder.Configuration);
 builder.Services.AddOpenApi(options =>
 {
     options.AddDocumentTransformer((document, _, _) =>
@@ -50,6 +55,8 @@ builder.Services.AddOpenApi(options =>
 
 var app = builder.Build();
 
+app.Services.ApplyControlDatabaseMigrations();
+
 app.UseExceptionHandler();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -66,6 +73,8 @@ app.MapGet("/api/providers", () => Results.Ok<IReadOnlyList<ProviderResponse>>([
     .AllowAnonymousWithJustification("Provider identifiers and display names are non-sensitive and needed before sign-in to build the connection form.");
 
 EndpointGroups.Map(app);
+SchemaTopologyEndpoints.Map(app);
+WorkbenchEndpoints.Map(app);
 
 app.MapOpenApi()
     .RequireAuthorization(ApiPolicyNames.ConnectionsRead)

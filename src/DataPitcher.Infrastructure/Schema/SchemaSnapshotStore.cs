@@ -79,6 +79,16 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock)
         return new SchemaNeighbourhoodProjection(center, depth, included.OrderBy(item => item.Schema, StringComparer.Ordinal).ThenBy(item => item.Name, StringComparer.Ordinal), snapshot.Content.ForeignKeys.Where(item => included.Contains(item.ChildTable) && included.Contains(item.ParentTable)).OrderBy(item => item.Name, StringComparer.Ordinal).Select(item => new SchemaGraphEdge(item.ChildTable, item.ParentTable, item.Name)));
     }
 
+    public Task<StoredSchemaSnapshot?> GetLatestAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        var row = db.GetTable<SchemaSnapshotRow>().ToArray().OrderByDescending(snapshot => snapshot.CreatedUtc, StringComparer.Ordinal).FirstOrDefault();
+        if (row is null) return Task.FromResult<StoredSchemaSnapshot?>(null);
+        var content = JsonSerializer.Deserialize<SnapshotRow>(row.ContentJson) ?? throw new InvalidOperationException("Schema snapshot is invalid.");
+        return Task.FromResult<StoredSchemaSnapshot?>(new StoredSchemaSnapshot(Guid.Parse(row.SnapshotId), Guid.Parse(row.ConnectionId), row.SnapshotHash, DateTimeOffset.Parse(row.CreatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), FromRow(content)));
+    }
+
     internal Task<SchemaScan?> ClaimNextAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

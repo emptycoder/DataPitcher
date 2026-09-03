@@ -15,6 +15,7 @@ function rejectStoreTransportImports() {
 
 export default defineConfig({
   plugins: [rejectStoreTransportImports(), react(), tailwindcss()],
+  server: { proxy: { '/api': 'http://localhost:5000' } },
   test: {
     environment: 'happy-dom', setupFiles: ['./src/test/setup.ts'], include: ['src/**/*.test.{ts,tsx}'], exclude: ['e2e/**'],
     coverage: {

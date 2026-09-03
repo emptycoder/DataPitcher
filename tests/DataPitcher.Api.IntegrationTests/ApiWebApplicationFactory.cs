@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Text.Encodings.Web;
 using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
+using DataPitcher.Auth.Abstractions.Authorization;
 using DataPitcher.Core.Authorization;
 using DataPitcher.Infrastructure.Events;
 using DataPitcher.Infrastructure.Migrations;
@@ -21,6 +22,7 @@ namespace DataPitcher.Api.IntegrationTests;
 public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly string _databasePath = Path.Combine(Path.GetTempPath(), $"datapitcher-api-{Guid.NewGuid():N}.db");
+    private readonly ControlDatabase _database;
     public FakeDataPitcherApplication Application { get; } = new();
     public TestClock Clock { get; } = new(new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero));
     public JobEventStore Events { get; }
@@ -32,18 +34,24 @@ public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
     internal ApiWebApplicationFactory(IJobEventSignal eventSignal)
     {
         EventSignal = eventSignal;
-        var database = new ControlDatabase($"Data Source={_databasePath}");
-        new ControlDatabaseMigrator(database, Clock).Apply();
-        Events = new(database, Clock, EventSignal);
+        _database = new ControlDatabase($"Data Source={_databasePath}");
+        new ControlDatabaseMigrator(_database, Clock).Apply();
+        Events = new(_database, Clock, EventSignal);
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseSetting("ControlDatabase:Path", _databasePath);
+        builder.UseSetting("Secrets:Root", Path.GetTempPath());
+        builder.UseSetting("Authentication:Development:SigningKey", "api-integration-test-signing-key-32");
         builder.ConfigureServices(services =>
         {
+            services.AddSingleton(_database);
+            services.AddSingleton<IClock>(Clock);
             services.AddSingleton<IDataPitcherApplication>(Application);
             services.AddSingleton<TestResourceAccessGrantReader>();
             services.AddSingleton<IResourceAccessGrantReader>(serviceProvider => serviceProvider.GetRequiredService<TestResourceAccessGrantReader>());
+            services.AddSingleton<IPermissionDecisionResolver, TestPermissionDecisionResolver>();
             services.AddSingleton<IValidatedAccessTokenLifetime, TestValidatedAccessTokenLifetime>();
             services.AddSingleton<IJobEventWriter>(Events);
             services.AddSingleton<IJobEventReader>(Events);
@@ -117,6 +125,18 @@ public sealed class TestResourceAccessGrantReader(IHttpContextAccessor accessor)
         };
         return Task.FromResult(deniedId is null || resourceId != deniedId);
     }
+}
+
+/// <summary>
+/// Reproduces the pre-fix "trust the permission claim" contract exactly, but only inside the test host: the
+/// production <see cref="ClaimsPermissionDecisionResolver"/> never reads this claim, so <see cref="TestAuthenticationHandler"/>
+/// keeps letting individual tests grant an arbitrary exact permission set via the X-Test-Permissions header
+/// without every test having to model role bundles.
+/// </summary>
+public sealed class TestPermissionDecisionResolver : IPermissionDecisionResolver
+{
+    public AuthorizationDecision Resolve(ClaimsPrincipal principal, Permission permission) =>
+        new(principal.HasClaim(ApiClaimTypes.Permission, permission.Value) ? AuthorizationOutcome.Granted : AuthorizationOutcome.Denied, PermissionSet.Empty);
 }
 
 public sealed class TestValidatedAccessTokenLifetime : IValidatedAccessTokenLifetime

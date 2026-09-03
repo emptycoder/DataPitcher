@@ -22,6 +22,8 @@ The supported database design covers SQL Server and PostgreSQL. Same-provider pa
 
 The authentication design supports Microsoft Entra ID, generic OpenID Connect, and a Development-and-Test-only provider. The Development-and-Test provider is excluded from production builds. Authorization is permission-based and protects endpoints by default rather than relying on client-side controls. See [ADR 0006](docs/adr/0006-authentication-and-authorization-architecture.md).
 
+For Development authentication, run `Authentication__Development__SigningKey="$(openssl rand -base64 48)" dotnet run --project src/DataPitcher.Api`.
+
 ## Repository layout
 
 ```text
@@ -38,6 +40,12 @@ The authentication design supports Microsoft Entra ID, generic OpenID Connect, a
 The verified development prerequisites are .NET SDK 10.0.400 and Node v25.2.1. Docker is **not installed** in the current environment. That blocks all container-based testing: Testcontainers integration tests, Docker Compose end-to-end runs, and Playwright browser tests cannot run here. It also means provider-backed discovery, transfer, and compatibility evidence cannot be produced in this environment. Docker does not prevent the provider-free domain algorithm and graph work, but it prevents checking claims that need a live PostgreSQL or SQL Server container or browser environment. This is an external environment blocker, not evidence that the documentation describes a working application.
 
 The next action is to read [`docs/plans/2026-09-02-slice-1-domain-spine.md`](docs/plans/2026-09-02-slice-1-domain-spine.md) and execute Task 1. It creates the initial solution and domain-test scaffold, requires no Docker, and is the first step toward executable evidence rather than a claim that such evidence already exists.
+
+## Git hooks and CI
+
+Install [pre-commit](https://pre-commit.com/) 4.2.0 with `uv tool install pre-commit==4.2.0`; if prompted, run `uv tool update-shell` and restart the shell. Then run `pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push`. It is Python-based, so backend-only contributors do not need `npm install` just to commit.
+
+Pre-commit checks staged backend files with `./scripts/format.sh --check` and staged frontend files with `npm --prefix web run lint`; commit messages must use `type(scope): summary`. Pre-push repeats the two fast checks for the whole repository. CI blocks on backend formatting, frontend linting, the .NET aggregate gate, and the frontend gate; container-based end-to-end jobs remain excluded.
 
 ## Documentation index
 

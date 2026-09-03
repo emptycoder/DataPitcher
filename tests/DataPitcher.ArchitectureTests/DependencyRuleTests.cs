@@ -38,12 +38,18 @@ public sealed class DependencyRuleTests
         Assert.Empty(References(core));
         Assert.Empty(Packages(core));
         var api = Project("DataPitcher.Api");
-        Assert.Equal(["DataPitcher.Auth.Abstractions", "DataPitcher.Core", "DataPitcher.Infrastructure"], References(api).OrderBy(name => name, StringComparer.Ordinal));
+        Assert.Equal(["DataPitcher.Auth.Abstractions", "DataPitcher.Auth.Hosting", "DataPitcher.Core", "DataPitcher.Infrastructure", "DataPitcher.Providers.PostgreSql", "DataPitcher.Providers.SqlServer"], References(api).OrderBy(name => name, StringComparer.Ordinal));
         Assert.DoesNotContain(Projects().Where(p => Path.GetRelativePath(Root, p).StartsWith("src" + Path.DirectorySeparatorChar, StringComparison.Ordinal) && Name(p) != "DataPitcher.Api").SelectMany(References), name => name == "DataPitcher.Api");
     }
     private static string Root { get; }=FindRoot();
     private static string Project(string name)=>Projects().Single(p=>Name(p)==name);
-    private static IEnumerable<string> Projects()=>Directory.GetFiles(Root,"*.csproj",SearchOption.AllDirectories);
+    private static IEnumerable<string> Projects()=>Projects(Root);
+    private static IEnumerable<string> Projects(string directory)
+    {
+        if (directory != Root && (Path.GetFileName(directory) == ".worktrees" || File.Exists(Path.Combine(directory, ".git")) || Directory.Exists(Path.Combine(directory, ".git")))) yield break;
+        foreach (var project in Directory.GetFiles(directory,"*.csproj")) yield return project;
+        foreach (var child in Directory.GetDirectories(directory)) foreach (var project in Projects(child)) yield return project;
+    }
     private static string Name(string project)=>Path.GetFileNameWithoutExtension(project);
     private static IEnumerable<string> References(string project)=>XDocument.Load(project).Descendants("ProjectReference").Select(x=>Path.GetFileNameWithoutExtension(x.Attribute("Include")!.Value));
     private static IEnumerable<string> Packages(string project)=>XDocument.Load(project).Descendants("PackageReference").Select(x=>x.Attribute("Include")!.Value);

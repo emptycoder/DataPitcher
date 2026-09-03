@@ -1,0 +1,13 @@
+{
+  "printWidth": 120,
+  "useTabs": false,
+  "indentSize": 4,
+  "endOfLine": "lf",
+  "xmlWhitespaceSensitivity": "strict",
+  "overrides": [
+    {
+      "files": "*.{csproj,props,targets,xml,xaml}",
+      "indentSize": 2
+    }
+  ]
+}
