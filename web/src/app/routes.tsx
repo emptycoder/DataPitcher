@@ -4,6 +4,7 @@ import { ConnectionsScreen } from '../features/connections/ConnectionsScreen';
 import { PlanReview } from '../features/plans/PlanReview';
 import { PlanReviewScreen } from '../features/plans/PlanReviewScreen';
 import { SelectionWorkbenchScreen } from '../features/selections/SelectionWorkbenchScreen';
+import { JobDetailScreen, JobsListScreen } from '../features/jobs/JobsScreens';
 import { TransferMonitorScreen } from '../features/transfers/TransferMonitorScreen';
 import { DependencyGraphScreen } from '../graph/DependencyGraphScreen';
 import { createElkLayoutAdapter } from '../graph/elkLayout';
@@ -43,6 +44,10 @@ function transferMonitorRoute(params: RouteParams, context: RouteContext) {
   return <TransferMonitorScreen jobId={params.jobId ?? null} request={fetch} authentication={context.authentication} clock={Date.now} scheduler={reconnectScheduler} />;
 }
 
+function jobsRoute(params: RouteParams, context: RouteContext) {
+  return params.jobId ? <JobDetailScreen jobId={params.jobId} authentication={context.authentication} /> : <JobsListScreen />;
+}
+
 export const routes = [
   { path: '/connections', label: 'Connections', render: connectionsRoute },
   { path: '/dependency-graph/:planId?', label: 'Schema graph', render: dependencyGraphRoute },
@@ -50,4 +55,5 @@ export const routes = [
   { path: '/plan-review/:planId?', label: 'Plan review', render: planReviewRoute },
   { path: '/plans/:planId/review', label: 'Plan review', render: (params, context) => <PlanReview planId={params.planId!} authentication={context.authentication} /> },
   { path: '/transfer-monitor/:jobId?', label: 'Transfer monitor', render: transferMonitorRoute },
+  { path: '/jobs/:jobId?', label: 'Transfer jobs', render: jobsRoute },
 ] satisfies readonly RouteRecord[];
