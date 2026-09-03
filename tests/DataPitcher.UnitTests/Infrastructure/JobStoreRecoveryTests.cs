@@ -141,6 +141,19 @@ public sealed class JobStoreRecoveryTests
     }
 
     [Fact]
+    public async Task JobStore_WhenWorkerSucceeds_PersistsTheTerminalTransitionAndReleasesTheLease()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock); var job = store.Start(new(Guid.NewGuid(), "start-succeeded")).Job; var claim = (await store.TryClaimNextAsync("worker-a", TimeSpan.FromMinutes(1), CancellationToken.None))!;
+        await store.PrepareAsync(claim, CancellationToken.None); await store.MarkRunningAsync(claim.Lease, CancellationToken.None); await store.MarkVerifyingAsync(claim.Lease, CancellationToken.None);
+        var method = Assert.Single(typeof(JobStore).GetMethods(), item => item.Name == "MarkSucceededAsync");
+
+        await (Task)method.Invoke(store, [claim.Lease, CancellationToken.None])!;
+
+        using var db = fixture.Database.Open();
+        Assert.Equal(JobState.Succeeded, await store.GetStateAsync(job.JobId, CancellationToken.None)); Assert.Contains(store.GetHistory(job.JobId), transition => transition == (JobState.Verifying, JobState.Succeeded)); Assert.Null(db.Query<string?>("SELECT OwnerId FROM JobLeases WHERE JobId = @jobId", new DataParameter("jobId", job.JobId.ToString())).Single());
+    }
+
+    [Fact]
     public async Task CheckpointMirrorStore_WhenTargetCheckpointAdvances_ReplacesTheDisplayCopy()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var job = fixture.SeedJob(); var run = Guid.NewGuid(); var mirror = new CheckpointMirrorStore(fixture.Database);

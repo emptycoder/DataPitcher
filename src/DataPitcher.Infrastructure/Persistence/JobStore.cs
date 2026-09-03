@@ -63,6 +63,7 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobContr
     public Task MarkPausedAsync(LeaseGrant lease, CancellationToken cancellationToken) => TransitionWorkerAsync(lease, JobState.Paused, null, true, cancellationToken);
     public Task MarkCancelledAsync(LeaseGrant lease, CancellationToken cancellationToken) => TransitionWorkerAsync(lease, JobState.Cancelled, null, true, cancellationToken);
     public Task MarkVerifyingAsync(LeaseGrant lease, CancellationToken cancellationToken) => TransitionWorkerAsync(lease, JobState.Verifying, null, false, cancellationToken);
+    public Task MarkSucceededAsync(LeaseGrant lease, CancellationToken cancellationToken) => TransitionWorkerAsync(lease, JobState.Succeeded, null, true, cancellationToken);
     public Task MarkFailedAsync(LeaseGrant lease, string failureCode, CancellationToken cancellationToken) => TransitionWorkerAsync(lease, JobState.Failed, failureCode, true, cancellationToken);
 
     public JobTransitionResult TryTransition(LeaseGrant lease, JobState to)

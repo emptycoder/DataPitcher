@@ -66,6 +66,7 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
         }
         await jobs.MarkVerifyingAsync(claim.Lease, leaseLost.Token);
         await events.AppendAsync(new JobEventAppend(claim.Job.JobId, "state", new JobEventPayload("verifying", checkpoint.RowCount, checkpoint.BytesTransferred)), leaseLost.Token);
+        await jobs.MarkSucceededAsync(claim.Lease, leaseLost.Token);
     }
     catch (Exception) when (!stoppingToken.IsCancellationRequested)
     {

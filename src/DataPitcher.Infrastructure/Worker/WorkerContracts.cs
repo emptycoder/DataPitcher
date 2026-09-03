@@ -61,5 +61,6 @@ public interface IJobControl
     Task MarkPausedAsync(LeaseGrant lease, CancellationToken cancellationToken);
     Task MarkCancelledAsync(LeaseGrant lease, CancellationToken cancellationToken);
     Task MarkVerifyingAsync(LeaseGrant lease, CancellationToken cancellationToken);
+    Task MarkSucceededAsync(LeaseGrant lease, CancellationToken cancellationToken);
     Task MarkFailedAsync(LeaseGrant lease, string failureCode, CancellationToken cancellationToken);
 }
