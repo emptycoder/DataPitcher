@@ -16,6 +16,11 @@ vi.mock('../graph/DependencyGraphView', async () => {
   };
 });
 
+vi.mock('../features/connections/ConnectionsScreen', () => ({ ConnectionsScreen: () => <section aria-label="Connections screen" /> }));
+vi.mock('../features/selections/SelectionWorkbenchScreen', () => ({ SelectionWorkbenchScreen: () => <section aria-label="Selection workbench screen" /> }));
+vi.mock('../features/plans/PlanReviewScreen', () => ({ PlanReviewScreen: () => <section aria-label="Plan review screen" /> }));
+vi.mock('../features/transfers/TransferMonitorScreen', () => ({ TransferMonitorScreen: () => <section aria-label="Transfer monitor screen" /> }));
+
 import { App } from './App';
 import { AppProviders } from './AppProviders';
 
@@ -35,7 +40,7 @@ it('hosts the graph route without fabricating a selected plan', () => {
   window.history.replaceState(null, '', '/dependency-graph');
   render(<AppProviders><App /></AppProviders>);
 
-  expect(screen.getByRole('link', { name: 'Dependency graph' })).toHaveAttribute('href', '/dependency-graph');
+  expect(screen.getByRole('link', { name: 'Schema graph' })).toHaveAttribute('href', '/dependency-graph');
   expect(screen.getByRole('status')).toHaveTextContent('Choose a transfer plan to view its dependencies.');
 });
 
@@ -50,4 +55,18 @@ it('uses the route plan as the graph context', async () => {
   render(<AppProviders><App /></AppProviders>);
 
   expect(await screen.findByLabelText('Visible tables')).toHaveTextContent('customers,orders');
+});
+
+it.each([
+  ['/connections', 'Connections screen'],
+  ['/selection-workbench', 'Selection workbench screen'],
+  ['/plan-review/plan-1', 'Plan review screen'],
+  ['/transfer-monitor/job-1', 'Transfer monitor screen'],
+])('routes the shell to %s', (path, screenName) => {
+  window.history.replaceState(null, '', path);
+  render(<AppProviders><App /></AppProviders>);
+
+  expect(screen.getByRole('main')).toBeVisible();
+  expect(screen.getByRole('region', { name: screenName })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Connections' })).toHaveAttribute('href', '/connections');
 });
