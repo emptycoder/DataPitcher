@@ -15,7 +15,7 @@ function selection(alias = 'o'): VisualSelection {
 }
 
 function Probe() {
-  return <output role="status">{`${useDraftMode()}|${useDraftTab()}|${useDraftDirty()}|${useDraftSelectionName()}|${usePendingVisualConfirmation()}`}</output>;
+  return <output>{`${useDraftMode()}|${useDraftTab()}|${useDraftDirty()}|${useDraftSelectionName()}|${usePendingVisualConfirmation()}`}</output>;
 }
 
 afterEach(() => {

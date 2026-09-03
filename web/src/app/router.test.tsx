@@ -4,7 +4,7 @@ import { Link, navigate, useLocationPath } from './router';
 
 function LocationProbe() {
   const pathname = useLocationPath();
-  return <output role="status">{pathname}</output>;
+  return <output>{pathname}</output>;
 }
 
 afterEach(() => {

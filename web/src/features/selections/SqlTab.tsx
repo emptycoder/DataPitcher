@@ -25,15 +25,16 @@ export function SqlTab({ adapter, permissions, snapshot, mode, pendingVisualConf
   const previousSnapshot = useRef(snapshot);
   const currentActions = useRef(actions);
   const canEdit = permissions.has('Selections.RawSql');
-  const currentCanEdit = useRef(canEdit);
-  currentActions.current = actions;
-  currentCanEdit.current = canEdit;
 
   useEffect(() => {
-    const currentModel = adapter.createModel(snapshot);
+    currentActions.current = actions;
+  }, [actions]);
+
+  useEffect(() => {
+    const currentModel = adapter.createModel(previousSnapshot.current);
     const currentEditor = adapter.createEditor(container.current!, currentModel, { readOnly: !canEdit });
     const listener = currentEditor.onDidChangeModelContent(() => {
-      if (!synchronizing.current && currentCanEdit.current) currentActions.current.editRawSql(currentModel.getValue());
+      if (!synchronizing.current && canEdit) currentActions.current.editRawSql(currentModel.getValue());
     });
     const resizeObserver = new ResizeObserver(() => currentEditor.layout());
     resizeObserver.observe(container.current!);

@@ -10,10 +10,13 @@ import { productionVirtualizerAdapter, type VirtualizerAdapter } from './virtual
 import { createWorkbenchPreferences } from './workbenchPreferences';
 
 const virtualizer = vi.hoisted(() => ({
-  useVirtualizer: vi.fn((_options: { count: number; getScrollElement: () => Element | null; estimateSize: () => number }) => ({
-    getTotalSize: () => 66,
-    getVirtualItems: () => [{ index: 1, start: 33 }],
-  })),
+  useVirtualizer: vi.fn((options: { count: number; getScrollElement: () => Element | null; estimateSize: () => number }) => {
+    void options;
+    return {
+      getTotalSize: () => 66,
+      getVirtualItems: () => [{ index: 1, start: 33 }],
+    };
+  }),
 }));
 
 vi.mock('@tanstack/react-virtual', () => virtualizer);

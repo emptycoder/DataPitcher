@@ -1,4 +1,5 @@
 import { QueryClient, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { createDevelopmentAuthenticationAdapter } from '../auth/authAdapter';
@@ -8,10 +9,10 @@ import { fetchEffectivePermissions } from './effectivePermissionsApi';
 import { effectivePermissionsQueryOptions } from './effectivePermissionsQuery';
 
 const principal = { subjectId: 'operator-1', tenantId: 'tenant-1' };
-let observedClient: QueryClient | undefined;
-function QueryClientProbe() {
-  observedClient = useQueryClient();
-  return <output role="status">query-ready</output>;
+function QueryClientProbe({ onClient }: Readonly<{ onClient: (client: QueryClient) => void }>) {
+  const client = useQueryClient();
+  useEffect(() => { onClient(client); }, [client, onClient]);
+  return <output>query-ready</output>;
 }
 
 it('validates injected-fetch data before Query resolves it', async () => {
@@ -34,10 +35,11 @@ it('rejects an absent token and retains an injected or default Query client', as
   await authentication.signOut();
   await expect(fetchEffectivePermissions(vi.fn(), authentication, new AbortController().signal)).rejects.toThrow('Not authenticated.');
   const injected = new QueryClient();
-  const { unmount } = render(<AppProviders client={injected}><QueryClientProbe /></AppProviders>);
+  const observedClients: QueryClient[] = [];
+  const { unmount } = render(<AppProviders client={injected}><QueryClientProbe onClient={(client) => observedClients.push(client)} /></AppProviders>);
   expect(screen.getByRole('status')).toHaveTextContent('query-ready');
-  expect(observedClient).toBe(injected);
+  expect(observedClients.at(-1)).toBe(injected);
   unmount();
-  render(<AppProviders><QueryClientProbe /></AppProviders>);
-  expect(observedClient).toBeInstanceOf(QueryClient);
+  render(<AppProviders><QueryClientProbe onClient={(client) => observedClients.push(client)} /></AppProviders>);
+  expect(observedClients.at(-1)).toBeInstanceOf(QueryClient);
 });

@@ -13,7 +13,7 @@ it('shows target-satisfied rows and explains that differing non-key values are n
     ...reviewWire,
     tables: [...reviewWire.tables, { ...reviewWire.tables[0]!, state: 'TargetSatisfied', plannedWrites: 0, inserts: 0, updates: 0 }],
   };
-  const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(review), { status: 200 }));
+  const request = vi.fn(async () => new Response(JSON.stringify(review), { status: 200 }));
 
   render(<AppProviders client={new QueryClient()}><PlanReviewScreen planId={planId} request={request} authentication={createDevelopmentAuthenticationAdapter({ subjectId: 'operator-1', tenantId: 'tenant-1' }, 'memory-token')} onJobStarted={vi.fn()} /></AppProviders>);
 
@@ -23,7 +23,7 @@ it('shows target-satisfied rows and explains that differing non-key values are n
 
 it('starts an eligible plan with an idempotency key and reports its job identifier', async () => {
   const onJobStarted = vi.fn();
-  const request = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(String(input).endsWith('/jobs')
+  const request = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).endsWith('/jobs')
     ? { operationId: '33333333-3333-4333-8333-333333333333', state: 'queued', jobId: '22222222-2222-4222-8222-222222222222' }
     : reviewWire), { status: String(input).endsWith('/jobs') ? 202 : 200 }));
   vi.stubGlobal('crypto', { randomUUID: () => 'idempotency-key' });
