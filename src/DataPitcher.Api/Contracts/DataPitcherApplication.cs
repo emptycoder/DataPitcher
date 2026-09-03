@@ -16,10 +16,8 @@ public sealed class PlanNotSealedException() : InvalidOperationException("Plan m
 
 /// <summary>
 /// Production <see cref="IDataPitcherApplication"/> delegating to the real control-database stores and connection
-/// services. Connection, schema-scan/snapshot, and job workflows are backed by durable, tested Infrastructure
-/// services. Selection and plan drafts are persisted for real, but no dependency-closure/plan-sealing engine exists
-/// in Infrastructure yet: <see cref="GetPlanReviewAsync"/> honestly reports an unsealed plan rather than fabricating
-/// totals, and <see cref="GetPlanInclusionPathAsync"/> throws until that engine is built.
+/// services. Connection, schema-scan/snapshot, selection, plan sealing, and job workflows are backed by durable,
+/// tested Infrastructure services. Inclusion-path lookup requires persisted closure provenance.
 /// </summary>
 public sealed class DataPitcherApplication(
     ConnectionProfileStore connections,
@@ -28,7 +26,8 @@ public sealed class DataPitcherApplication(
     SelectionStore selections,
     PlanStore plans,
     JobStore jobs,
-    IJobEventReader jobEvents) : IDataPitcherApplication
+    IJobEventReader jobEvents,
+    PlanSealingService? sealing = null) : IDataPitcherApplication
 {
     private const string DefaultBusinessSchema = "app";
     private const string DefaultStagingSchema = "__datapitcher";
@@ -107,7 +106,9 @@ public sealed class DataPitcherApplication(
 
     public async Task<OperationReceiptResponse> QueuePlanSealAsync(Guid planId, CancellationToken cancellationToken)
     {
-        _ = await plans.FindAsync(planId, cancellationToken) ?? throw new InvalidOperationException("Plan was not found.");
+        var plan = await plans.FindAsync(planId, cancellationToken) ?? throw new InvalidOperationException("Plan was not found.");
+        if (plan.SelectionId is not null && plan.SourceConnectionId is not null && plan.TargetConnectionId is not null)
+            await (sealing ?? throw new InvalidOperationException("Plan sealing is not configured.")).SealAsync(planId, cancellationToken);
         return Receipt(planId: planId);
     }
 
@@ -117,6 +118,23 @@ public sealed class DataPitcherApplication(
         var selection = record.SelectionId is Guid selectionId ? await selections.FindAsync(selectionId, cancellationToken) ?? throw new ArgumentException("Selection was not found.") : null;
         var source = record.SourceConnectionId is Guid sourceConnectionId ? ToConnectionResponse(await connections.GetSummaryAsync(sourceConnectionId, cancellationToken)) : null;
         var target = record.TargetConnectionId is Guid targetConnectionId ? ToConnectionResponse(await connections.GetSummaryAsync(targetConnectionId, cancellationToken)) : null;
+        var content = await plans.LoadContentAsync(planId, cancellationToken);
+        if (content is not null)
+            return new PlanReviewResponse(
+                record.PlanId,
+                checked((int)record.Version),
+                record.CanonicalHash ?? "",
+                new PlanReviewSealResponse("sealed", []),
+                new PlanReviewTotalsResponse(content.ManifestTotals.Included, content.ManifestTotals.PlannedWrites, content.ManifestTotals.Inserts, content.ManifestTotals.Updates, 0),
+                [],
+                content.Tables.Select((table, index) => new PlanReviewTableResponse(new PlanReviewAddressResponse(table.Mapping.Source.Schema, table.Mapping.Source.Name), new PlanReviewAddressResponse(table.Mapping.Target.Schema, table.Mapping.Target.Name), table.State.ToString(), index, table.Manifest.Included, table.Manifest.PlannedWrites, table.Manifest.Inserts, table.Manifest.Updates, 0, table.Mapping.Columns.Select(column => new PlanReviewColumnResponse(column.Source, column.Target)).ToArray())).ToArray(),
+                content.ConflictPolicies.Select(policy => new PlanReviewConflictResponse(policy.Table.Schema + "." + policy.Table.Name, policy.Policy.ToString(), "")).ToArray(),
+                [],
+                [],
+                [],
+                selection is null ? null : new PlanReviewSelectionResponse(selection.SelectionId, selection.DisplayName, selection.ConnectionId, selection.SnapshotId),
+                source,
+                target);
         var notSealed = new PlanReviewMessageResponse("plan_not_sealed", "This plan has not completed sealing.");
         return new PlanReviewResponse(
             record.PlanId,

@@ -17,9 +17,11 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         string target,
         SqlServerSchemaSnapshot sourceSchema,
         SqlServerSchemaSnapshot targetSchema,
-        IReadOnlyDictionary<TableDefinition, StableKeySelection> keys)
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> keys,
+        Guid? planId = null,
+        bool dropOnDispose = true)
     {
-        _stages = new SqlServerStagingTables(source, target, sourceSchema, keys);
+        _stages = new SqlServerStagingTables(source, target, sourceSchema, keys, planId, dropOnDispose);
         _source = sourceSchema;
         _target = targetSchema;
         _keys = keys;

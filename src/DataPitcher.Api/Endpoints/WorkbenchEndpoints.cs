@@ -73,8 +73,9 @@ public static class WorkbenchEndpoints
     private static async Task<Results<Ok<SavedSelectionResponse>, ProblemHttpResult>> SaveAsync(SelectionRequestBody request, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, SelectionStore selections, CancellationToken cancellationToken)
     {
         if (request.ConnectionId is Guid connectionId && await EndpointGroups.AuthorizeResourceAsync(context, authorizationService, user, new ConnectionResource(connectionId), Permissions.ConnectionsRead) is { } problem) return problem;
+        if (string.IsNullOrWhiteSpace(request.RootSchema) || string.IsNullOrWhiteSpace(request.RootTable) || string.IsNullOrWhiteSpace(request.StableKeyConstraintName) || request.StableKeyColumns is not { Count: > 0 } || request.StableKeyColumns.Any(string.IsNullOrWhiteSpace)) throw new ArgumentException("Selection root table and stable key must be specified.", nameof(request));
         var selectionId = Guid.NewGuid();
-        var record = await selections.SaveAsync(selectionId, "", System.Text.Json.JsonSerializer.Serialize(request), "\"0\"", cancellationToken, request.ConnectionId, request.SnapshotId);
+        var record = await selections.SaveAsync(selectionId, "", System.Text.Json.JsonSerializer.Serialize(request), "\"0\"", cancellationToken, request.ConnectionId, request.SnapshotId, request.RootSchema, request.RootTable, request.StableKeyConstraintName, request.StableKeyColumns);
         return TypedResults.Ok(new SavedSelectionResponse(record.SelectionId, record.DisplayName, record.Version, ETag(record.Version), request.Mode, []));
     }
 
