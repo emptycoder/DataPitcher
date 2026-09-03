@@ -125,6 +125,60 @@ public sealed class SqlServerConnectionProbeTests(SqlServerClosureFixture fixtur
     }
 
     [Fact]
+    public async Task ProbeAsync_WhenBusinessSchemaDoesNotExist_StillReportsReadCapabilitiesForAnAdmin()
+    {
+        await using var scope = await SqlServerProbeScope.CreateAsync(fixture, ConnectionRole.Source, false);
+        var request = new ConnectionProbeRequest(
+            scope.Profile with
+            {
+                BusinessSchema = "app",
+            },
+            ConnectionRole.Source,
+            TransferMode.DirectFast,
+            scope.AdminConnectionString
+        );
+
+        var evidence = await new SqlServerConnectionProbe().ProbeAsync(request, CancellationToken.None);
+
+        Assert.Contains(ConnectionCapability.CanReadSchema, evidence.Available);
+        Assert.Contains(ConnectionCapability.CanReadBusinessRows, evidence.Available);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_WhenOnlyOneTableIsReadable_ReportsReadCapabilitiesWithoutSchemaGrants()
+    {
+        await using var scope = await SqlServerProbeScope.CreateAsync(
+            fixture,
+            ConnectionRole.Source,
+            false,
+            grantStaging: false,
+            singleTableOnly: true
+        );
+
+        var evidence = await new SqlServerConnectionProbe().ProbeAsync(
+            scope.Request(TransferMode.DirectFast),
+            CancellationToken.None
+        );
+        var elsewhere = await new SqlServerConnectionProbe().ProbeAsync(
+            new ConnectionProbeRequest(
+                scope.Profile with
+                {
+                    BusinessSchema = "app",
+                },
+                ConnectionRole.Source,
+                TransferMode.DirectFast,
+                scope.ConnectionString
+            ),
+            CancellationToken.None
+        );
+
+        Assert.Contains(ConnectionCapability.CanReadSchema, evidence.Available);
+        Assert.Contains(ConnectionCapability.CanReadBusinessRows, evidence.Available);
+        Assert.Contains(ConnectionCapability.CanReadBusinessRows, elsewhere.Available);
+        Assert.DoesNotContain(ConnectionCapability.CanBulkInsert, evidence.Available);
+    }
+
+    [Fact]
     public async Task ReadAsync_ConvertsTheExistingCatalogReaderResult()
     {
         await using var scope = await SqlServerProbeScope.CreateAsync(fixture, ConnectionRole.Source, false);
@@ -169,13 +223,15 @@ internal sealed class SqlServerProbeScope : IAsyncDisposable
 
     public string ConnectionString { get; }
     public ConnectionProfile Profile { get; }
+    public string AdminConnectionString => _scope.SourceConnectionString;
 
     public static async Task<SqlServerProbeScope> CreateAsync(
         SqlServerClosureFixture fixture,
         ConnectionRole role,
         bool denyDrop,
         bool grantStaging = true,
-        bool denyCreate = false
+        bool denyCreate = false,
+        bool singleTableOnly = false
     )
     {
         var scope = await fixture.CreateScopeAsync();
@@ -189,7 +245,10 @@ internal sealed class SqlServerProbeScope : IAsyncDisposable
         await using var database = new SqlConnection(scope.SourceConnectionString);
         await database.OpenAsync();
         await ExecuteAsync(database, $"CREATE USER {Quote(login)} FOR LOGIN {Quote(login)};");
-        await ExecuteAsync(database, $"GRANT SELECT ON SCHEMA::[dbo] TO {Quote(login)};");
+        if (singleTableOnly)
+            await ExecuteAsync(database, $"GRANT SELECT ON OBJECT::dbo.customers TO {Quote(login)};");
+        else
+            await ExecuteAsync(database, $"GRANT SELECT ON SCHEMA::[dbo] TO {Quote(login)};");
         await ExecuteAsync(database, "GRANT CREATE TABLE TO " + Quote(login) + ";");
         await ExecuteAsync(database, $"CREATE SCHEMA {Quote(stagingSchema)} AUTHORIZATION dbo;");
         if (grantStaging)

@@ -39,8 +39,21 @@ public sealed class DataPitcherApplication(
     ISecretReferenceResolver? secretResolver = null
 ) : IDataPitcherApplication
 {
-    private const string DefaultBusinessSchema = "app";
     private const string DefaultStagingSchema = "__datapitcher";
+
+    /// <summary>The schema most databases keep their tables in, unless the operator names another.</summary>
+    private static string DefaultBusinessSchema(string providerId) =>
+        string.Equals(providerId, "postgresql", StringComparison.OrdinalIgnoreCase) ? "public" : "dbo";
+
+    private static string BusinessSchemaOrDefault(string? requested, string providerId, string? fallback = null)
+    {
+        var schema = requested?.Trim();
+        if (string.IsNullOrEmpty(schema))
+            return fallback ?? DefaultBusinessSchema(providerId);
+        if (schema.Length > 128)
+            throw new ArgumentException("Schema names are at most 128 characters.", nameof(requested));
+        return schema;
+    }
 
     public async Task<IReadOnlyList<ConnectionResponse>> ListConnectionsAsync(CancellationToken cancellationToken)
     {
@@ -62,7 +75,7 @@ public sealed class DataPitcherApplication(
             request.DisplayName,
             request.ProviderId,
             secretReference,
-            DefaultBusinessSchema,
+            BusinessSchemaOrDefault(request.BusinessSchema, request.ProviderId),
             DefaultStagingSchema
         );
         var idempotencyKey = request.IfMatch.Trim() == "*" ? request.CredentialId.ToString("N") : request.IfMatch;
@@ -101,7 +114,7 @@ public sealed class DataPitcherApplication(
                 request.DisplayName,
                 request.ProviderId,
                 secretReference,
-                existing.BusinessSchema,
+                BusinessSchemaOrDefault(request.BusinessSchema, request.ProviderId, existing.BusinessSchema),
                 existing.StagingSchema
             ),
             request.IfMatch,
@@ -121,7 +134,13 @@ public sealed class DataPitcherApplication(
         var profile = await connections.GetProfileAsync(connectionId, cancellationToken);
         var stored = await ResolveSecretAsync(profile, cancellationToken);
         var (redacted, hasPassword) = ConnectionStringSecrets.Redact(stored);
-        return new ConnectionDetailsResponse(profile.ConnectionId, profile.ProviderId, redacted, hasPassword);
+        return new ConnectionDetailsResponse(
+            profile.ConnectionId,
+            profile.ProviderId,
+            redacted,
+            hasPassword,
+            profile.BusinessSchema
+        );
     }
 
     private Task<string> ResolveSecretAsync(ConnectionProfile profile, CancellationToken cancellationToken) =>
@@ -160,7 +179,7 @@ public sealed class DataPitcherApplication(
                 "connection test",
                 request.ProviderId,
                 new SecretReference(SecretReferenceKind.EnvironmentVariable, "DATAPITCHER_CONNECTION_TEST"),
-                DefaultBusinessSchema,
+                BusinessSchemaOrDefault(request.BusinessSchema, request.ProviderId),
                 DefaultStagingSchema,
                 0
             );

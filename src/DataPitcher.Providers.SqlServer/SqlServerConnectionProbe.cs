@@ -77,6 +77,13 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
         return (reader.GetString(0), reader.GetString(1));
     }
 
+    /// <summary>
+    /// Asks for the least privilege that lets DataPitcher do its job. Reading the schema only needs the catalog
+    /// views, which every connected principal can query for the objects it can see. Reading or writing rows is
+    /// satisfied by a database-wide grant, a grant on the business schema, or a grant on at least one user table:
+    /// the tables that matter are only known when a plan is sealed, and that step verifies them exactly. A business
+    /// schema that does not exist in this database counts as "no grant" instead of failing the probe.
+    /// </summary>
     private static async Task<(
         bool CanReadSchema,
         bool CanReadBusinessRows,
@@ -86,28 +93,63 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
         bool CanUseSnapshotIsolation
     )> ReadPermissionsAsync(SqlConnection connection, ConnectionProfile profile, CancellationToken cancellationToken)
     {
-        const string sql =
-            "SELECT HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CONNECT'), "
-            + "HAS_PERMS_BY_NAME(@businessSchema, 'SCHEMA', 'SELECT'), "
-            + "HAS_PERMS_BY_NAME(@businessSchema, 'SCHEMA', 'SELECT'), "
-            + "HAS_PERMS_BY_NAME(@stagingSchema, 'SCHEMA', 'ALTER'), "
-            + "HAS_PERMS_BY_NAME(@businessSchema, 'SCHEMA', 'INSERT'), "
-            + "HAS_PERMS_BY_NAME(@businessSchema, 'SCHEMA', 'ALTER'), "
-            + "(SELECT snapshot_isolation_state FROM sys.databases WHERE name=DB_NAME());";
+        var canReadSchema = await CanReadCatalogAsync(connection, cancellationToken);
+        var sql =
+            "SELECT "
+            + AnyGrant("SELECT")
+            + ", "
+            + "ISNULL(HAS_PERMS_BY_NAME(@stagingSchema, 'SCHEMA', 'ALTER'), 0), "
+            + AnyGrant("INSERT")
+            + ", "
+            + AnyGrant("ALTER")
+            + ", "
+            + "ISNULL((SELECT snapshot_isolation_state FROM sys.databases WHERE name = DB_NAME()), 0);";
         await using var command = new SqlCommand(sql, connection) { CommandTimeout = 5 };
         command.Parameters.AddWithValue("@businessSchema", profile.BusinessSchema);
         command.Parameters.AddWithValue("@stagingSchema", profile.StagingSchema);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
-        _ = reader.GetInt32(0);
         return (
+            canReadSchema,
+            reader.GetInt32(0) != 0,
             reader.GetInt32(1) != 0,
             reader.GetInt32(2) != 0,
             reader.GetInt32(3) != 0,
-            reader.GetInt32(4) != 0,
-            reader.GetInt32(5) != 0,
-            reader.GetByte(6) != 0
+            reader.GetByte(4) != 0
         );
+    }
+
+    /// <summary>1 when the permission is held on the database, on the business schema, or on any user table.</summary>
+    private static string AnyGrant(string permission) =>
+        "CASE WHEN ISNULL(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', '"
+        + permission
+        + "'), 0) = 1"
+        + " OR ISNULL(HAS_PERMS_BY_NAME(@businessSchema, 'SCHEMA', '"
+        + permission
+        + "'), 0) = 1"
+        + " OR EXISTS (SELECT 1 FROM sys.tables t WHERE HAS_PERMS_BY_NAME(QUOTENAME(SCHEMA_NAME(t.schema_id)) + '.' + QUOTENAME(t.name), 'OBJECT', '"
+        + permission
+        + "') = 1)"
+        + " THEN 1 ELSE 0 END";
+
+    private static async Task<bool> CanReadCatalogAsync(SqlConnection connection, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var command = new SqlCommand(
+                "SELECT COUNT(*) FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id JOIN sys.columns c ON c.object_id = t.object_id;",
+                connection
+            )
+            {
+                CommandTimeout = 5,
+            };
+            _ = await command.ExecuteScalarAsync(cancellationToken);
+            return true;
+        }
+        catch (SqlException)
+        {
+            return false;
+        }
     }
 
     private static async Task<string?> ProbeStagingAsync(
@@ -176,7 +218,7 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
         CancellationToken cancellationToken
     )
     {
-        const string sql =
+        var sql =
             "SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id WHERE s.name=@schema AND t.name=@table) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END;";
         await using var command = new SqlCommand(sql, connection) { CommandTimeout = 5 };
         command.Parameters.AddWithValue("@schema", schema);

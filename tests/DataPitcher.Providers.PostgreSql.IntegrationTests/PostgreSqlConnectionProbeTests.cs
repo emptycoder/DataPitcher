@@ -131,6 +131,47 @@ public sealed class PostgreSqlConnectionProbeTests : IClassFixture<PostgreSqlClo
             foreignKey => string.Equals(foreignKey.Name, "orders_customer_id_fkey", StringComparison.Ordinal)
         );
     }
+
+    [Fact]
+    public async Task ProbeAsync_WhenBusinessSchemaDoesNotExist_StillReportsReadCapabilitiesForAnAdmin()
+    {
+        await using var scope = await PostgreSqlProbeScope.CreateAsync(_fixture, ConnectionRole.Source, false);
+        var request = new ConnectionProbeRequest(
+            scope.Profile with
+            {
+                BusinessSchema = "app",
+            },
+            ConnectionRole.Source,
+            TransferMode.DirectFast,
+            scope.AdminConnectionString
+        );
+
+        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(request, CancellationToken.None);
+
+        Assert.Contains(ConnectionCapability.CanReadSchema, evidence.Available);
+        Assert.Contains(ConnectionCapability.CanReadBusinessRows, evidence.Available);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_WhenOnlyOneTableIsReadable_ReportsReadCapabilitiesWithoutSchemaWideGrants()
+    {
+        await using var scope = await PostgreSqlProbeScope.CreateAsync(
+            _fixture,
+            ConnectionRole.Source,
+            false,
+            grantStaging: false,
+            singleTableOnly: true
+        );
+
+        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(
+            scope.Request(TransferMode.DirectFast),
+            CancellationToken.None
+        );
+
+        Assert.Contains(ConnectionCapability.CanReadSchema, evidence.Available);
+        Assert.Contains(ConnectionCapability.CanReadBusinessRows, evidence.Available);
+        Assert.DoesNotContain(ConnectionCapability.CanBulkInsert, evidence.Available);
+    }
 }
 
 internal sealed class PostgreSqlProbeScope : IAsyncDisposable
@@ -162,13 +203,15 @@ internal sealed class PostgreSqlProbeScope : IAsyncDisposable
 
     public string ConnectionString { get; }
     public ConnectionProfile Profile { get; }
+    public string AdminConnectionString { get; private set; } = "";
 
     public static async Task<PostgreSqlProbeScope> CreateAsync(
         PostgreSqlClosureFixture fixture,
         ConnectionRole role,
         bool denyDrop,
         bool grantStaging = true,
-        bool denyCreate = false
+        bool denyCreate = false,
+        bool singleTableOnly = false
     )
     {
         var scope = await fixture.CreateScopeAsync();
@@ -180,7 +223,10 @@ internal sealed class PostgreSqlProbeScope : IAsyncDisposable
         await ExecuteAsync(admin, $"CREATE ROLE {Quote(login)} LOGIN PASSWORD '{password}';");
         await ExecuteAsync(admin, $"GRANT CONNECT ON DATABASE {Quote(admin.Database)} TO {Quote(login)};");
         await ExecuteAsync(admin, $"GRANT USAGE ON SCHEMA {Quote(scope.Schema)} TO {Quote(login)};");
-        await ExecuteAsync(admin, $"GRANT SELECT ON ALL TABLES IN SCHEMA {Quote(scope.Schema)} TO {Quote(login)};");
+        if (singleTableOnly)
+            await ExecuteAsync(admin, $"GRANT SELECT ON {Quote(scope.Schema)}.customers TO {Quote(login)};");
+        else
+            await ExecuteAsync(admin, $"GRANT SELECT ON ALL TABLES IN SCHEMA {Quote(scope.Schema)} TO {Quote(login)};");
         await ExecuteAsync(admin, $"CREATE SCHEMA {Quote(stagingSchema)};");
         if (grantStaging)
             await ExecuteAsync(admin, $"GRANT USAGE, CREATE ON SCHEMA {Quote(stagingSchema)} TO {Quote(login)};");
@@ -226,7 +272,10 @@ internal sealed class PostgreSqlProbeScope : IAsyncDisposable
             profile,
             blocker,
             blockerFunction
-        );
+        )
+        {
+            AdminConnectionString = scope.SourceConnectionString,
+        };
     }
 
     public ConnectionProbeRequest Request(TransferMode mode) =>

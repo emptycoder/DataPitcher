@@ -245,7 +245,8 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
                     connectionId,
                     "sqlserver",
                     "Server=localhost;Database=app;User Id=sa",
-                    true
+                    true,
+                    "dbo"
                 )
         );
 

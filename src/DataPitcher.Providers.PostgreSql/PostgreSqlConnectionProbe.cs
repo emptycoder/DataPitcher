@@ -78,6 +78,13 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
         return (reader.GetString(0), reader.GetString(1));
     }
 
+    /// <summary>
+    /// Asks for the least privilege that lets DataPitcher do its job. The catalog is readable by every role, so
+    /// reading the schema only needs a working connection. Reading or writing rows is satisfied by a grant on at
+    /// least one table (with USAGE on its schema) in the business schema, or failing that in any user schema: the
+    /// tables that matter are only known when a plan is sealed, and that step verifies them exactly. A business or
+    /// staging schema that does not exist counts as "no grant" instead of failing the probe.
+    /// </summary>
     private static async Task<(
         bool CanReadSchema,
         bool CanReadBusinessRows,
@@ -85,19 +92,52 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
         bool CanWriteBusinessRows
     )> ReadPermissionsAsync(NpgsqlConnection connection, ConnectionProfile profile, CancellationToken cancellationToken)
     {
-        const string sql =
-            "SELECT has_database_privilege(current_database(), 'CONNECT'), "
-            + "has_schema_privilege(@businessSchema, 'USAGE'), "
-            + "COALESCE((SELECT bool_and(has_table_privilege(format('%I.%I', schemaname, tablename), 'SELECT')) FROM pg_tables WHERE schemaname=@businessSchema), false), "
-            + "has_schema_privilege(@stagingSchema, 'CREATE'), "
-            + "COALESCE((SELECT bool_and(has_table_privilege(format('%I.%I', schemaname, tablename), 'INSERT')) FROM pg_tables WHERE schemaname=@businessSchema), false);";
+        var canReadSchema = await CanReadCatalogAsync(connection, cancellationToken);
+        var sql =
+            "SELECT "
+            + AnyGrant("SELECT")
+            + ", "
+            + "COALESCE((SELECT has_schema_privilege(n.oid, 'CREATE') FROM pg_namespace n WHERE n.nspname = @stagingSchema), false), "
+            + AnyGrant("INSERT")
+            + ";";
         await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = 5 };
         command.Parameters.AddWithValue("businessSchema", profile.BusinessSchema);
         command.Parameters.AddWithValue("stagingSchema", profile.StagingSchema);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
-        _ = reader.GetBoolean(0);
-        return (reader.GetBoolean(1), reader.GetBoolean(2), reader.GetBoolean(3), reader.GetBoolean(4));
+        return (canReadSchema, reader.GetBoolean(0), reader.GetBoolean(1), reader.GetBoolean(2));
+    }
+
+    /// <summary>True when the privilege is held on at least one table of the business schema, else of any user schema.</summary>
+    private static string AnyGrant(string privilege) =>
+        "COALESCE((SELECT bool_or(has_schema_privilege(n.oid, 'USAGE') AND has_table_privilege(c.oid, '"
+        + privilege
+        + "')) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND n.nspname = @businessSchema), false)"
+        + " OR COALESCE((SELECT bool_or(has_schema_privilege(n.oid, 'USAGE') AND has_table_privilege(c.oid, '"
+        + privilege
+        + "')) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%'), false)";
+
+    private static async Task<bool> CanReadCatalogAsync(
+        NpgsqlConnection connection,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await using var command = new NpgsqlCommand(
+                "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_attribute a ON a.attrelid = c.oid WHERE c.relkind IN ('r', 'p');",
+                connection
+            )
+            {
+                CommandTimeout = 5,
+            };
+            _ = await command.ExecuteScalarAsync(cancellationToken);
+            return true;
+        }
+        catch (PostgresException)
+        {
+            return false;
+        }
     }
 
     private static async Task<string?> ProbeStagingAsync(
@@ -168,7 +208,7 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
         CancellationToken cancellationToken
     )
     {
-        const string sql =
+        var sql =
             "SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=@schema AND c.relname=@table AND c.relkind IN ('r','p'));";
         await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = 5 };
         command.Parameters.AddWithValue("schema", schema);

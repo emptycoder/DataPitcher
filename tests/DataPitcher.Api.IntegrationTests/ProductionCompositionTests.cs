@@ -276,6 +276,57 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
+    public async Task DataPitcherApplication_BusinessSchema_DefaultsPerProviderAndIsKeptUnlessSent()
+    {
+        using var fixture = new ProductionApplicationFixture();
+
+        var sqlServer = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Mssql", "sqlserver", Guid.NewGuid(), "*", "Server=one;Database=a"),
+            CancellationToken.None
+        );
+        var postgres = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Pg", "postgresql", Guid.NewGuid(), "*", "Host=one;Database=a"),
+            CancellationToken.None
+        );
+        var custom = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Sales", "sqlserver", Guid.NewGuid(), "*", "Server=one;Database=a", " sales "),
+            CancellationToken.None
+        );
+        var kept = await fixture.Application.UpdateConnectionAsync(
+            custom.ConnectionId,
+            new UpdateConnectionRequest("Sales renamed", "sqlserver", custom.ETag),
+            CancellationToken.None
+        );
+        var afterRename = await fixture.Profiles.GetProfileAsync(custom.ConnectionId, CancellationToken.None);
+        var changed = await fixture.Application.UpdateConnectionAsync(
+            custom.ConnectionId,
+            new UpdateConnectionRequest("Sales renamed", "sqlserver", kept.ETag, BusinessSchema: "archive"),
+            CancellationToken.None
+        );
+
+        Assert.Equal(
+            "dbo",
+            (
+                await fixture.Application.GetConnectionDetailsAsync(sqlServer.ConnectionId, CancellationToken.None)
+            ).BusinessSchema
+        );
+        Assert.Equal(
+            "public",
+            (
+                await fixture.Application.GetConnectionDetailsAsync(postgres.ConnectionId, CancellationToken.None)
+            ).BusinessSchema
+        );
+        Assert.Equal("sales", afterRename.BusinessSchema);
+        Assert.NotEqual(custom.ETag, kept.ETag);
+        Assert.Equal(
+            "archive",
+            (
+                await fixture.Application.GetConnectionDetailsAsync(changed.ConnectionId, CancellationToken.None)
+            ).BusinessSchema
+        );
+    }
+
+    [Fact]
     public async Task DataPitcherApplication_TestConnection_ReportsTheDriverFailureWithoutSecrets()
     {
         using var fixture = new ProductionApplicationFixture();

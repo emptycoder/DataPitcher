@@ -1,6 +1,12 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { connectionsApi, providerLabels, type Connection, type ConnectionTest } from '../../api/connections';
+import {
+    connectionsApi,
+    defaultBusinessSchema,
+    providerLabels,
+    type Connection,
+    type ConnectionTest,
+} from '../../api/connections';
 import {
     authOption,
     authOptionsFor,
@@ -506,6 +512,7 @@ function ConnectionDialog({
     // Null means "whatever was loaded (or the defaults)": the operator has not touched the credentials yet.
     const [editedDetails, setEditedDetails] = useState<ConnectionDetails | null>(null);
     const [editedRaw, setEditedRaw] = useState<string | null>(null);
+    const [schemaChoice, setSchemaChoice] = useState<string | null>(null);
     const [mode, setMode] = useState<CredentialMode>('details');
     const [keepRawPassword, setKeepRawPassword] = useState(true);
     const [credentialId, setCredentialId] = useState(() => crypto.randomUUID());
@@ -517,6 +524,15 @@ function ConnectionDialog({
     const details = editedDetails ?? baselineDetails;
     const rawConnectionString = editedRaw ?? baselineRaw;
     const providerId = details.providerId;
+    const businessSchema = schemaChoice ?? stored.data?.businessSchema ?? defaultBusinessSchema(providerId);
+    /** Sent only when it differs from what is stored (or was typed while the stored value was unknown). */
+    const businessSchemaChange = stored.data
+        ? businessSchema.trim() !== stored.data.businessSchema
+            ? businessSchema.trim() || null
+            : null
+        : schemaChoice !== null
+          ? schemaChoice.trim() || null
+          : null;
     const passwordOptional = isEdit && hasStoredPassword;
     const setDetails = (update: (current: ConnectionDetails) => ConnectionDetails) =>
         setEditedDetails((current) => update(current ?? baselineDetails));
@@ -526,6 +542,7 @@ function ConnectionDialog({
         setDisplayName('');
         setEditedDetails(null);
         setEditedRaw(null);
+        setSchemaChoice(null);
         setCredentialId(crypto.randomUUID());
         setError(null);
         setTestResult(null);
@@ -566,6 +583,7 @@ function ConnectionDialog({
                           connectionString,
                           connectionId: existing?.connectionId ?? null,
                           keepStoredPassword,
+                          businessSchema: businessSchema.trim() || null,
                       },
                 authentication,
             );
@@ -592,6 +610,7 @@ function ConnectionDialog({
                           providerId,
                           connectionString: input.connectionString,
                           keepStoredPassword: input.keepStoredPassword,
+                          businessSchema: businessSchemaChange,
                       },
                       existing.eTag,
                       authentication,
@@ -602,6 +621,7 @@ function ConnectionDialog({
                           providerId,
                           credentialId,
                           connectionString: input.connectionString ?? '',
+                          businessSchema: businessSchema.trim() || null,
                       },
                       authentication,
                   ),
@@ -674,12 +694,19 @@ function ConnectionDialog({
             title={isEdit ? `Edit ${existing.displayName}` : 'Add connection'}
         >
             <form className="grid min-w-0 gap-5" id="add-connection" onSubmit={submit}>
-                <div className="grid gap-4 md:grid-cols-[1fr_auto]">
+                <div className="grid gap-4 md:grid-cols-[1fr_150px_auto]">
                     <Field label="Display name" required>
                         <TextInput
                             onChange={(event) => setDisplayName(event.target.value)}
                             placeholder="e.g. Production replica"
                             value={displayName}
+                        />
+                    </Field>
+                    <Field hint="Schema that holds the tables to transfer." label="Schema">
+                        <TextInput
+                            onChange={(event) => setSchemaChoice(event.target.value)}
+                            placeholder={defaultBusinessSchema(providerId)}
+                            value={businessSchema}
                         />
                     </Field>
                     <fieldset className="min-w-0">

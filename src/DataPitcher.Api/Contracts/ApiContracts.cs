@@ -18,20 +18,23 @@ public sealed record CreateConnectionRequest(
     string ProviderId,
     Guid CredentialId,
     string IfMatch,
-    string ConnectionString
+    string ConnectionString,
+    string? BusinessSchema = null
 );
 
 /// <summary>
 /// Updates a connection. A null connection string keeps the stored credentials; the API never returns them. When
 /// <paramref name="KeepStoredPassword"/> is set and the supplied connection string carries no password, the password
-/// from the stored credentials is appended so an operator can change other settings without retyping it.
+/// from the stored credentials is appended so an operator can change other settings without retyping it. A null
+/// <paramref name="BusinessSchema"/> keeps the stored schema.
 /// </summary>
 public sealed record UpdateConnectionRequest(
     string DisplayName,
     string ProviderId,
     string IfMatch,
     string? ConnectionString = null,
-    bool KeepStoredPassword = false
+    bool KeepStoredPassword = false,
+    string? BusinessSchema = null
 );
 
 /// <summary>
@@ -42,7 +45,8 @@ public sealed record ConnectionDetailsResponse(
     Guid ConnectionId,
     string ProviderId,
     string ConnectionString,
-    bool HasPassword
+    bool HasPassword,
+    string BusinessSchema
 );
 
 /// <summary>
@@ -55,7 +59,8 @@ public sealed record ConnectionTestRequest(
     string ProviderId,
     string? ConnectionString = null,
     Guid? ConnectionId = null,
-    bool KeepStoredPassword = false
+    bool KeepStoredPassword = false,
+    string? BusinessSchema = null
 );
 
 public sealed record ConnectionTestResponse(

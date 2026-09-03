@@ -63,7 +63,14 @@ export type CreateConnectionInput = Readonly<{
     providerId: string;
     credentialId: string;
     connectionString?: string | null;
+    /** Schema holding the tables to transfer; blank means the provider default. */
+    businessSchema?: string | null;
 }>;
+
+/** The schema most databases keep their tables in. */
+export function defaultBusinessSchema(providerId: string) {
+    return providerId === 'postgresql' ? 'public' : 'dbo';
+}
 
 export const providerLabels: Readonly<Record<string, string>> = { sqlserver: 'SQL Server', postgresql: 'PostgreSQL' };
 
@@ -78,6 +85,8 @@ export type UpdateConnectionInput = Readonly<{
     connectionString: string | null;
     /** When the new connection string has no password, the API appends the stored one. */
     keepStoredPassword?: boolean;
+    /** Null keeps the stored schema. */
+    businessSchema?: string | null;
 }>;
 
 /** The stored connection string with every password removed, so an operator can edit the other settings. */
@@ -86,6 +95,7 @@ export const ConnectionDetailsSchema = z.object({
     providerId: z.string(),
     connectionString: z.string(),
     hasPassword: z.boolean(),
+    businessSchema: z.string(),
 });
 export type ConnectionDetails = z.infer<typeof ConnectionDetailsSchema>;
 
@@ -104,6 +114,7 @@ export type ConnectionTestInput = Readonly<{
     connectionString?: string | null;
     connectionId?: string | null;
     keepStoredPassword?: boolean;
+    businessSchema?: string | null;
 }>;
 
 export const connectionsApi = {
