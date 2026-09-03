@@ -1,0 +1,43 @@
+minimum_pre_commit_version: 4.2.0
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+repos:
+  - repo: local
+    hooks:
+      - id: backend-format
+        name: backend format
+        entry: >-
+          bash -c 'if [ ! -x ./scripts/format.sh ]; then printf "%s\n" "Missing executable ./scripts/format.sh; install the backend tooling before committing." >&2; exit 1; fi; ./scripts/format.sh --check'
+        language: system
+        pass_filenames: false
+        files: '^(src|tests)/.*\.(cs|csproj)$|^(DataPitcher\.sln|.*\.(props|targets))$'
+        stages: [pre-commit]
+      - id: frontend-lint
+        name: frontend lint
+        entry: >-
+          bash -c 'if ! command -v npm >/dev/null 2>&1; then printf "%s\n" "Missing npm; install the frontend tooling before committing." >&2; exit 1; fi; npm --prefix web run lint'
+        language: system
+        pass_filenames: false
+        files: '^web/.*\.(cjs|css|cts|js|json|jsx|mjs|mts|ts|tsx)$'
+        stages: [pre-commit]
+      - id: conventional-commit
+        name: conventional commit message
+        entry: >-
+          bash -c 'read -r message < "$1"; if ! [[ "$message" =~ ^(build|chore|ci|docs|feat|fix|refactor|test)(\([a-z0-9][a-z0-9._/-]*\))?:\ .+ ]]; then printf "%s\n" "Commit message must match type(scope): summary." >&2; exit 1; fi' --
+        language: system
+        stages: [commit-msg]
+      - id: backend-format-pre-push
+        name: backend format
+        entry: >-
+          bash -c 'if [ ! -x ./scripts/format.sh ]; then printf "%s\n" "Missing executable ./scripts/format.sh; install the backend tooling before pushing." >&2; exit 1; fi; ./scripts/format.sh --check'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      - id: frontend-lint-pre-push
+        name: frontend lint
+        entry: >-
+          bash -c 'if ! command -v npm >/dev/null 2>&1; then printf "%s\n" "Missing npm; install the frontend tooling before pushing." >&2; exit 1; fi; npm --prefix web run lint'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
