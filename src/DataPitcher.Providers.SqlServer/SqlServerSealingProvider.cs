@@ -79,6 +79,30 @@ public sealed class SqlServerSealingProvider : ISealingProvider
             Guid planId
         ) => new SqlServerClosureStore(source, target, sourceCatalog, targetCatalog, stableKeys, planId, false);
 
+        public async Task OrderHierarchiesAsync(
+            IReadOnlyCollection<ClosureRelationship> selfRelationships,
+            IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+            Guid planId,
+            CancellationToken cancellationToken
+        )
+        {
+            foreach (var relationship in selfRelationships)
+            {
+                var keyColumns = stableKeys[relationship.FromTable].Constraint?.Columns;
+                // Only a self reference onto the stable key can be levelled through the sealed keys.
+                if (keyColumns is null || !relationship.ToColumns.SequenceEqual(keyColumns, StringComparer.Ordinal))
+                    continue;
+                await SqlServerStagingTables.StampHierarchyAsync(
+                    source,
+                    planId,
+                    relationship.FromTable,
+                    keyColumns,
+                    relationship.FromColumns,
+                    cancellationToken
+                );
+            }
+        }
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

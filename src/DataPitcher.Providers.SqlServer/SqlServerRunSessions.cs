@@ -74,6 +74,7 @@ public sealed class SqlServerRunSessions(
         private readonly Dictionary<int, SqlServerWriteTable> _sources = [];
         private int _index = StartIndex(Tables(content), startTable);
         private StableKey? _after = startAfter;
+        private int? _afterGeneration;
         private long _nextSequence = nextSequence;
 
         public async Task<TransferUnit?> ReadNextAsync(CancellationToken cancellationToken)
@@ -105,12 +106,21 @@ public sealed class SqlServerRunSessions(
                             (column, index) => "s." + SqlServerIdentifier.Quote(column.Name) + "=f.[k" + index + "]"
                         )
                     );
-                var query = SqlServerKeysetSeek.Build(source, _after, content.BatchTarget.MaximumRows, join);
-                var rows = new List<TransferRow>();
-                StableKey? last = null;
-                var bytes = 0L;
                 await using var connection = new SqlConnection(connectionString);
                 await connection.OpenAsync(cancellationToken);
+                if (_after is not null && _afterGeneration is null)
+                    _afterGeneration = await GenerationAsync(connection, planTable, source, _after, cancellationToken);
+                var query = SqlServerKeysetSeek.Build(
+                    source,
+                    _after,
+                    content.BatchTarget.MaximumRows,
+                    join,
+                    _afterGeneration
+                );
+                var rows = new List<TransferRow>();
+                StableKey? last = null;
+                int? lastGeneration = null;
+                var bytes = 0L;
                 await using var command = new SqlCommand(query.Sql, connection);
                 command.Parameters.AddRange(query.Parameters.ToArray());
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -124,6 +134,7 @@ public sealed class SqlServerRunSessions(
                         break;
                     rows.Add(new TransferRow(values, payload));
                     bytes += payload;
+                    lastGeneration = reader.GetInt32(source.InsertColumns.Count);
                     last = new StableKey(
                         source.StableKeyColumns.Select(column => new KeyComponent(
                             column.Name,
@@ -135,6 +146,7 @@ public sealed class SqlServerRunSessions(
                 if (rows.Count != 0)
                 {
                     _after = last;
+                    _afterGeneration = lastGeneration;
                     return new TransferUnit(
                         _nextSequence++,
                         last!,
@@ -147,8 +159,39 @@ public sealed class SqlServerRunSessions(
                 }
                 _index++;
                 _after = null;
+                _afterGeneration = null;
             }
             return null;
+        }
+
+        /// <summary>The closure generation sealing stamped on a key; needed to resume generation-ordered paging.</summary>
+        private async Task<int> GenerationAsync(
+            SqlConnection connection,
+            PlanTable planTable,
+            SqlServerWriteTable source,
+            StableKey key,
+            CancellationToken cancellationToken
+        )
+        {
+            var predicate = string.Join(
+                " AND ",
+                source.StableKeyColumns.Select((_, index) => "[k" + index + "]=@p" + index)
+            );
+            await using var command = new SqlCommand(
+                "SELECT [__generation] FROM "
+                    + SqlServerStagingTables.Qualified(
+                        SqlServerStagingTables.SourceTableName(planId, planTable.Mapping.Source)
+                    )
+                    + " WHERE "
+                    + predicate,
+                connection
+            );
+            for (var index = 0; index < source.StableKeyColumns.Count; index++)
+                command.Parameters.AddWithValue(
+                    "@p" + index,
+                    key.Components.Single(component => component.Column == source.StableKeyColumns[index].Name).Value!
+                );
+            return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
         }
 
         public Task DiscardUncommittedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -194,110 +237,10 @@ public sealed class SqlServerRunSessions(
         {
             var context = Context(run, lease);
             await _executor.InitializeAsync(context, cancellationToken);
-            await RelaxConstraintsAsync(cancellationToken);
             var checkpoint =
                 await _checkpoints.ReadAsync(run.JobId, run.RunId, cancellationToken)
                 ?? throw new InvalidOperationException("Target checkpoint was not initialized.");
             return new RecoverySnapshot(await CheckpointAsync(run, checkpoint, cancellationToken), []);
-        }
-
-        private bool Relaxes => content.ConstraintStrategy is ConstraintStrategy.DisableAndRevalidate;
-        private bool _relaxed;
-
-        /// <summary>Foreign keys on the planned tables stop being checked per statement until the run completes.</summary>
-        private async Task RelaxConstraintsAsync(CancellationToken cancellationToken)
-        {
-            if (!Relaxes)
-                return;
-            await using var connection = new SqlConnection(connectionString);
-            await connection.OpenAsync(cancellationToken);
-            foreach (var table in Tables(content))
-                await ExecuteAsync(
-                    connection,
-                    "ALTER TABLE " + Qualified(table.Mapping.Target) + " NOCHECK CONSTRAINT ALL;",
-                    cancellationToken
-                );
-            _relaxed = true;
-        }
-
-        /// <summary>
-        /// Re-enables every constraint WITH CHECK, which validates the rows written during the run. A violation names
-        /// the table so the operator knows which parent rows are missing.
-        /// </summary>
-        public async Task CompleteAsync(TransferRun run, CancellationToken cancellationToken)
-        {
-            if (!Relaxes)
-                return;
-            await using var connection = new SqlConnection(connectionString);
-            await connection.OpenAsync(cancellationToken);
-            foreach (var table in Tables(content))
-                try
-                {
-                    await ExecuteAsync(
-                        connection,
-                        "ALTER TABLE " + Qualified(table.Mapping.Target) + " WITH CHECK CHECK CONSTRAINT ALL;",
-                        cancellationToken
-                    );
-                }
-                catch (SqlException exception)
-                {
-                    throw new TargetVerificationException(
-                        "Constraint validation failed on "
-                            + table.Mapping.Target.Schema
-                            + "."
-                            + table.Mapping.Target.Name
-                            + " after the transfer: "
-                            + exception.Message
-                            + " The rows written by this run remain in the target with the constraint disabled; fix the referenced rows and re-enable it, or remove the rows."
-                    );
-                }
-            _relaxed = false;
-        }
-
-        private async Task RestoreConstraintsBestEffortAsync()
-        {
-            if (!_relaxed)
-                return;
-            try
-            {
-                await using var connection = new SqlConnection(connectionString);
-                await connection.OpenAsync();
-                foreach (var table in Tables(content))
-                    try
-                    {
-                        await ExecuteAsync(
-                            connection,
-                            "ALTER TABLE " + Qualified(table.Mapping.Target) + " WITH CHECK CHECK CONSTRAINT ALL;",
-                            CancellationToken.None
-                        );
-                    }
-                    catch (SqlException)
-                    {
-                        // Partial data (a pause) may not validate yet; keep the constraint enforced for new rows.
-                        await ExecuteAsync(
-                            connection,
-                            "ALTER TABLE " + Qualified(table.Mapping.Target) + " CHECK CONSTRAINT ALL;",
-                            CancellationToken.None
-                        );
-                    }
-            }
-            catch (SqlException)
-            {
-                // Leaving constraints relaxed is recoverable: the next run relaxes and revalidates them again.
-            }
-        }
-
-        private static string Qualified(TableAddress address) =>
-            SqlServerIdentifier.Qualified(address.Schema, address.Name);
-
-        private static async Task ExecuteAsync(
-            SqlConnection connection,
-            string sql,
-            CancellationToken cancellationToken
-        )
-        {
-            await using var command = new SqlCommand(sql, connection) { CommandTimeout = 0 };
-            await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
         // ponytail: mutation journal recovery is unwired; add it when mutation strategies are enabled.
@@ -346,7 +289,7 @@ public sealed class SqlServerRunSessions(
 
         public Task DiscardUncommittedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public async ValueTask DisposeAsync() => await RestoreConstraintsBestEffortAsync();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
         private async Task<TargetCheckpoint> CheckpointAsync(
             TransferRun run,

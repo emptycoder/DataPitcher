@@ -173,6 +173,84 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
 
     public static string Qualified(string table) => PostgreSqlIdentifier.Qualified(OwnerSchema, table);
 
+    /// <summary>
+    /// Stamps every sealed key of a self-referencing table with its hierarchy level (0 for rows whose parent is
+    /// null or outside the sealed keys, then 1, 2, …) stored as a negative generation, so paging by generation
+    /// descending writes parents before children. Rows on a cycle keep their closure generation.
+    /// </summary>
+    public static async Task StampHierarchyAsync(
+        NpgsqlDataSource dataSource,
+        Guid planId,
+        TableDefinition table,
+        IReadOnlyList<string> keyColumns,
+        IReadOnlyList<string> parentColumns,
+        CancellationToken ct
+    )
+    {
+        var keys = Qualified(SourceTableName(planId, new TableAddress(table.Schema, table.Name)));
+        var source = PostgreSqlIdentifier.Qualified(table.Schema, table.Name);
+        string Key(int i) => "k" + i;
+        var fKeys = string.Join(", ", keyColumns.Select((_, i) => "f." + Key(i)));
+        var mKeys = string.Join(", ", keyColumns.Select((_, i) => Key(i)));
+        var joinSource = string.Join(
+            " AND ",
+            keyColumns.Select((column, i) => "s." + PostgreSqlIdentifier.Quote(column) + " = f." + Key(i))
+        );
+        var parentNull = string.Join(
+            " OR ",
+            parentColumns.Select(column => "s." + PostgreSqlIdentifier.Quote(column) + " IS NULL")
+        );
+        var parentInKeys =
+            "EXISTS (SELECT 1 FROM "
+            + keys
+            + " p WHERE "
+            + string.Join(
+                " AND ",
+                parentColumns.Select((column, i) => "p." + Key(i) + " = s." + PostgreSqlIdentifier.Quote(column))
+            )
+            + ")";
+        var joinParent = string.Join(
+            " AND ",
+            parentColumns.Select((column, i) => "s." + PostgreSqlIdentifier.Quote(column) + " = h." + Key(i))
+        );
+        var joinLevels = string.Join(" AND ", keyColumns.Select((_, i) => "f." + Key(i) + " = m." + Key(i)));
+        var sql =
+            "WITH RECURSIVE h AS (SELECT "
+            + fKeys
+            + ", 0 AS lvl FROM "
+            + keys
+            + " f JOIN "
+            + source
+            + " s ON "
+            + joinSource
+            + " WHERE ("
+            + parentNull
+            + ") OR NOT "
+            + parentInKeys
+            + " UNION ALL SELECT "
+            + fKeys
+            + ", h.lvl + 1 FROM "
+            + keys
+            + " f JOIN "
+            + source
+            + " s ON "
+            + joinSource
+            + " JOIN h ON "
+            + joinParent
+            + " WHERE h.lvl < 4096) "
+            + "UPDATE "
+            + keys
+            + " f SET __generation = -m.lvl FROM (SELECT "
+            + mKeys
+            + ", max(lvl) AS lvl FROM h GROUP BY "
+            + mKeys
+            + ") m WHERE "
+            + joinLevels;
+        await using var command = dataSource.CreateCommand(sql);
+        command.CommandTimeout = 0;
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     private async Task EnsureTableAsync(
         NpgsqlDataSource dataSource,
         string name,

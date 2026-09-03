@@ -181,7 +181,7 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
     }
 
     [Fact]
-    public async Task Transfer_WhenATableReferencesItselfAcrossBatches_RelaxesAndRevalidatesForeignKeys()
+    public async Task Transfer_WhenATableReferencesItselfAcrossBatches_WritesAncestorsFirst()
     {
         await using var scope = await fixture.CreateScopeAsync();
         const string ddl =
@@ -195,7 +195,7 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
 
         var job = await RunTransferAsync(scope, "worker_nodes", "pk_worker_nodes", "SELECT * FROM worker_nodes");
 
-        Assert.Equal(JobState.Succeeded, job.State);
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
         Assert.Equal(2001L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_nodes"));
     }
 

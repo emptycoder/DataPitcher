@@ -126,6 +126,9 @@ public sealed class PlanSealingService(
             if (store is IAsyncDisposable disposable)
                 await disposable.DisposeAsync();
         }
+        var selfRelationships = relationships.Where(r => r.FromTable == r.ToTable).ToArray();
+        if (selfRelationships.Length > 0)
+            await session.OrderHierarchiesAsync(selfRelationships, stableKeys, planId, cancellationToken);
         var content = Content(
             selection,
             snapshot,
@@ -225,9 +228,9 @@ public sealed class PlanSealingService(
             ConsistencyMode.FrozenKeys,
             TransferMode.ResumableStaged,
             TriggerStrategy.Fire,
-            // Foreign keys on the planned target tables are relaxed for the run and validated at the end, so
-            // batch boundaries, same-table references and cycles cannot fail a transfer mid-way.
-            ConstraintStrategy.DisableAndRevalidate,
+            // Constraints stay enforced: the import order comes from the table graph (parents first across tables,
+            // ancestors first within a table) so every row's parents are already in the target when it arrives.
+            ConstraintStrategy.Enforce,
             stableKeys
                 .Select(pair => new StableKeyDefinition(
                     Address(pair.Key),

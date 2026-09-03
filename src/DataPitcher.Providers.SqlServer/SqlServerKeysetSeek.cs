@@ -14,10 +14,25 @@ public sealed record SqlServerSeekQuery(string Sql, IReadOnlyList<SqlParameter> 
 
 public static class SqlServerKeysetSeek
 {
-    public static SqlServerSeekQuery Build(SqlServerWriteTable table, StableKey? after, int limit, string join = "")
+    /// <summary>
+    /// Pages the source rows behind the sealed keys. When <paramref name="join"/> attaches the sealed key table
+    /// (alias <c>f</c>), rows are ordered by closure generation descending before the key, so a table's ancestors
+    /// are written before the rows that reference them and foreign keys stay enforced on the target.
+    /// <paramref name="afterGeneration"/> is the generation of <paramref name="after"/> and is required then.
+    /// </summary>
+    public static SqlServerSeekQuery Build(
+        SqlServerWriteTable table,
+        StableKey? after,
+        int limit,
+        string join = "",
+        int? afterGeneration = null
+    )
     {
         if (limit <= 0)
             throw new ArgumentOutOfRangeException(nameof(limit));
+        var byGeneration = join.Length > 0;
+        if (byGeneration && after is not null && afterGeneration is null)
+            throw new ArgumentException("The generation of the resume key is required.", nameof(afterGeneration));
         var columns = table.StableKeyColumns;
         var predicates = new List<string>();
         var parameters = new List<SqlParameter>();
@@ -42,17 +57,30 @@ public static class SqlServerKeysetSeek
             ",",
             table.InsertColumns.Select(column => "s." + SqlServerIdentifier.Quote(column.Name))
         );
-        var where = after is null ? "" : " WHERE (" + string.Join(" OR ", predicates) + ")";
+        var keyOrder = string.Join(",", columns.Select(Expression));
+        var keyPredicate = "(" + string.Join(" OR ", predicates) + ")";
+        string where;
+        if (after is null)
+            where = "";
+        else if (byGeneration)
+        {
+            parameters.Add(new SqlParameter("@gen", System.Data.SqlDbType.Int) { Value = afterGeneration!.Value });
+            where = " WHERE (f.[__generation]<@gen OR (f.[__generation]=@gen AND " + keyPredicate + "))";
+        }
+        else
+            where = " WHERE " + keyPredicate;
         return new SqlServerSeekQuery(
             "SELECT TOP (@limit) "
                 + select
+                + (byGeneration ? ",f.[__generation]" : "")
                 + " FROM "
                 + SqlServerIdentifier.Qualified(table.Target.Schema, table.Target.Name)
                 + " s"
                 + join
                 + where
                 + " ORDER BY "
-                + string.Join(",", columns.Select(Expression)),
+                + (byGeneration ? "f.[__generation] DESC," : "")
+                + keyOrder,
             Array.AsReadOnly(parameters.ToArray())
         );
     }

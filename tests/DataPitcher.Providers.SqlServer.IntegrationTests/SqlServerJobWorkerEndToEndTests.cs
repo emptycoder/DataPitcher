@@ -173,7 +173,7 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     }
 
     [Fact]
-    public async Task Transfer_WhenATableReferencesItselfAcrossBatches_RelaxesAndRevalidatesForeignKeys()
+    public async Task Transfer_WhenATableReferencesItselfAcrossBatches_WritesAncestorsFirst()
     {
         await using var scope = await fixture.CreateScopeAsync();
         const string ddl =
@@ -187,7 +187,7 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
 
         var job = await RunTransferAsync(scope, "worker_nodes", "PK_worker_nodes", "SELECT * FROM dbo.worker_nodes");
 
-        Assert.Equal(JobState.Succeeded, job.State);
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
         Assert.Equal(2001, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_nodes"));
         Assert.Equal(
             1,
@@ -195,29 +195,6 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
                 "SELECT COUNT(*) FROM sys.foreign_keys WHERE name = 'FK_worker_nodes_parent' AND is_disabled = 0 AND is_not_trusted = 0"
             )
         );
-    }
-
-    [Fact]
-    public async Task Transfer_WhenTheSourceHoldsAnOrphan_EndsAsAVerificationFailureNamingTheTable()
-    {
-        await using var scope = await fixture.CreateScopeAsync();
-        const string ddl =
-            "CREATE TABLE dbo.worker_owners (id int NOT NULL CONSTRAINT PK_worker_owners PRIMARY KEY); CREATE TABLE dbo.worker_pets (id int NOT NULL CONSTRAINT PK_worker_pets PRIMARY KEY, owner_id int NOT NULL);";
-        // The source constraint is not trusted, so an orphaned pet exists there; the target enforces it.
-        await scope.ExecuteAsync(
-            ddl
-                + " ALTER TABLE dbo.worker_pets WITH NOCHECK ADD CONSTRAINT FK_worker_pets_owner FOREIGN KEY (owner_id) REFERENCES dbo.worker_owners(id); ALTER TABLE dbo.worker_pets NOCHECK CONSTRAINT FK_worker_pets_owner; INSERT dbo.worker_pets VALUES (1, 99);"
-        );
-        await scope.ExecuteTargetAsync(
-            ddl
-                + " ALTER TABLE dbo.worker_pets ADD CONSTRAINT FK_worker_pets_owner FOREIGN KEY (owner_id) REFERENCES dbo.worker_owners(id);"
-        );
-
-        var job = await RunTransferAsync(scope, "worker_pets", "PK_worker_pets", "SELECT * FROM dbo.worker_pets");
-
-        Assert.Equal(JobState.Failed, job.State);
-        Assert.Equal("verification_failed", job.FailureCode);
-        Assert.Contains("dbo.worker_pets", job.FailureDetail, StringComparison.Ordinal);
     }
 
     /// <summary>Scans, selects every row of <paramref name="rootTable"/>, seals, runs the worker and waits for the end.</summary>

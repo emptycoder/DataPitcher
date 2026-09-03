@@ -23,6 +23,18 @@ public interface ISealingSession : IAsyncDisposable
     );
 
     /// <summary>
+    /// Orders the sealed keys of tables that reference themselves so that a row's parents in the same table are
+    /// written before it: keys get a hierarchy level from the source's own parent links, and the transfer pages
+    /// through them ancestors first. Foreign keys therefore stay enforced on the target.
+    /// </summary>
+    Task OrderHierarchiesAsync(
+        IReadOnlyCollection<ClosureRelationship> selfRelationships,
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+        Guid planId,
+        CancellationToken cancellationToken
+    ) => Task.CompletedTask;
+
+    /// <summary>
     /// Creates the closure store for this plan. Root key staging must survive the session so the transfer worker can
     /// read exactly the sealed rows later.
     /// </summary>
