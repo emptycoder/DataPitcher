@@ -6,6 +6,7 @@ obj/
 artifacts/
 
 # frontend build output
+node_modules/
 web/node_modules/
 web/dist/
 web/coverage/
