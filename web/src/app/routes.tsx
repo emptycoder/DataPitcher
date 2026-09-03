@@ -1,6 +1,7 @@
 import { useMemo, type ReactNode } from 'react';
 import type { AuthenticationAdapter } from '../auth/authAdapter';
 import { ConnectionsScreen } from '../features/connections/ConnectionsScreen';
+import { PlanReview } from '../features/plans/PlanReview';
 import { PlanReviewScreen } from '../features/plans/PlanReviewScreen';
 import { SelectionWorkbenchScreen } from '../features/selections/SelectionWorkbenchScreen';
 import { TransferMonitorScreen } from '../features/transfers/TransferMonitorScreen';
@@ -47,5 +48,6 @@ export const routes = [
   { path: '/dependency-graph/:planId?', label: 'Schema graph', render: dependencyGraphRoute },
   { path: '/selection-workbench', label: 'Selection workbench', render: selectionWorkbenchRoute },
   { path: '/plan-review/:planId?', label: 'Plan review', render: planReviewRoute },
+  { path: '/plans/:planId/review', label: 'Plan review', render: (params, context) => <PlanReview planId={params.planId!} authentication={context.authentication} /> },
   { path: '/transfer-monitor/:jobId?', label: 'Transfer monitor', render: transferMonitorRoute },
 ] satisfies readonly RouteRecord[];
