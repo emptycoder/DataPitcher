@@ -19,8 +19,6 @@
   "dependencies": {
     "@tanstack/react-query": "5.102.8",
     "@tanstack/react-virtual": "3.13.18",
-    "@xyflow/react": "12.11.6",
-    "elkjs": "0.12.0",
     "monaco-editor": "0.55.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
