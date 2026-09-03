@@ -73,6 +73,39 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task GetOperationStatus_ReturnsSchemaScanState()
+    {
+        var operationId = Guid.NewGuid();
+        _factory.Application.OperationStatus = new(operationId, "schema-scan", "Completed", true, false, null, Guid.NewGuid(), Guid.NewGuid(), null, null);
+        try
+        {
+            using var response = await _client.GetAsync($"/api/operations/{operationId}", CancellationToken.None);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var status = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+            Assert.Equal(operationId.ToString(), status.GetProperty("operationId").GetString());
+            Assert.Equal("schema-scan", status.GetProperty("operation").GetString());
+            Assert.Equal("Completed", status.GetProperty("state").GetString());
+            Assert.True(status.GetProperty("finished").GetBoolean());
+            Assert.False(status.GetProperty("failed").GetBoolean());
+            Assert.True(Guid.TryParse(status.GetProperty("snapshotId").GetString(), out _));
+        }
+        finally
+        {
+            _factory.Application.OperationStatus = null;
+        }
+    }
+
+    [Fact]
+    public async Task GetOperationStatus_WhenUnknown_ReturnsNotFound()
+    {
+        using var response = await _client.GetAsync($"/api/operations/{Guid.NewGuid()}", CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains(nameof(FakeDataPitcherApplication.GetOperationStatusAsync), _factory.Application.Invocations);
+    }
+
+    [Fact]
     public async Task GetSnapshot_ReadsByConnectionAndSnapshotIdentifiers()
     {
         var connectionId = Guid.NewGuid();
@@ -395,6 +428,22 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var job = await response.Content.ReadFromJsonAsync<JobResponse>();
         Assert.Equal(jobId, job!.JobId);
+    }
+
+    [Fact]
+    public async Task ListJobs_ReturnsJobSummaries()
+    {
+        using var response = await _client.GetAsync("/api/jobs", CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var jobs = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.Equal(System.Text.Json.JsonValueKind.Array, jobs.ValueKind);
+        Assert.True(Guid.TryParse(jobs[0].GetProperty("jobId").GetString(), out _));
+        Assert.True(Guid.TryParse(jobs[0].GetProperty("planId").GetString(), out _));
+        Assert.Equal("Running", jobs[0].GetProperty("state").GetString());
+        Assert.True(DateTimeOffset.TryParse(jobs[0].GetProperty("createdUtc").GetString(), out _));
+        Assert.True(DateTimeOffset.TryParse(jobs[0].GetProperty("updatedUtc").GetString(), out _));
+        Assert.Equal(10, jobs[0].GetProperty("rowsTransferred").GetInt64());
     }
 
     [Theory]

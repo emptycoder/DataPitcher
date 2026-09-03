@@ -45,6 +45,14 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock)
         return Task.FromResult(snapshots);
     }
 
+    public Task<SchemaScan?> FindScanAsync(Guid scanId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        var scan = db.GetTable<SchemaScanRow>().SingleOrDefault(row => row.ScanId == scanId.ToString());
+        return Task.FromResult(scan is null ? null : ToScan(scan));
+    }
+
     public Task<StoredSchemaSnapshot> GetAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

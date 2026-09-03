@@ -29,12 +29,14 @@ public sealed class HostSmokeTests(ApiWebApplicationFactory factory) : IClassFix
     {
         yield return [typeof(ConnectionResponse)];
         yield return [typeof(OperationReceiptResponse)];
+        yield return [typeof(OperationStatusResponse)];
         yield return [typeof(ProviderResponse)];
         yield return [typeof(ResourceIdentifiers)];
         yield return [typeof(SchemaSnapshotResponse)];
         yield return [typeof(SelectionResponse)];
         yield return [typeof(PlanResponse)];
         yield return [typeof(JobResponse)];
+        yield return [typeof(JobSummaryResponse)];
     }
 
     [Theory]
@@ -68,6 +70,7 @@ public sealed class HostSmokeTests(ApiWebApplicationFactory factory) : IClassFix
         if (underlying == typeof(string)) return name.Equals("ETag", StringComparison.OrdinalIgnoreCase) ? "\"etag-1\"" : name.Equals("Hash", StringComparison.OrdinalIgnoreCase) || name.Equals("CanonicalHash", StringComparison.OrdinalIgnoreCase) ? "sha256-not-a-guid" : "sample-" + name;
         if (underlying == typeof(long)) return 1L;
         if (underlying == typeof(int)) return 1;
+        if (underlying == typeof(bool)) return true;
         if (underlying == typeof(DateTimeOffset)) return DateTimeOffset.UnixEpoch;
         if (underlying == typeof(Uri)) return new Uri("https://example.test/status");
         throw new NotSupportedException($"Unsupported parameter type {parameterType} for {name}.");

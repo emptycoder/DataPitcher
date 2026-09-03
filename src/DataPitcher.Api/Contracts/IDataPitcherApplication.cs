@@ -7,6 +7,7 @@ public interface IDataPitcherApplication
     Task<OperationReceiptResponse> QueueConnectionCheckAsync(Guid connectionId, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueSchemaScanAsync(Guid connectionId, CancellationToken cancellationToken);
     Task<IReadOnlyList<SchemaSnapshotSummaryResponse>> ListSnapshotsAsync(Guid connectionId, CancellationToken cancellationToken);
+    Task<OperationStatusResponse?> GetOperationStatusAsync(Guid operationId, CancellationToken cancellationToken);
     Task<SchemaSnapshotResponse> GetSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken);
     Task<SchemaSnapshotResponse?> FindSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken);
     Task<SelectionResponse> SaveSelectionAsync(Guid selectionId, SaveSelectionRequest request, CancellationToken cancellationToken);
@@ -16,6 +17,7 @@ public interface IDataPitcherApplication
     Task<PlanReviewResponse> GetPlanReviewAsync(Guid planId, CancellationToken cancellationToken);
     Task<InclusionPathResponse> GetPlanInclusionPathAsync(Guid planId, InclusionPathRequest request, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> StartJobAsync(Guid planId, string idempotencyKey, CancellationToken cancellationToken);
+    Task<IReadOnlyList<JobSummaryResponse>> ListJobsAsync(CancellationToken cancellationToken);
     Task<JobResponse> GetJobAsync(Guid jobId, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueJobCommandAsync(Guid jobId, JobCommand command, CancellationToken cancellationToken);
 }

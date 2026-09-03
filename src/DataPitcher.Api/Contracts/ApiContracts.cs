@@ -3,6 +3,7 @@ namespace DataPitcher.Api.Contracts;
 public sealed record CreateConnectionRequest(string DisplayName, string ProviderId, Guid CredentialId, string IfMatch);
 public sealed record ConnectionResponse(Guid ConnectionId, string DisplayName, string ProviderId, string Health, string ETag);
 public sealed record OperationReceiptResponse(Guid OperationId, string State, Uri StatusUri, Guid? ConnectionId, Guid? PlanId, Guid? JobId);
+public sealed record OperationStatusResponse(Guid OperationId, string Operation, string State, bool Finished, bool Failed, string? FailureCode, Guid? ConnectionId, Guid? SnapshotId, Guid? PlanId, Guid? JobId);
 public sealed record ProviderResponse(string ProviderId, string DisplayName);
 public sealed record ResourceIdentifiers(Guid? ConnectionId, Guid? SnapshotId, Guid? SelectionId, Guid? PlanId, Guid? JobId);
 
@@ -37,3 +38,4 @@ public sealed record InclusionPathStepResponse(string Relationship, string From,
 public sealed record InclusionPathResponse(string Table, string StableKey, string RootSelection, IReadOnlyList<InclusionPathStepResponse> Steps);
 public enum JobCommand { Pause, Resume, Cancel }
 public sealed record JobResponse(Guid JobId, Guid PlanId, string State, long RowsTransferred, long BytesTransferred);
+public sealed record JobSummaryResponse(Guid JobId, Guid PlanId, string State, DateTimeOffset CreatedUtc, DateTimeOffset UpdatedUtc, long RowsTransferred, long BytesTransferred);
