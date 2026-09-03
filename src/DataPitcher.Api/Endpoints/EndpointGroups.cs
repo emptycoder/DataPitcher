@@ -143,6 +143,11 @@ public static class EndpointGroups
     {
         if (string.IsNullOrWhiteSpace(request.IfMatch))
             return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "If-Match is required.");
+        if (string.IsNullOrWhiteSpace(request.ConnectionString))
+            return TypedResults.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "A connection string is required."
+            );
         return TypedResults.Ok(await application.CreateConnectionAsync(request, cancellationToken));
     }
 

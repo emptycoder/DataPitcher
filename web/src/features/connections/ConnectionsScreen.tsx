@@ -1,6 +1,16 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { connectionsApi, credentialEnvironmentVariable, providerLabels, type Connection } from '../../api/connections';
+import { connectionsApi, providerLabels, type Connection } from '../../api/connections';
+import {
+    authOption,
+    authOptionsFor,
+    buildConnectionString,
+    defaultConnectionDetails,
+    validateConnectionDetails,
+    withProvider,
+    type AuthMethod,
+    type ConnectionDetails,
+} from '../../api/connectionStrings';
 import { formatRelative } from '../../api/format';
 import { queryKeys } from '../../api/keys';
 import { pollOperation, type OperationStatus } from '../../api/operations';
@@ -15,17 +25,20 @@ import {
     Button,
     Card,
     Code,
-    CopyButton,
+    cx,
     EmptyState,
     Field,
     IconButton,
     Modal,
     PageHeader,
     ProgressBar,
+    SecretInput,
+    Select,
     Skeleton,
     StatusBadge,
+    Tabs,
+    TextArea,
     TextInput,
-    cx,
 } from '../../ui';
 import { Icons } from '../../ui/icons';
 import { useToast } from '../../ui/toast';
@@ -420,24 +433,49 @@ export function ProviderMark({ providerId, size = 'md' }: Readonly<{ providerId:
 
 /* --------------------------- Add connection dialog ------------------------- */
 
+type CredentialMode = 'details' | 'raw';
+
 function AddConnectionDialog({ open, onClose }: Readonly<{ open: boolean; onClose: () => void }>) {
     const { authentication } = useAuth();
     const queryClient = useQueryClient();
     const toast = useToast();
     const providers = useProviders();
     const [displayName, setDisplayName] = useState('');
-    const [providerId, setProviderId] = useState('sqlserver');
+    const [details, setDetails] = useState<ConnectionDetails>(() => defaultConnectionDetails('sqlserver'));
+    const [mode, setMode] = useState<CredentialMode>('details');
+    const [rawConnectionString, setRawConnectionString] = useState('');
     const [credentialId, setCredentialId] = useState(() => crypto.randomUUID());
     const [error, setError] = useState<string | null>(null);
+    const providerId = details.providerId;
+
+    function reset() {
+        setDisplayName('');
+        setDetails(defaultConnectionDetails('sqlserver'));
+        setRawConnectionString('');
+        setCredentialId(crypto.randomUUID());
+        setError(null);
+    }
 
     const create = useMutation({
         mutationFn: () =>
-            connectionsApi.create({ displayName: displayName.trim(), providerId, credentialId }, authentication),
+            connectionsApi.create(
+                {
+                    displayName: displayName.trim(),
+                    providerId,
+                    credentialId,
+                    connectionString:
+                        mode === 'details'
+                            ? buildConnectionString(details)
+                            : mode === 'raw'
+                              ? rawConnectionString.trim()
+                              : null,
+                },
+                authentication,
+            ),
         onSuccess: async (connection) => {
             await queryClient.invalidateQueries({ queryKey: queryKeys.connections });
             toast.success('Connection added', `${connection.displayName} is registered. Check its health next.`);
-            setDisplayName('');
-            setCredentialId(crypto.randomUUID());
+            reset();
             onClose();
         },
         onError: (caught) => setError(describeError(caught, 'Unable to add the connection.')),
@@ -446,22 +484,24 @@ function AddConnectionDialog({ open, onClose }: Readonly<{ open: boolean; onClos
     function submit(event: FormEvent) {
         event.preventDefault();
         setError(null);
-        if (!displayName.trim()) {
-            setError('Give the connection a name.');
-            return;
+        if (!displayName.trim()) return setError('Give the connection a name.');
+        if (mode === 'details') {
+            const problem = validateConnectionDetails(details);
+            if (problem) return setError(problem);
         }
+        if (mode === 'raw' && !rawConnectionString.trim()) return setError('Paste a connection string.');
         create.mutate();
     }
-
-    const envVar = credentialEnvironmentVariable(credentialId);
     const example =
         providerId === 'postgresql'
             ? 'Host=localhost;Port=5432;Database=app;Username=app;Password=…'
             : 'Server=localhost,1433;Database=app;User Id=sa;Password=…;TrustServerCertificate=True';
+    const option = authOption(details);
+    const patch = (changes: Partial<ConnectionDetails>) => setDetails((current) => ({ ...current, ...changes }));
 
     return (
         <Modal
-            description="DataPitcher never stores connection strings. It reads them from an environment variable of the API process at connection time."
+            description="The connection string is stored on the API host under its secrets folder, never in the control database, and is never sent back to the browser."
             footer={
                 <>
                     <Button onClick={onClose}>Cancel</Button>
@@ -476,78 +516,180 @@ function AddConnectionDialog({ open, onClose }: Readonly<{ open: boolean; onClos
             title="Add connection"
         >
             <form className="grid min-w-0 gap-5" id="add-connection" onSubmit={submit}>
-                <Field label="Display name" required>
-                    <TextInput
-                        onChange={(event) => setDisplayName(event.target.value)}
-                        placeholder="e.g. Production replica"
-                        value={displayName}
-                    />
-                </Field>
-                <fieldset className="min-w-0">
-                    <legend className="mb-1.5 text-[13px] font-medium text-fg-muted">Provider</legend>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                        {(
-                            providers.data ?? [
-                                { providerId: 'sqlserver', displayName: 'SQL Server' },
-                                { providerId: 'postgresql', displayName: 'PostgreSQL' },
-                            ]
-                        ).map((provider) => (
-                            <label
-                                className={cx(
-                                    'flex cursor-pointer items-center gap-2 rounded-xl border p-2.5 text-sm font-medium transition-colors',
-                                    providerId === provider.providerId
-                                        ? 'border-accent bg-accent-soft/60 text-fg'
-                                        : 'border-border text-fg-muted hover:border-border-strong',
-                                )}
-                                key={provider.providerId}
-                            >
-                                <input
-                                    checked={providerId === provider.providerId}
-                                    className="sr-only"
-                                    name="provider"
-                                    onChange={() => setProviderId(provider.providerId)}
-                                    type="radio"
-                                />
-                                <ProviderMark providerId={provider.providerId} size="sm" />
-                                {provider.displayName}
-                            </label>
-                        ))}
-                    </div>
-                </fieldset>
-
-                <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-surface-2 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                        <div className="text-[13px] font-semibold text-fg">Credential</div>
-                        <Button
-                            icon={<Icons.Refresh size={14} />}
-                            onClick={() => setCredentialId(crypto.randomUUID())}
-                            size="sm"
-                            variant="ghost"
-                        >
-                            New ID
-                        </Button>
-                    </div>
-                    <p className="mt-1 text-[13px] text-fg-muted">
-                        Before checking health, export the connection string under this variable in the shell that runs
-                        the API, then restart it:
-                    </p>
-                    <div className="mt-3 flex items-start gap-2 rounded-lg bg-surface p-2 font-mono text-[12px] text-fg">
-                        <code className="min-w-0 flex-1 break-all whitespace-pre-wrap">
-                            export {envVar}=&quot;{example}&quot;
-                        </code>
-                        <CopyButton label="Copy" value={`export ${envVar}="${example}"`} />
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-fg-faint">
-                        Credential ID <Code className="break-all">{credentialId}</Code>
-                    </div>
+                <div className="grid gap-4 md:grid-cols-[1fr_auto]">
+                    <Field label="Display name" required>
+                        <TextInput
+                            onChange={(event) => setDisplayName(event.target.value)}
+                            placeholder="e.g. Production replica"
+                            value={displayName}
+                        />
+                    </Field>
+                    <fieldset className="min-w-0">
+                        <legend className="mb-1.5 text-[13px] font-medium text-fg-muted">Provider</legend>
+                        <div className="flex gap-2">
+                            {(
+                                providers.data ?? [
+                                    { providerId: 'sqlserver', displayName: 'SQL Server' },
+                                    { providerId: 'postgresql', displayName: 'PostgreSQL' },
+                                ]
+                            ).map((provider) => (
+                                <label
+                                    className={cx(
+                                        'flex h-9.5 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm font-medium transition-colors',
+                                        providerId === provider.providerId
+                                            ? 'border-accent bg-accent-soft/60 text-fg'
+                                            : 'border-border text-fg-muted hover:border-border-strong',
+                                    )}
+                                    key={provider.providerId}
+                                >
+                                    <input
+                                        checked={providerId === provider.providerId}
+                                        className="sr-only"
+                                        name="provider"
+                                        onChange={() =>
+                                            setDetails((current) => withProvider(current, provider.providerId))
+                                        }
+                                        type="radio"
+                                    />
+                                    <ProviderMark providerId={provider.providerId} size="sm" />
+                                    {provider.displayName}
+                                </label>
+                            ))}
+                        </div>
+                    </fieldset>
                 </div>
 
-                {providerId === 'postgresql' ? (
-                    <Alert tone="warning">
-                        Plan sealing and transfer execution currently run against SQL Server only. PostgreSQL
-                        connections can be registered and scanned.
-                    </Alert>
+                <Tabs
+                    items={[
+                        { value: 'details', label: 'Connection details' },
+                        { value: 'raw', label: 'Connection string' },
+                    ]}
+                    onChange={setMode}
+                    value={mode}
+                />
+
+                {mode === 'details' ? (
+                    <div className="grid gap-4">
+                        <div className="grid gap-4 sm:grid-cols-[1fr_120px_1fr]">
+                            <Field label="Server host" required>
+                                <TextInput
+                                    onChange={(event) => patch({ host: event.target.value })}
+                                    placeholder="db.internal"
+                                    value={details.host}
+                                />
+                            </Field>
+                            <Field label="Port">
+                                <TextInput
+                                    inputMode="numeric"
+                                    onChange={(event) => patch({ port: event.target.value })}
+                                    value={details.port}
+                                />
+                            </Field>
+                            <Field label="Database" required>
+                                <TextInput
+                                    onChange={(event) => patch({ database: event.target.value })}
+                                    placeholder="app"
+                                    value={details.database}
+                                />
+                            </Field>
+                        </div>
+                        <Field hint={option.description} label="Login method">
+                            <Select
+                                onChange={(event) => patch({ auth: event.target.value as AuthMethod })}
+                                value={details.auth}
+                            >
+                                {(['Database', 'Microsoft Entra ID'] as const)
+                                    .filter((group) => authOptionsFor(providerId).some((item) => item.group === group))
+                                    .map((group) => (
+                                        <optgroup key={group} label={group}>
+                                            {authOptionsFor(providerId)
+                                                .filter((item) => item.group === group)
+                                                .map((item) => (
+                                                    <option key={item.value} value={item.value}>
+                                                        {item.label}
+                                                    </option>
+                                                ))}
+                                        </optgroup>
+                                    ))}
+                            </Select>
+                        </Field>
+                        {option.usernameLabel || option.passwordLabel ? (
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                {option.usernameLabel ? (
+                                    <Field label={option.usernameLabel} required={option.usernameRequired}>
+                                        <TextInput
+                                            autoComplete="off"
+                                            onChange={(event) => patch({ username: event.target.value })}
+                                            value={details.username}
+                                        />
+                                    </Field>
+                                ) : null}
+                                {option.passwordLabel ? (
+                                    <Field label={option.passwordLabel} required>
+                                        <SecretInput
+                                            autoComplete="new-password"
+                                            onChange={(event) => patch({ password: event.target.value })}
+                                            value={details.password}
+                                        />
+                                    </Field>
+                                ) : null}
+                            </div>
+                        ) : null}
+                        {details.auth === 'entra-interactive' || details.auth === 'entra-device-code' ? (
+                            <Alert tone="warning">
+                                This login completes on the API host, not in this browser: the API process opens the
+                                sign-in prompt (or prints a device code) when it first connects. Use it for local runs;
+                                prefer a managed identity or service principal for servers.
+                            </Alert>
+                        ) : null}
+                        <div className="flex flex-wrap gap-5 text-sm text-fg">
+                            <label className="flex items-center gap-2">
+                                <input
+                                    checked={details.encrypt}
+                                    className="accent-accent"
+                                    onChange={(event) => patch({ encrypt: event.target.checked })}
+                                    type="checkbox"
+                                />
+                                {providerId === 'postgresql' ? 'Require SSL' : 'Encrypt connection'}
+                            </label>
+                            <label className={cx('flex items-center gap-2', !details.encrypt && 'opacity-50')}>
+                                <input
+                                    checked={details.trustServerCertificate}
+                                    className="accent-accent"
+                                    disabled={!details.encrypt}
+                                    onChange={(event) => patch({ trustServerCertificate: event.target.checked })}
+                                    type="checkbox"
+                                />
+                                Trust server certificate
+                            </label>
+                        </div>
+                        <div className="min-w-0 rounded-xl border border-border bg-surface-2 p-3">
+                            <div className="mb-1 text-xs font-semibold text-fg-muted">Resulting connection string</div>
+                            <code className="block min-w-0 font-mono text-[12px] break-all whitespace-pre-wrap text-fg">
+                                {buildConnectionString(details, { maskPassword: true })}
+                            </code>
+                        </div>
+                    </div>
                 ) : null}
+
+                {mode === 'raw' ? (
+                    <Field
+                        hint="Use the provider's native format. It is sent once over the API connection and stored on the API host."
+                        label="Connection string"
+                        required
+                    >
+                        <TextArea
+                            autoComplete="off"
+                            className="font-mono text-[12.5px]"
+                            onChange={(event) => setRawConnectionString(event.target.value)}
+                            placeholder={example}
+                            rows={4}
+                            spellCheck={false}
+                            value={rawConnectionString}
+                        />
+                    </Field>
+                ) : null}
+
                 {error ? <Alert tone="danger">{error}</Alert> : null}
             </form>
         </Modal>

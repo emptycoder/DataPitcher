@@ -14,3 +14,6 @@ web/*.tsbuildinfo
 
 # API control database created at runtime
 src/DataPitcher.Api/data/
+
+# Connection secrets written by the API (Secrets:Root)
+src/DataPitcher.Api/secrets/

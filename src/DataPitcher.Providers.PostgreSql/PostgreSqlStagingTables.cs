@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using DataPitcher.Core.Identity;
+using DataPitcher.Core.Plans;
 using DataPitcher.Core.Schema;
 using Npgsql;
 using NpgsqlTypes;
@@ -19,32 +22,40 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
     private readonly NpgsqlDataSource _target;
     private readonly PostgreSqlSchemaSnapshot _schema;
     private readonly IReadOnlyDictionary<TableDefinition, StableKeySelection> _stableKeys;
-    private readonly string _plan = Guid.NewGuid().ToString("N");
-    private readonly Dictionary<TableDefinition, int> _ordinals = [];
-    private int _nextOrdinal;
+    private readonly string _plan;
+    private readonly bool _dropOnDispose;
+    private readonly HashSet<TableDefinition> _touched = [];
 
     public PostgreSqlStagingTables(
         NpgsqlDataSource source,
         NpgsqlDataSource target,
         PostgreSqlSchemaSnapshot schema,
-        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+        Guid? planId = null,
+        bool dropOnDispose = true
     )
     {
         _source = source;
         _target = target;
         _schema = schema;
         _stableKeys = stableKeys;
+        _plan = (planId ?? Guid.NewGuid()).ToString("D");
+        _dropOnDispose = dropOnDispose;
     }
 
     public NpgsqlDataSource Source => _source;
 
     public NpgsqlDataSource Target => _target;
 
-    public string SourceTableName(TableDefinition table) => $"keys_{_plan}_{Ordinal(table):x8}";
+    public string SourceTableName(TableDefinition table) => Name("keys", table);
 
-    public string InputTableName(TableDefinition table) => $"input_{_plan}_{Ordinal(table):x8}";
+    /// <summary>The persisted root-key staging table the transfer worker joins against after sealing.</summary>
+    public static string SourceTableName(Guid planId, TableAddress table) =>
+        Name("keys", planId.ToString("D"), table.Schema, table.Name);
 
-    public string TargetTableName(TableDefinition table) => $"target_{_plan}_{Ordinal(table):x8}";
+    public string InputTableName(TableDefinition table) => Name("input", table);
+
+    public string TargetTableName(TableDefinition table) => Name("target", table);
 
     public async Task<IReadOnlyCollection<StableKey>> InsertSourceAsync(
         TableDefinition table,
@@ -99,7 +110,9 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var table in _ordinals.Keys)
+        if (!_dropOnDispose)
+            return;
+        foreach (var table in _touched)
         {
             await ExecuteAsync(
                 _source,
@@ -119,8 +132,19 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
         }
     }
 
-    private int Ordinal(TableDefinition table) =>
-        _ordinals.TryGetValue(table, out var value) ? value : _ordinals[table] = _nextOrdinal++;
+    private string Name(string prefix, TableDefinition table)
+    {
+        _touched.Add(table);
+        return Name(prefix, _plan, table.Schema, table.Name);
+    }
+
+    // PostgreSQL identifiers are limited to 63 bytes, so the plan and table are folded into a short digest.
+    private static string Name(string prefix, string plan, string schema, string table) =>
+        prefix
+        + "_"
+        + Convert
+            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(plan + "\u001f" + schema + "\u001f" + table)))
+            .ToLowerInvariant()[..32];
 
     private IReadOnlyList<string> KeyColumns(TableDefinition table) => _stableKeys[table].Constraint!.Columns;
 

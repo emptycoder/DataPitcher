@@ -8,7 +8,6 @@ using DataPitcher.Infrastructure.Persistence;
 using DataPitcher.Infrastructure.Plans;
 using DataPitcher.Infrastructure.Schema;
 using DataPitcher.Infrastructure.Selections;
-using DataPitcher.Providers.SqlServer;
 
 namespace DataPitcher.Api.Contracts;
 
@@ -29,7 +28,8 @@ public sealed class DataPitcherApplication(
     PlanStore plans,
     JobStore jobs,
     IJobEventReader jobEvents,
-    PlanSealingService? sealing = null
+    PlanSealingService? sealing = null,
+    ISecretWriter? secretWriter = null
 ) : IDataPitcherApplication
 {
     private const string DefaultBusinessSchema = "app";
@@ -46,10 +46,11 @@ public sealed class DataPitcherApplication(
         CancellationToken cancellationToken
     )
     {
-        var secretReference = new SecretReference(
-            SecretReferenceKind.EnvironmentVariable,
-            "DATAPITCHER_CREDENTIAL_" + request.CredentialId.ToString("N")
-        );
+        if (string.IsNullOrWhiteSpace(request.ConnectionString))
+            throw new ArgumentException("A connection string is required.", nameof(request));
+        var secretReference = await (
+            secretWriter ?? throw new InvalidOperationException("Connection secret storage is not configured.")
+        ).StoreAsync(request.CredentialId, request.ConnectionString, cancellationToken);
         var draft = new ConnectionProfileDraft(
             request.DisplayName,
             request.ProviderId,
@@ -67,8 +68,13 @@ public sealed class DataPitcherApplication(
         );
     }
 
-    public Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken) =>
-        connections.DeleteAsync(connectionId, ifMatch, cancellationToken);
+    public async Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken)
+    {
+        var profile = await connections.GetProfileAsync(connectionId, cancellationToken);
+        await connections.DeleteAsync(connectionId, ifMatch, cancellationToken);
+        if (secretWriter is not null)
+            await secretWriter.RemoveAsync(profile.SecretReference, cancellationToken);
+    }
 
     public async Task<OperationReceiptResponse> QueueConnectionCheckAsync(
         Guid connectionId,

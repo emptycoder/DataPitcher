@@ -1,3 +1,5 @@
+using System.Text.Json;
+using DataPitcher.Core.Plans;
 using Npgsql;
 
 namespace DataPitcher.Providers.PostgreSql;
@@ -15,7 +17,9 @@ public sealed class PostgreSqlTargetCheckpointStore(NpgsqlDataSource dataSource)
             transaction,
             "CREATE SCHEMA IF NOT EXISTS datapitcher; CREATE TABLE IF NOT EXISTS "
                 + Name
-                + " (job_id uuid NOT NULL, run_id uuid NOT NULL, last_batch_sequence bigint NOT NULL, last_stable_key bytea NOT NULL, cumulative_affected bigint NOT NULL, cumulative_inserts bigint NOT NULL, cumulative_updates bigint NOT NULL, manifest_hash text NOT NULL, fence_token bigint NOT NULL, PRIMARY KEY (job_id, run_id))",
+                + " (job_id uuid NOT NULL, run_id uuid NOT NULL, last_batch_sequence bigint NOT NULL, last_stable_key bytea NOT NULL, last_table text NULL, cumulative_affected bigint NOT NULL, cumulative_inserts bigint NOT NULL, cumulative_updates bigint NOT NULL, manifest_hash text NOT NULL, fence_token bigint NOT NULL, PRIMARY KEY (job_id, run_id)); ALTER TABLE "
+                + Name
+                + " ADD COLUMN IF NOT EXISTS last_table text NULL",
             cancellationToken
         );
         var existing = await ReadAsync(connection, transaction, context.JobId, context.RunId, cancellationToken);
@@ -24,7 +28,9 @@ public sealed class PostgreSqlTargetCheckpointStore(NpgsqlDataSource dataSource)
             await ExecuteAsync(
                 connection,
                 transaction,
-                "INSERT INTO " + Name + " VALUES (@job,@run,-1,''::bytea,0,0,0,@hash,@fence)",
+                "INSERT INTO "
+                    + Name
+                    + " (job_id,run_id,last_batch_sequence,last_stable_key,cumulative_affected,cumulative_inserts,cumulative_updates,manifest_hash,fence_token) VALUES (@job,@run,-1,''::bytea,0,0,0,@hash,@fence)",
                 cancellationToken,
                 context
             );
@@ -73,12 +79,13 @@ public sealed class PostgreSqlTargetCheckpointStore(NpgsqlDataSource dataSource)
         await using var command = new NpgsqlCommand(
             "UPDATE "
                 + Name
-                + " SET last_batch_sequence=@sequence,last_stable_key=@key,cumulative_affected=cumulative_affected+@affected,cumulative_inserts=cumulative_inserts+@inserts,cumulative_updates=cumulative_updates+@updates WHERE job_id=@job AND run_id=@run AND manifest_hash=@hash AND fence_token=@fence AND last_batch_sequence=@previous",
+                + " SET last_batch_sequence=@sequence,last_stable_key=@key,last_table=@table,cumulative_affected=cumulative_affected+@affected,cumulative_inserts=cumulative_inserts+@inserts,cumulative_updates=cumulative_updates+@updates WHERE job_id=@job AND run_id=@run AND manifest_hash=@hash AND fence_token=@fence AND last_batch_sequence=@previous",
             connection,
             transaction
         );
         command.Parameters.AddWithValue("sequence", batch.Sequence);
         command.Parameters.AddWithValue("key", key);
+        command.Parameters.AddWithValue("table", JsonSerializer.Serialize(table.Target));
         command.Parameters.AddWithValue("affected", affected);
         command.Parameters.AddWithValue("inserts", inserts);
         command.Parameters.AddWithValue("updates", updates);
@@ -97,7 +104,7 @@ public sealed class PostgreSqlTargetCheckpointStore(NpgsqlDataSource dataSource)
     )
     {
         await using var command = new NpgsqlCommand(
-            "SELECT job_id,run_id,last_batch_sequence,last_stable_key,cumulative_affected,cumulative_inserts,cumulative_updates,manifest_hash,fence_token FROM "
+            "SELECT job_id,run_id,last_batch_sequence,last_stable_key,cumulative_affected,cumulative_inserts,cumulative_updates,manifest_hash,fence_token,last_table FROM "
                 + Name
                 + " WHERE job_id=@job AND run_id=@run",
             connection,
@@ -116,7 +123,8 @@ public sealed class PostgreSqlTargetCheckpointStore(NpgsqlDataSource dataSource)
                 reader.GetInt64(5),
                 reader.GetInt64(6),
                 reader.GetString(7),
-                reader.GetInt64(8)
+                reader.GetInt64(8),
+                reader.IsDBNull(9) ? null : JsonSerializer.Deserialize<TableAddress>(reader.GetString(9))
             )
             : null;
     }

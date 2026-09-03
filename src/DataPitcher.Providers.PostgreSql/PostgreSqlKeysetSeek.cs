@@ -8,7 +8,7 @@ public sealed record PostgreSqlSeekQuery(string Sql, IReadOnlyList<NpgsqlParamet
 
 public static class PostgreSqlKeysetSeek
 {
-    public static PostgreSqlSeekQuery Build(PostgreSqlWriteTable table, StableKey after, int limit)
+    public static PostgreSqlSeekQuery Build(PostgreSqlWriteTable table, StableKey? after, int limit, string join = "")
     {
         if (limit <= 0)
             throw new ArgumentOutOfRangeException(nameof(limit));
@@ -23,13 +23,14 @@ public static class PostgreSqlKeysetSeek
             );
             predicates.Add((equal.Length == 0 ? "" : equal + " AND ") + Expression(columns[index]) + ">@k" + index);
         }
-        for (var index = 0; index < columns.Count; index++)
-            parameters.Add(
-                new NpgsqlParameter("k" + index, columns[index].ProviderType)
-                {
-                    Value = after.Components.Single(x => x.Column == columns[index].Name).Value!,
-                }
-            );
+        if (after is not null)
+            for (var index = 0; index < columns.Count; index++)
+                parameters.Add(
+                    new NpgsqlParameter("k" + index, columns[index].ProviderType)
+                    {
+                        Value = after.Components.Single(x => x.Column == columns[index].Name).Value!,
+                    }
+                );
         parameters.Add(new NpgsqlParameter("limit", limit));
         var order = string.Join(", ", columns.Select(Expression));
         var select = string.Join(
@@ -41,9 +42,10 @@ public static class PostgreSqlKeysetSeek
                 + select
                 + " FROM "
                 + PostgreSqlIdentifier.Qualified(table.Target.Schema, table.Target.Name)
-                + " s WHERE ("
-                + string.Join(" OR ", predicates)
-                + ") ORDER BY "
+                + " s"
+                + join
+                + (after is null ? "" : " WHERE (" + string.Join(" OR ", predicates) + ")")
+                + " ORDER BY "
                 + order
                 + " LIMIT @limit",
             Array.AsReadOnly(parameters.ToArray())

@@ -1,6 +1,12 @@
 namespace DataPitcher.Api.Contracts;
 
-public sealed record CreateConnectionRequest(string DisplayName, string ProviderId, Guid CredentialId, string IfMatch);
+public sealed record CreateConnectionRequest(
+    string DisplayName,
+    string ProviderId,
+    Guid CredentialId,
+    string IfMatch,
+    string ConnectionString
+);
 
 public sealed record ConnectionResponse(
     Guid ConnectionId,

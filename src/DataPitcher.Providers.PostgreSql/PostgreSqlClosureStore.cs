@@ -16,10 +16,12 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
         NpgsqlDataSource target,
         PostgreSqlSchemaSnapshot sourceSchema,
         PostgreSqlSchemaSnapshot targetSchema,
-        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+        Guid? planId = null,
+        bool dropOnDispose = true
     )
     {
-        _stages = new PostgreSqlStagingTables(source, target, sourceSchema, stableKeys);
+        _stages = new PostgreSqlStagingTables(source, target, sourceSchema, stableKeys, planId, dropOnDispose);
         _target = targetSchema;
         _stableKeys = stableKeys;
     }

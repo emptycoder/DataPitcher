@@ -38,6 +38,7 @@ public static class DataPitcherCompositionExtensions
         services.AddSingleton(new ControlDatabase($"Data Source={controlDatabasePath}"));
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<ISecretReferenceResolver>(_ => new SecretReferenceResolver(secretsRoot));
+        services.AddSingleton<ISecretWriter>(_ => new FileSecretStore(secretsRoot));
 
         services.AddSingleton<JobEventSignal>();
         services.AddSingleton<IJobEventSignal>(provider => provider.GetRequiredService<JobEventSignal>());
@@ -50,6 +51,8 @@ public static class DataPitcherCompositionExtensions
         services.AddSingleton<JobStore>();
         services.AddSingleton<SelectionStore>();
         services.AddSingleton<PlanStore>();
+        services.AddSingleton<ISealingProvider, SqlServerSealingProvider>();
+        services.AddSingleton<ISealingProvider, PostgreSqlSealingProvider>();
         services.AddSingleton<PlanSealingService>();
         services.AddSingleton<ConnectionHealthService>();
         services.AddSingleton<IJobControl>(provider => provider.GetRequiredService<JobStore>());
@@ -60,12 +63,14 @@ public static class DataPitcherCompositionExtensions
         services.AddSingleton<IWorkerFaults, NoOpWorkerFaults>();
         services.AddSingleton<IWorkerDelay, ClockWorkerDelay>();
         services.AddSingleton<IJobRunCatalog, PlanJobRunCatalog>();
-        services.AddSingleton<SqlServerRunSessions>();
+        services.AddSingleton<IRunSessionProvider, SqlServerRunSessions>();
+        services.AddSingleton<IRunSessionProvider, PostgreSqlRunSessions>();
+        services.AddSingleton<ProviderRunSessionRouter>();
         services.AddSingleton<ITransferReadSessionFactory>(provider =>
-            provider.GetRequiredService<SqlServerRunSessions>()
+            provider.GetRequiredService<ProviderRunSessionRouter>()
         );
         services.AddSingleton<ITargetRunSessionFactory>(provider =>
-            provider.GetRequiredService<SqlServerRunSessions>()
+            provider.GetRequiredService<ProviderRunSessionRouter>()
         );
         services.AddSingleton<LeaseStore>();
         services.AddSingleton<LeaseRenewer>();

@@ -36,7 +36,13 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     [Fact]
     public async Task CreateConnection_ReturnsTypedConnection()
     {
-        var request = new CreateConnectionRequest("Target", "postgresql", Guid.NewGuid(), "*");
+        var request = new CreateConnectionRequest(
+            "Target",
+            "postgresql",
+            Guid.NewGuid(),
+            "*",
+            "Host=localhost;Database=app"
+        );
         using var response = await _client.PostAsJsonAsync("/api/connections", request, CancellationToken.None);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var connection = await response.Content.ReadFromJsonAsync<ConnectionResponse>();
@@ -46,7 +52,13 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     [Fact]
     public async Task CreateConnection_WhenIfMatchIsMissing_ReturnsValidationProblemDetails()
     {
-        var request = new CreateConnectionRequest("Target", "postgresql", Guid.NewGuid(), "");
+        var request = new CreateConnectionRequest(
+            "Target",
+            "postgresql",
+            Guid.NewGuid(),
+            "",
+            "Host=localhost;Database=app"
+        );
 
         using var response = await _client.PostAsJsonAsync("/api/connections", request, CancellationToken.None);
 
@@ -74,6 +86,16 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
+    }
+
+    [Fact]
+    public async Task CreateConnection_WhenConnectionStringIsMissing_ReturnsValidationProblemDetails()
+    {
+        var request = new CreateConnectionRequest("Target", "postgresql", Guid.NewGuid(), "*", "");
+
+        using var response = await _client.PostAsJsonAsync("/api/connections", request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]

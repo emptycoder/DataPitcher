@@ -125,7 +125,13 @@ public sealed class ProductionCompositionTests
         var credentialId = Guid.NewGuid();
 
         var created = await fixture.Application.CreateConnectionAsync(
-            new CreateConnectionRequest("Source", "postgresql", credentialId, "connection-create"),
+            new CreateConnectionRequest(
+                "Source",
+                "postgresql",
+                credentialId,
+                "connection-create",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
             CancellationToken.None
         );
         var connections = await fixture.Application.ListConnectionsAsync(CancellationToken.None);
@@ -140,7 +146,8 @@ public sealed class ProductionCompositionTests
         var profile = await fixture.Profiles.GetProfileAsync(created.ConnectionId, CancellationToken.None);
 
         Assert.Single(connections, connection => connection.ConnectionId == created.ConnectionId);
-        Assert.Equal("DATAPITCHER_CREDENTIAL_" + credentialId.ToString("N"), profile.SecretReference.Locator);
+        Assert.Equal(SecretReferenceKind.FileMounted, profile.SecretReference.Kind);
+        Assert.Contains(credentialId.ToString("N"), profile.SecretReference.Locator);
         Assert.Equal(created.ConnectionId, check.ConnectionId);
         Assert.Equal(created.ConnectionId, scan.ConnectionId);
         Assert.Equal("snapshot-hash", snapshot.Hash);
@@ -151,11 +158,23 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
         var source = await fixture.Application.CreateConnectionAsync(
-            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"),
+            new CreateConnectionRequest(
+                "Source",
+                "postgresql",
+                Guid.NewGuid(),
+                "source-create",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
             CancellationToken.None
         );
         var other = await fixture.Application.CreateConnectionAsync(
-            new CreateConnectionRequest("Other", "postgresql", Guid.NewGuid(), "other-create"),
+            new CreateConnectionRequest(
+                "Other",
+                "postgresql",
+                Guid.NewGuid(),
+                "other-create",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
             CancellationToken.None
         );
         var sourceSnapshotId = fixture.SeedSnapshot(source.ConnectionId);
@@ -172,11 +191,23 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
         var source = await fixture.Application.CreateConnectionAsync(
-            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"),
+            new CreateConnectionRequest(
+                "Source",
+                "postgresql",
+                Guid.NewGuid(),
+                "source-create",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
             CancellationToken.None
         );
         var other = await fixture.Application.CreateConnectionAsync(
-            new CreateConnectionRequest("Other", "postgresql", Guid.NewGuid(), "other-create"),
+            new CreateConnectionRequest(
+                "Other",
+                "postgresql",
+                Guid.NewGuid(),
+                "other-create",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
             CancellationToken.None
         );
         var otherSnapshotId = fixture.SeedSnapshot(other.ConnectionId);
@@ -195,7 +226,13 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
         var source = await fixture.Application.CreateConnectionAsync(
-            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"),
+            new CreateConnectionRequest(
+                "Source",
+                "postgresql",
+                Guid.NewGuid(),
+                "source-create",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
             CancellationToken.None
         );
         var snapshotId = fixture.SeedSnapshot(
@@ -306,11 +343,23 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
         var source = await fixture.Application.CreateConnectionAsync(
-            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source"),
+            new CreateConnectionRequest(
+                "Source",
+                "postgresql",
+                Guid.NewGuid(),
+                "source",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
             CancellationToken.None
         );
         var target = await fixture.Application.CreateConnectionAsync(
-            new CreateConnectionRequest("Target", "postgresql", Guid.NewGuid(), "target"),
+            new CreateConnectionRequest(
+                "Target",
+                "postgresql",
+                Guid.NewGuid(),
+                "target",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
             CancellationToken.None
         );
         var selectionId = Guid.NewGuid();
@@ -423,7 +472,13 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
         var connection = await fixture.Application.CreateConnectionAsync(
-            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "status-connection"),
+            new CreateConnectionRequest(
+                "Source",
+                "postgresql",
+                Guid.NewGuid(),
+                "status-connection",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
             CancellationToken.None
         );
         var receipt = await fixture.Application.QueueSchemaScanAsync(connection.ConnectionId, CancellationToken.None);
@@ -480,11 +535,7 @@ public sealed class ProductionCompositionTests
             CancellationToken.None
         );
         await fixture.Plans.SealAsync(planId, SealedContent(), CancellationToken.None);
-        var receipt = await fixture.Application.StartJobAsync(
-            planId,
-            "status-job-" + state,
-            CancellationToken.None
-        );
+        var receipt = await fixture.Application.StartJobAsync(planId, "status-job-" + state, CancellationToken.None);
         using (var database = fixture.Database.Open())
             database.Execute(
                 "UPDATE Jobs SET State = @state, FailureCode = @failureCode WHERE JobId = @jobId",
@@ -632,7 +683,10 @@ public sealed class ProductionCompositionTests
                 Selections,
                 Plans,
                 Jobs,
-                Events
+                Events,
+                secretWriter: new FileSecretStore(
+                    Path.Combine(Path.GetTempPath(), "datapitcher-secrets-" + Guid.NewGuid().ToString("N"))
+                )
             );
         }
 

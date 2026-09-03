@@ -58,7 +58,12 @@ export type Snapshot = z.infer<typeof SnapshotSchema>;
 export type SnapshotTable = Snapshot['tables'][number];
 export type SnapshotForeignKey = Snapshot['foreignKeys'][number];
 
-export type CreateConnectionInput = Readonly<{ displayName: string; providerId: string; credentialId: string }>;
+export type CreateConnectionInput = Readonly<{
+    displayName: string;
+    providerId: string;
+    credentialId: string;
+    connectionString?: string | null;
+}>;
 
 export const providerLabels: Readonly<Record<string, string>> = { sqlserver: 'SQL Server', postgresql: 'PostgreSQL' };
 

@@ -7,17 +7,21 @@ using DataPitcher.Infrastructure.Connections;
 using DataPitcher.Infrastructure.Leasing;
 using DataPitcher.Infrastructure.Plans;
 using DataPitcher.Infrastructure.Worker;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 
-namespace DataPitcher.Providers.SqlServer;
+namespace DataPitcher.Providers.PostgreSql;
 
-public sealed class SqlServerRunSessions(
+/// <summary>
+/// PostgreSQL transfer sessions for the job worker: reads sealed rows from the source in stable-key order and
+/// applies them to the target through the fenced, checkpointed <see cref="PostgreSqlTransferExecutor"/>.
+/// </summary>
+public sealed class PostgreSqlRunSessions(
     PlanStore plans,
     ConnectionProfileStore profiles,
     ISecretReferenceResolver secrets
 ) : IRunSessionProvider
 {
-    public string ProviderId => "sqlserver";
+    public string ProviderId => "postgresql";
 
     public async Task<ITransferReadSession> OpenKeysetAsync(
         TransferRun run,
@@ -28,12 +32,14 @@ public sealed class SqlServerRunSessions(
     {
         var content = await ContentAsync(run, cancellationToken);
         var source = await ConnectionStringAsync(run.SourceConnectionId, cancellationToken);
-        var target = await ConnectionStringAsync(run.TargetConnectionId, cancellationToken);
+        await using var target = NpgsqlDataSource.Create(
+            await ConnectionStringAsync(run.TargetConnectionId, cancellationToken)
+        );
         var checkpoint =
-            await new SqlServerTargetCheckpointStore(target).ReadAsync(run.JobId, run.RunId, cancellationToken)
+            await new PostgreSqlTargetCheckpointStore(target).ReadAsync(run.JobId, run.RunId, cancellationToken)
             ?? throw new InvalidOperationException("Target checkpoint was not initialized.");
         return new ReadSession(
-            source,
+            NpgsqlDataSource.Create(source),
             content,
             run.PlanId,
             startAfter,
@@ -45,7 +51,10 @@ public sealed class SqlServerRunSessions(
     public async Task<ITargetRunSession> OpenAsync(TransferRun run, CancellationToken cancellationToken)
     {
         var content = await ContentAsync(run, cancellationToken);
-        return new TargetSession(await ConnectionStringAsync(run.TargetConnectionId, cancellationToken), content);
+        return new TargetSession(
+            NpgsqlDataSource.Create(await ConnectionStringAsync(run.TargetConnectionId, cancellationToken)),
+            content
+        );
     }
 
     private async Task<TransferPlanContent> ContentAsync(TransferRun run, CancellationToken cancellationToken) =>
@@ -59,7 +68,7 @@ public sealed class SqlServerRunSessions(
         );
 
     private sealed class ReadSession(
-        string connectionString,
+        NpgsqlDataSource dataSource,
         TransferPlanContent content,
         Guid planId,
         StableKey? startAfter,
@@ -78,7 +87,7 @@ public sealed class SqlServerRunSessions(
             {
                 var planTable = _tables[_index];
                 var stableKey = StableKey(content, planTable);
-                var sourceSchema = await new SqlServerTransferSchemaReader(connectionString).ReadAsync(
+                var sourceSchema = await new PostgreSqlTransferSchemaReader(dataSource).ReadAsync(
                     planTable.Mapping.Source.Schema,
                     planTable.Mapping.Source.Name,
                     stableKey.Columns,
@@ -87,24 +96,23 @@ public sealed class SqlServerRunSessions(
                 var source = SourceTable(sourceSchema, planTable, stableKey);
                 var join =
                     " JOIN "
-                    + SqlServerStagingTables.Qualified(
-                        SqlServerStagingTables.SourceTableName(planId, planTable.Mapping.Source)
+                    + PostgreSqlStagingTables.Qualified(
+                        PostgreSqlStagingTables.SourceTableName(planId, planTable.Mapping.Source)
                     )
                     + " f ON "
                     + string.Join(
                         " AND ",
                         source.StableKeyColumns.Select(
-                            (column, index) => "s." + SqlServerIdentifier.Quote(column.Name) + "=f.[k" + index + "]"
+                            (column, index) => "s." + PostgreSqlIdentifier.Quote(column.Name) + "=f.k" + index
                         )
                     );
-                var query = SqlServerKeysetSeek.Build(source, _after, content.BatchTarget.MaximumRows, join);
+                var query = PostgreSqlKeysetSeek.Build(source, _after, content.BatchTarget.MaximumRows, join);
                 var rows = new List<TransferRow>();
                 StableKey? last = null;
                 var bytes = 0L;
-                await using var connection = new SqlConnection(connectionString);
-                await connection.OpenAsync(cancellationToken);
-                await using var command = new SqlCommand(query.Sql, connection);
-                command.Parameters.AddRange(query.Parameters.ToArray());
+                await using var command = dataSource.CreateCommand(query.Sql);
+                foreach (var parameter in query.Parameters)
+                    command.Parameters.Add(parameter);
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken);
                 while (await reader.ReadAsync(cancellationToken))
                 {
@@ -145,17 +153,13 @@ public sealed class SqlServerRunSessions(
 
         public Task DiscardUncommittedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() => dataSource.DisposeAsync();
     }
 
-    private sealed class TargetSession(string connectionString, TransferPlanContent content) : ITargetRunSession
+    private sealed class TargetSession(NpgsqlDataSource dataSource, TransferPlanContent content) : ITargetRunSession
     {
-        private readonly SqlServerTargetCheckpointStore _checkpoints = new(connectionString);
-        private readonly SqlServerTransferExecutor _executor = new(
-            connectionString,
-            new NoopMirror(),
-            new NoopBarrier()
-        );
+        private readonly PostgreSqlTargetCheckpointStore _checkpoints = new(dataSource);
+        private readonly PostgreSqlTransferExecutor _executor = new(dataSource, new NoopMirror(), new NoopBarrier());
         private long _bytesTransferred;
 
         public async Task<RecoverySnapshot> AcquireFenceReadCheckpointAndJournalAsync(
@@ -172,7 +176,7 @@ public sealed class SqlServerRunSessions(
             return new RecoverySnapshot(await CheckpointAsync(run, checkpoint, cancellationToken), []);
         }
 
-        // ponytail: mutation journal recovery is unwired; add it when mutation strategies are enabled.
+        // Mutation journal recovery is unwired for PostgreSQL as well; add it when mutation strategies are enabled.
         public Task<IReadOnlyList<MutationJournalEntry>> RepairMutationsAsync(
             IReadOnlyList<MutationJournalEntry> mutations,
             CancellationToken cancellationToken
@@ -198,14 +202,14 @@ public sealed class SqlServerRunSessions(
                     mappings.Single(mapping => StringComparer.Ordinal.Equals(mapping.Source, column)).Target
                 )
                 .ToArray();
-            var target = await new SqlServerTransferSchemaReader(connectionString).ReadAsync(
+            var target = await new PostgreSqlTransferSchemaReader(dataSource).ReadAsync(
                 planTable.Mapping.Target.Schema,
                 planTable.Mapping.Target.Name,
                 targetKeys,
                 cancellationToken
             );
             var sourceColumns = SourceColumns(planTable, stableKey);
-            var batch = new SqlServerTransferBatch(
+            var batch = new PostgreSqlTransferBatch(
                 BatchSequence.ProviderFromWorker(unit.BatchSequence),
                 rows.Select(row => TargetRow(row, sourceColumns, mappings, target)),
                 TargetKey(unit.LastStableKey, mappings),
@@ -221,11 +225,11 @@ public sealed class SqlServerRunSessions(
 
         public Task DiscardUncommittedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() => dataSource.DisposeAsync();
 
         private async Task<TargetCheckpoint> CheckpointAsync(
             TransferRun run,
-            SqlServerTargetCheckpoint checkpoint,
+            PostgreSqlTargetCheckpoint checkpoint,
             CancellationToken cancellationToken
         )
         {
@@ -251,13 +255,13 @@ public sealed class SqlServerRunSessions(
                         .Target
                 )
                 .ToArray();
-            var target = await new SqlServerTransferSchemaReader(connectionString).ReadAsync(
+            var target = await new PostgreSqlTransferSchemaReader(dataSource).ReadAsync(
                 planTable.Mapping.Target.Schema,
                 planTable.Mapping.Target.Name,
                 targetKeys,
                 cancellationToken
             );
-            var key = SqlServerStableKeyCodec.Decode(checkpoint.LastStableKey, target);
+            var key = PostgreSqlStableKeyCodec.Decode(checkpoint.LastStableKey, target);
             return new TargetCheckpoint(
                 run.JobId,
                 run.RunId,
@@ -302,8 +306,8 @@ public sealed class SqlServerRunSessions(
     private static StableKeyDefinition StableKey(TransferPlanContent content, PlanTable table) =>
         content.StableKeys.Single(key => Same(key.Table, table.Mapping.Source));
 
-    private static SqlServerWriteTable SourceTable(
-        SqlServerWriteTable schema,
+    private static PostgreSqlWriteTable SourceTable(
+        PostgreSqlWriteTable schema,
         PlanTable table,
         StableKeyDefinition stableKey
     ) =>
@@ -338,6 +342,7 @@ public sealed class SqlServerRunSessions(
             byte[] bytes => bytes.LongLength,
             int => sizeof(int),
             long => sizeof(long),
+            Guid => 16,
             _ => 0,
         };
 
@@ -345,15 +350,15 @@ public sealed class SqlServerRunSessions(
         StringComparer.Ordinal.Equals(left.Schema, right.Schema)
         && StringComparer.Ordinal.Equals(left.Name, right.Name);
 
-    private static SqlServerExecutionContext Context(TransferRun run, LeaseGrant lease) =>
+    private static PostgreSqlExecutionContext Context(TransferRun run, LeaseGrant lease) =>
         new(run.JobId, run.RunId, lease.FenceToken, run.ManifestSealHash);
 
-    private static SqlServerConflictPolicy Policy(TransferPlanContent content, PlanTable table) =>
+    private static PostgreSqlConflictPolicy Policy(TransferPlanContent content, PlanTable table) =>
         content.ConflictPolicies.SingleOrDefault(policy => Same(policy.Table, table.Mapping.Source))?.Policy switch
         {
-            RootConflictPolicy.SkipExisting => SqlServerConflictPolicy.SkipExisting,
-            RootConflictPolicy.Upsert => SqlServerConflictPolicy.Upsert,
-            _ => SqlServerConflictPolicy.InsertOnly,
+            RootConflictPolicy.SkipExisting => PostgreSqlConflictPolicy.SkipExisting,
+            RootConflictPolicy.Upsert => PostgreSqlConflictPolicy.Upsert,
+            _ => PostgreSqlConflictPolicy.InsertOnly,
         };
 
     private static StableKey TargetKey(StableKey source, IReadOnlyList<ColumnMapping> mappings) =>
@@ -372,11 +377,11 @@ public sealed class SqlServerRunSessions(
             ))
         );
 
-    private static SqlServerTransferRow TargetRow(
+    private static PostgreSqlTransferRow TargetRow(
         TransferRow row,
         IReadOnlyList<string> sourceColumns,
         IReadOnlyList<ColumnMapping> mappings,
-        SqlServerWriteTable target
+        PostgreSqlWriteTable target
     )
     {
         var values = target.InsertColumns.ToDictionary(
@@ -390,21 +395,21 @@ public sealed class SqlServerRunSessions(
                 ],
             StringComparer.Ordinal
         );
-        return new SqlServerTransferRow(
+        return new PostgreSqlTransferRow(
             new StableKey(target.StableKeyColumns.Select(column => new KeyComponent(column.Name, values[column.Name]))),
             values
         );
     }
 
-    private sealed class NoopMirror : ISqlServerDerivedCheckpointMirror
+    private sealed class NoopMirror : IDerivedCheckpointMirror
     {
-        public Task WriteAsync(SqlServerTargetCheckpoint checkpoint, CancellationToken cancellationToken) =>
+        public Task WriteAsync(PostgreSqlTargetCheckpoint checkpoint, CancellationToken cancellationToken) =>
             Task.CompletedTask;
     }
 
-    private sealed class NoopBarrier : ISqlServerAfterTargetCommitBarrier
+    private sealed class NoopBarrier : IAfterTargetCommitBarrier
     {
-        public Task WaitAsync(SqlServerTargetCheckpoint checkpoint, CancellationToken cancellationToken) =>
+        public Task WaitAsync(PostgreSqlTargetCheckpoint checkpoint, CancellationToken cancellationToken) =>
             Task.CompletedTask;
     }
 }

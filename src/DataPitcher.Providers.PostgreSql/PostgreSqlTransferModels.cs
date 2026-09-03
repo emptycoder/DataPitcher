@@ -92,7 +92,8 @@ public sealed record PostgreSqlTargetCheckpoint(
     long CumulativeInserts,
     long CumulativeUpdates,
     string ManifestHash,
-    long FenceToken
+    long FenceToken,
+    TableAddress? LastTable = null
 );
 
 public sealed record PostgreSqlResumePoint(long NextBatchSequence, StableKey? AfterStableKey);

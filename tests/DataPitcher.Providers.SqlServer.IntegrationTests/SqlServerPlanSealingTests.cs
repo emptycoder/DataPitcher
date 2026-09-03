@@ -119,7 +119,8 @@ public sealed class SqlServerPlanSealingTests(SqlServerClosureFixture fixture)
                 selections,
                 profiles,
                 snapshots,
-                new SecretReferenceResolver(directory)
+                new SecretReferenceResolver(directory),
+                [new SqlServerSealingProvider()]
             );
 
             await sealing.SealAsync(planId, CancellationToken.None);

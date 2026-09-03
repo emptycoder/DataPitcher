@@ -31,8 +31,17 @@ public sealed class PostgreSqlClosureFixture : IAsyncLifetime
         var target = CreateTargetDataSource(schema, targetRecorder);
         await PostgreSqlClosureScope.CreateAsync(source, schema, false);
         await PostgreSqlClosureScope.CreateAsync(target, schema, true);
-        return new PostgreSqlClosureScope(schema, source, target);
+        return new PostgreSqlClosureScope(schema, source, target)
+        {
+            SourceConnectionString = ConnectionString(_source, schema),
+            TargetConnectionString = ConnectionString(_target, schema),
+        };
     }
+
+    // NpgsqlDataSource.ConnectionString redacts the password, so tests that hand a connection string to the
+    // application (as a mounted secret) need the unredacted one.
+    private static string ConnectionString(PostgreSqlContainer container, string schema) =>
+        new NpgsqlConnectionStringBuilder(container.GetConnectionString()) { SearchPath = schema }.ConnectionString;
 
     private NpgsqlDataSource CreateTargetDataSource(string schema, PostgreSqlCommandRecorder? recorder)
     {
@@ -67,6 +76,8 @@ public sealed class PostgreSqlClosureScope(string schema, NpgsqlDataSource sourc
     public string Schema { get; } = schema;
     public NpgsqlDataSource Source { get; } = source;
     public NpgsqlDataSource Target { get; } = target;
+    public string SourceConnectionString { get; init; } = "";
+    public string TargetConnectionString { get; init; } = "";
 
     public static async Task CreateAsync(NpgsqlDataSource dataSource, string schema, bool target)
     {

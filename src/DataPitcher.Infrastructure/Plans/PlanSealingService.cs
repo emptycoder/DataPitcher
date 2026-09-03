@@ -2,24 +2,35 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using DataPitcher.Core.Closure;
+using DataPitcher.Core.Connections;
 using DataPitcher.Core.Plans;
 using DataPitcher.Core.Schema;
 using DataPitcher.Core.Selection;
 using DataPitcher.Infrastructure.Connections;
-using DataPitcher.Infrastructure.Plans;
 using DataPitcher.Infrastructure.Schema;
 using DataPitcher.Infrastructure.Selections;
 
-namespace DataPitcher.Providers.SqlServer;
+namespace DataPitcher.Infrastructure.Plans;
 
+/// <summary>
+/// Provider-neutral plan sealing: validates the saved selection against the sealed schema snapshot, runs it against
+/// the source, computes the demand-driven closure across source and target through the provider's
+/// <see cref="ISealingSession"/>, and freezes the resulting content on the plan.
+/// </summary>
 public sealed class PlanSealingService(
     PlanStore plans,
     SelectionStore selections,
     ConnectionProfileStore connections,
     SchemaSnapshotStore snapshots,
-    ISecretReferenceResolver secrets
+    ISecretReferenceResolver secrets,
+    IEnumerable<ISealingProvider> providers
 )
 {
+    private readonly IReadOnlyDictionary<string, ISealingProvider> providers = providers.ToDictionary(
+        provider => provider.ProviderId,
+        StringComparer.Ordinal
+    );
+
     public async Task SealAsync(Guid planId, CancellationToken cancellationToken)
     {
         var plan =
@@ -49,83 +60,74 @@ public sealed class PlanSealingService(
             );
         var source = await connections.GetProfileAsync(sourceConnectionId, cancellationToken);
         var target = await connections.GetProfileAsync(targetConnectionId, cancellationToken);
-        if (
-            !string.Equals(source.ProviderId, "sqlserver", StringComparison.Ordinal)
-            || !string.Equals(target.ProviderId, "sqlserver", StringComparison.Ordinal)
-        )
+        if (!string.Equals(source.ProviderId, target.ProviderId, StringComparison.Ordinal))
             throw new NotSupportedException(
-                "Plan sealing currently requires SQL Server source and target connections."
+                "Cross-provider transfers are blocked: the source and target must use the same database provider."
             );
+        if (!providers.TryGetValue(source.ProviderId, out var provider))
+            throw new NotSupportedException($"Plan sealing is not available for the '{source.ProviderId}' provider.");
         var snapshot = await snapshots.GetAsync(sourceConnectionId, snapshotId, cancellationToken);
         var sourceConnection = await secrets.ResolveAsync(source.SecretReference, cancellationToken);
         var targetConnection = await secrets.ResolveAsync(target.SecretReference, cancellationToken);
-        var sourceContent = await new SqlServerSchemaIntrospector().ReadAsync(
+        await using var session = await provider.OpenAsync(
             source,
             sourceConnection,
-            cancellationToken
-        );
-        if (!string.Equals(CanonicalSchemaSnapshotHasher.Hash(sourceContent), snapshot.Hash, StringComparison.Ordinal))
-            throw new InvalidOperationException("Source schema changed since the selection snapshot.");
-        var sourceCatalog = await new SqlServerCatalogReader(sourceConnection).ReadAsync(
-            source.BusinessSchema,
-            cancellationToken
-        );
-        var targetCatalog = await new SqlServerCatalogReader(targetConnection).ReadAsync(
-            target.BusinessSchema,
-            cancellationToken
-        );
-        var targetContent = await new SqlServerSchemaIntrospector().ReadAsync(
             target,
             targetConnection,
             cancellationToken
         );
+        if (
+            !string.Equals(
+                CanonicalSchemaSnapshotHasher.Hash(session.SourceSchema),
+                snapshot.Hash,
+                StringComparison.Ordinal
+            )
+        )
+            throw new InvalidOperationException("Source schema changed since the selection snapshot.");
         var root =
-            sourceCatalog
-                .Tables.SingleOrDefault(table =>
-                    string.Equals(table.Definition.Schema, selection.RootSchema, StringComparison.Ordinal)
-                    && string.Equals(table.Definition.Name, selection.RootTable, StringComparison.Ordinal)
-                )
-                ?.Definition
-            ?? throw new InvalidOperationException("Selection root table was not found in the source catalog.");
+            session.SourceTables.SingleOrDefault(table =>
+                string.Equals(table.Schema, selection.RootSchema, StringComparison.Ordinal)
+                && string.Equals(table.Name, selection.RootTable, StringComparison.Ordinal)
+            ) ?? throw new InvalidOperationException("Selection root table was not found in the source catalog.");
         var rootKey = StableKey(root, selection.StableKeyConstraintName, selection.StableKeyColumns);
         var (rawSql, parameters, parameterHash) = RawSql(selection.QueryJson);
         var sql = new GeneratedSelectionSql(rawSql, root, rootKey, parameters, true);
-        var executor = new SqlServerSelectionExecutor(sourceConnection, sourceCatalog);
-        await executor.ValidateAsync(sql, cancellationToken);
-        var seeds = await executor.ReadKeysAsync(
+        await session.ValidateAsync(sql, cancellationToken);
+        var seeds = await session.ReadKeysAsync(
             sql,
             SelectionExecutionLimits.Default.MaximumResultSize,
             cancellationToken
         );
-        var relationships = ReachableRelationships(sourceCatalog, root);
+        var relationships = ReachableRelationships(session.SourceForeignKeys, root);
         var stableKeys = relationships
             .SelectMany(relationship => new[] { relationship.FromTable, relationship.ToTable })
             .Append(root)
             .Distinct()
             .ToDictionary(table => table, table => StableKeySelector.Select(table, null));
         stableKeys[root] = new StableKeySelection(rootKey);
-        await using var store = new SqlServerClosureStore(
-            sourceConnection,
-            targetConnection,
-            sourceCatalog,
-            targetCatalog,
-            stableKeys,
-            planId,
-            false
-        );
-        var closure = await new DependencyClosure(store).ComputeAsync(
-            new ClosureRequest(
-                [new ClosureRoot(root, seeds.Keys, RootConflictPolicy.FailOnConflict)],
-                relationships,
-                stableKeys
-            ),
-            cancellationToken
-        );
+        var store = session.CreateClosureStore(stableKeys, planId);
+        ClosureResult closure;
+        try
+        {
+            closure = await new DependencyClosure(store).ComputeAsync(
+                new ClosureRequest(
+                    [new ClosureRoot(root, seeds.Keys, RootConflictPolicy.FailOnConflict)],
+                    relationships,
+                    stableKeys
+                ),
+                cancellationToken
+            );
+        }
+        finally
+        {
+            if (store is IAsyncDisposable disposable)
+                await disposable.DisposeAsync();
+        }
         var content = Content(
             selection,
             snapshot,
-            sourceContent,
-            targetContent,
+            session.SourceSchema,
+            session.TargetSchema,
             source,
             target,
             root,
@@ -145,8 +147,8 @@ public sealed class PlanSealingService(
         StoredSchemaSnapshot snapshot,
         SchemaSnapshotContent sourceSchema,
         SchemaSnapshotContent targetSchema,
-        DataPitcher.Core.Connections.ConnectionProfile source,
-        DataPitcher.Core.Connections.ConnectionProfile target,
+        ConnectionProfile source,
+        ConnectionProfile target,
         TableDefinition root,
         IReadOnlyCollection<ClosureRelationship> relationships,
         IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
@@ -209,7 +211,7 @@ public sealed class PlanSealingService(
                     Address(relationship.ToTable),
                     relationship.FromColumns,
                     relationship.ToColumns,
-                    DataPitcher.Core.Plans.RelationshipDirection.Outbound,
+                    Core.Plans.RelationshipDirection.Outbound,
                     true
                 ))
                 .ToArray(),
@@ -233,7 +235,7 @@ public sealed class PlanSealingService(
     }
 
     private static IReadOnlyCollection<ClosureRelationship> ReachableRelationships(
-        SqlServerSchemaSnapshot catalog,
+        IReadOnlyCollection<ForeignKeyDefinition> foreignKeys,
         TableDefinition root
     )
     {
@@ -241,7 +243,7 @@ public sealed class PlanSealingService(
         var frontier = new Queue<TableDefinition>([root]);
         var relationships = new List<ClosureRelationship>();
         while (frontier.TryDequeue(out var table))
-            foreach (var foreignKey in catalog.ForeignKeys.Where(foreignKey => foreignKey.ChildTable == table))
+            foreach (var foreignKey in foreignKeys.Where(foreignKey => foreignKey.ChildTable == table))
             {
                 relationships.Add(new ClosureRelationship(foreignKey));
                 if (tables.Add(foreignKey.ParentTable))
