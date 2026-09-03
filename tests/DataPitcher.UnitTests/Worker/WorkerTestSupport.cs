@@ -1,5 +1,6 @@
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
+using DataPitcher.Core.Plans;
 using DataPitcher.Infrastructure.Leasing;
 using DataPitcher.Infrastructure.Persistence;
 using DataPitcher.Infrastructure.Worker;
@@ -93,7 +94,7 @@ internal sealed class TestTransferReadSession(TransferUnit unit, string connecti
 internal sealed class TestTransferReadSessionFactory(TestTransferReadSession session) : ITransferReadSessionFactory
 {
     public StableKey? LastRequestedStartAfter { get; private set; }
-    public Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken) { LastRequestedStartAfter = startAfter; return Task.FromResult<ITransferReadSession>(session); }
+    public Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken, TableAddress? table = null) { LastRequestedStartAfter = startAfter; return Task.FromResult<ITransferReadSession>(session); }
 }
 
 internal sealed class TestTargetRunSession(TargetCheckpoint checkpoint, string connectionOwnerId, List<string> calls) : ITargetRunSession
@@ -172,7 +173,7 @@ internal sealed class PrefetchedReadSession(TransferUnit first, TransferUnit pre
 internal sealed class PrefetchedReadSessionFactory(PrefetchedReadSession session) : ITransferReadSessionFactory
 {
     public StableKey? LastRequestedStartAfter { get; private set; }
-    public Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken) { LastRequestedStartAfter = startAfter; return Task.FromResult<ITransferReadSession>(session); }
+    public Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken, TableAddress? table = null) { LastRequestedStartAfter = startAfter; return Task.FromResult<ITransferReadSession>(session); }
 }
 
 internal sealed class CommitBarrierTargetSession(TargetCheckpoint initialCheckpoint) : ITargetRunSession

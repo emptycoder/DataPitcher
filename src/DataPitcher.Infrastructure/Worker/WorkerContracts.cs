@@ -1,16 +1,17 @@
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
+using DataPitcher.Core.Transfer;
 using DataPitcher.Infrastructure.Leasing;
 using DataPitcher.Infrastructure.Persistence;
 
 namespace DataPitcher.Infrastructure.Worker;
 
-public sealed record TransferRun(Guid JobId, Guid RunId, string ManifestSealHash, bool SupportsDurableResume, Guid SourceConnectionId, Guid TargetConnectionId, TransferMode TransferMode);
+public sealed record TransferRun(Guid JobId, Guid RunId, string ManifestSealHash, bool SupportsDurableResume, Guid SourceConnectionId, Guid TargetConnectionId, TransferMode TransferMode, Guid PlanId = default);
 public interface ITransferConnectionRevalidator { Task RevalidateAsync(TransferRun run, CancellationToken cancellationToken); }
-public sealed record TargetCheckpoint(Guid JobId, Guid RunId, long BatchSequence, StableKey? LastStableKey, long RowCount, string ManifestSealHash, long FenceToken, long BytesTransferred = 0);
+public sealed record TargetCheckpoint(Guid JobId, Guid RunId, long BatchSequence, StableKey? LastStableKey, long RowCount, string ManifestSealHash, long FenceToken, long BytesTransferred = 0, TableAddress? LastTable = null);
 public enum TransferUnitKind { Batch, AtomicComponent }
-public sealed record TransferUnit(long BatchSequence, StableKey LastStableKey, long RowCount, TransferUnitKind Kind, long BytesTransferred = 0)
+public sealed record TransferUnit(long BatchSequence, StableKey LastStableKey, long RowCount, TransferUnitKind Kind, long BytesTransferred = 0, TableAddress? Table = null, IReadOnlyList<TransferRow>? Rows = null)
 {
     public bool CanPauseAfterCommit => Kind is TransferUnitKind.Batch or TransferUnitKind.AtomicComponent;
 }
@@ -36,7 +37,7 @@ public interface ITransferReadSession : IAsyncDisposable
     Task<TransferUnit?> ReadNextAsync(CancellationToken cancellationToken);
     Task DiscardUncommittedAsync(CancellationToken cancellationToken);
 }
-public interface ITransferReadSessionFactory { Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken); }
+public interface ITransferReadSessionFactory { Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken, TableAddress? table = null); }
 public interface ITargetRunSession : IAsyncDisposable
 {
     Task<RecoverySnapshot> AcquireFenceReadCheckpointAndJournalAsync(TransferRun run, LeaseGrant lease, CancellationToken cancellationToken);

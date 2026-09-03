@@ -1,4 +1,6 @@
 using System.Data;
+using System.Security.Cryptography;
+using System.Text;
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Schema;
 using Microsoft.Data.SqlClient;
@@ -11,24 +13,25 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
     private readonly string _target;
     private readonly SqlServerSchemaSnapshot _schema;
     private readonly IReadOnlyDictionary<TableDefinition, StableKeySelection> _keys;
-    private readonly string _plan = Guid.NewGuid().ToString("N");
-    private readonly Dictionary<TableDefinition, int> _ordinals = [];
-    private int _next;
+    private readonly string _plan;
+    private readonly bool _dropOnDispose;
 
-    public SqlServerStagingTables(string source, string target, SqlServerSchemaSnapshot schema, IReadOnlyDictionary<TableDefinition, StableKeySelection> keys)
+    public SqlServerStagingTables(string source, string target, SqlServerSchemaSnapshot schema, IReadOnlyDictionary<TableDefinition, StableKeySelection> keys, Guid? planId = null, bool dropOnDispose = true)
     {
         _source = source;
         _target = target;
         _schema = schema;
         _keys = keys;
+        _plan = (planId ?? Guid.NewGuid()).ToString("D");
+        _dropOnDispose = dropOnDispose;
     }
 
     public string SourceConnectionString => _source;
     public string TargetConnectionString => _target;
 
-    public string SourceTableName(TableDefinition t) => $"keys_{_plan}_{Ordinal(t):x8}";
-    public string InputTableName(TableDefinition t) => $"input_{_plan}_{Ordinal(t):x8}";
-    public string TargetTableName(TableDefinition t) => $"target_{_plan}_{Ordinal(t):x8}";
+    public string SourceTableName(TableDefinition t) => Name("keys", t);
+    public string InputTableName(TableDefinition t) => Name("input", t);
+    public string TargetTableName(TableDefinition t) => Name("target", t);
 
     public async Task<IReadOnlyCollection<StableKey>> InsertSourceAsync(TableDefinition t, IReadOnlyCollection<StableKey> keys, int generation, CancellationToken ct)
     {
@@ -68,7 +71,8 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var t in _ordinals.Keys)
+        if (!_dropOnDispose) return;
+        foreach (var t in _keys.Keys)
         {
             await DropAsync(_source, SourceTableName(t));
             await DropAsync(_source, InputTableName(t));
@@ -76,7 +80,7 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
         }
     }
 
-    private int Ordinal(TableDefinition t) => _ordinals.TryGetValue(t, out var i) ? i : _ordinals[t] = _next++;
+    private string Name(string prefix, TableDefinition table) => prefix + "_" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(_plan + "\u001f" + table.Schema + "\u001f" + table.Name))).ToLowerInvariant();
 
     private IReadOnlyList<string> Columns(TableDefinition t) => _keys[t].Constraint!.Columns;
 

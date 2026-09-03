@@ -50,7 +50,7 @@ public sealed class SqlServerTargetCheckpointStore(string targetConnectionString
 
     private static async Task EnsureAsync(SqlConnection connection, SqlTransaction transaction, CancellationToken cancellationToken)
     {
-        await using var command = new SqlCommand("IF SCHEMA_ID(N'datapitcher') IS NULL EXEC(N'CREATE SCHEMA [datapitcher]'); IF OBJECT_ID(N'[datapitcher].[transfer_checkpoints]',N'U') IS NULL CREATE TABLE [datapitcher].[transfer_checkpoints] (job_id uniqueidentifier NOT NULL,run_id uniqueidentifier NOT NULL,last_batch_sequence bigint NOT NULL,last_stable_key varbinary(max) NOT NULL,cumulative_affected bigint NOT NULL,cumulative_inserts bigint NOT NULL,cumulative_updates bigint NOT NULL,manifest_hash nvarchar(128) NOT NULL,fence_token bigint NOT NULL,PRIMARY KEY(job_id,run_id));", connection, transaction);
+        await using var command = new SqlCommand("IF SCHEMA_ID(N'datapitcher') IS NULL EXEC(N'CREATE SCHEMA [datapitcher]'); IF OBJECT_ID(N'[datapitcher].[transfer_checkpoints]',N'U') IS NULL CREATE TABLE [datapitcher].[transfer_checkpoints] (job_id uniqueidentifier NOT NULL,run_id uniqueidentifier NOT NULL,last_batch_sequence bigint NOT NULL,last_stable_key varbinary(max) NOT NULL,last_table nvarchar(512) NULL,cumulative_affected bigint NOT NULL,cumulative_inserts bigint NOT NULL,cumulative_updates bigint NOT NULL,manifest_hash nvarchar(128) NOT NULL,fence_token bigint NOT NULL,PRIMARY KEY(job_id,run_id)); IF COL_LENGTH(N'datapitcher.transfer_checkpoints', N'last_table') IS NULL ALTER TABLE [datapitcher].[transfer_checkpoints] ADD last_table nvarchar(512) NULL;", connection, transaction);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

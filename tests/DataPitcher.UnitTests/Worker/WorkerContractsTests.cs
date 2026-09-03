@@ -1,5 +1,6 @@
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Plans;
+using DataPitcher.Core.Transfer;
 using DataPitcher.Infrastructure.Time;
 using DataPitcher.Infrastructure.Worker;
 using Xunit;
@@ -84,6 +85,20 @@ public sealed class WorkerContractsTests
         var run = new TransferRun(Guid.NewGuid(), Guid.NewGuid(), "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast);
 
         Assert.NotEqual(Guid.Empty, run.JobId); Assert.NotEqual(Guid.Empty, run.RunId); Assert.Equal("seal", run.ManifestSealHash); Assert.True(run.SupportsDurableResume);
+    }
+
+    [Fact]
+    public void TransferContracts_WhenPlanAndTableAreProvided_PreserveThem()
+    {
+        var table = new TableAddress("dbo", "Orders"); var row = new TransferRow([1], 1); var rows = new[] { row }; var planId = Guid.NewGuid();
+        var run = new TransferRun(Guid.NewGuid(), Guid.NewGuid(), "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast, planId);
+        var unit = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch, 1, table, rows);
+        var checkpoint = new TargetCheckpoint(Guid.NewGuid(), Guid.NewGuid(), 1, unit.LastStableKey, 1, "seal", 1, 1, table);
+
+        Assert.Equal(planId, run.PlanId);
+        Assert.Equal(table, unit.Table);
+        Assert.Same(row, Assert.Single(unit.Rows!));
+        Assert.Equal(table, checkpoint.LastTable);
     }
 
     [Fact]

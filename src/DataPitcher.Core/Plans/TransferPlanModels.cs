@@ -10,7 +10,7 @@ public enum TriggerStrategy { Fire, Suppress }
 public enum ConstraintStrategy { Enforce, Defer, DisableAndRevalidate }
 public enum VerificationStrategy { Standard, StrictExact }
 public sealed record TableAddress(string Schema, string Name);
-public sealed record ConnectionFingerprint(string Provider, string DatabaseIdentity, string Fingerprint);
+public sealed record ConnectionFingerprint(string Provider, string DatabaseIdentity, string Fingerprint, Guid ConnectionId = default);
 public sealed record SchemaSnapshotReference(string Hash);
 public sealed record SelectionReference(Guid SelectionId, long Version, string ParameterHash);
 public sealed class RelationshipPolicy

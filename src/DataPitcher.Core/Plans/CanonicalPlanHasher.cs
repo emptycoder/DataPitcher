@@ -13,7 +13,7 @@ public static class CanonicalPlanHasher
         Unordered(w, plan.StableKeys, StableKey); Unordered(w, plan.Tables, Table); Batch(w, plan.BatchTarget); w.Int((int)plan.VerificationStrategy); Counts(w, plan.ManifestTotals);
         return Convert.ToHexString(SHA256.HashData(w.Bytes));
     }
-    private static void Connection(Writer w, ConnectionFingerprint x) { w.Text(x.Provider); w.Text(x.DatabaseIdentity); w.Text(x.Fingerprint); }
+    private static void Connection(Writer w, ConnectionFingerprint x) { w.Text(x.Provider); w.Text(x.DatabaseIdentity); w.Text(x.Fingerprint); w.Text(x.ConnectionId.ToString("D")); }
     private static void Selection(Writer w, SelectionReference x) { w.Text(x.SelectionId.ToString("D")); w.Long(x.Version); w.Text(x.ParameterHash); }
     private static void Relationship(Writer w, RelationshipPolicy x) { w.Text(x.Name); Address(w, x.From); Address(w, x.To); Ordered(w, x.FromColumns, (a, v) => a.Text(v)); Ordered(w, x.ToColumns, (a, v) => a.Text(v)); w.Int((int)x.Direction); w.Bool(x.IsEnabled); }
     private static void Conflict(Writer w, TableConflictPolicy x) { Address(w, x.Table); w.Int((int)x.Policy); }

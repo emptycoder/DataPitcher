@@ -1,0 +1,2 @@
+ALTER TABLE Selections ADD COLUMN ConnectionId TEXT NULL;
+ALTER TABLE Selections ADD COLUMN SnapshotId TEXT NULL;

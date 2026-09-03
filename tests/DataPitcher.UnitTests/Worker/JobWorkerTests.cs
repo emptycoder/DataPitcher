@@ -257,7 +257,7 @@ public sealed class JobWorkerTests
     private sealed class CountingSourceFactory : ITransferReadSessionFactory
     {
         public int OpenCalls { get; private set; }
-        public Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken)
+        public Task<ITransferReadSession> OpenKeysetAsync(TransferRun run, StableKey? startAfter, CancellationToken cancellationToken, TableAddress? table = null)
         {
             OpenCalls++;
             return Task.FromException<ITransferReadSession>(new NotSupportedException());

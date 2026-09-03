@@ -19,6 +19,12 @@ public sealed class CanonicalPlanHasherTests
         var first = PlanTestData.Baseline(); var second = PlanTestData.Reversed();
         Assert.Equal(CanonicalPlanHasher.Hash(first), CanonicalPlanHasher.Hash(second));
     }
+    [Fact]
+    public void Hash_WhenConnectionIdDiffers_Changes()
+    {
+        var source = new ConnectionFingerprint("PostgreSql", "source-db-001", "source-fingerprint", Guid.Parse("11111111-1111-1111-1111-111111111111"));
+        Assert.NotEqual(CanonicalPlanHasher.Hash(PlanTestData.Baseline()), CanonicalPlanHasher.Hash(PlanTestData.Baseline(source: source)));
+    }
     public static IEnumerable<object[]> Seeds() => Enumerable.Range(1, 100).Select(seed => new object[] { seed });
     [Theory] [MemberData(nameof(Seeds))]
     public void Property_EquivalentCanonicalPlans_HashEqually(int seed)

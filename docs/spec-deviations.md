@@ -44,6 +44,18 @@ DataPitcher was specified in a detailed written specification. During architectu
 
 **SEE:** ADR 0004.
 
+### D18
+
+**SPEC REQUIRED:** Use unpredictable physical staging names and persist a logical-to-physical mapping in the control database.
+
+**INSTEAD:** Derive physical staging names deterministically from the plan identifier and table address.
+
+**REASON:** Deterministic names remove the control-database mapping table, its store, and its migration.
+
+**RESIDUAL RISK:** Staging object names become guessable; permissions on the dedicated staging schema mitigate that risk.
+
+**SEE:** This entry records the approved trade.
+
 ## Cycle handling
 
 ### D5

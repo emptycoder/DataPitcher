@@ -40,7 +40,7 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
         var checkpoint = await recovery.RecoverAsync(claim, run, target, leaseLost.Token);
         await jobs.MarkRunningAsync(claim.Lease, leaseLost.Token);
         await events.AppendAsync(new JobEventAppend(claim.Job.JobId, "state", new JobEventPayload("running", checkpoint.RowCount, checkpoint.BytesTransferred)), leaseLost.Token);
-        await using var source = await sources.OpenKeysetAsync(run, checkpoint.LastStableKey, leaseLost.Token);
+        await using var source = await sources.OpenKeysetAsync(run, checkpoint.LastStableKey, leaseLost.Token, checkpoint.LastTable);
         for (TransferUnit? unit; (unit = await source.ReadNextAsync(leaseLost.Token)) is not null;)
         {
             await faults.HitAsync(TransferFaultPoint.BeforeTargetCommit, leaseLost.Token);
