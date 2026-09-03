@@ -102,7 +102,7 @@ export function createTransferMonitor(options: TransferMonitorOptions) {
       if (!stopped) scheduleReconnect('disconnected');
     } catch (error) {
       if (stopped || (error instanceof DOMException && error.name === 'AbortError')) return;
-      if (error instanceof StreamResponseError) await handleResponseStatus(error.status); else scheduleReconnect('disconnected');
+      scheduleReconnect('disconnected');
     } finally {
       reader = undefined;
       controller = undefined;

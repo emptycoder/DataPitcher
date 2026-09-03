@@ -41,3 +41,10 @@ it('connections API uses the shared HTTP request when given browser fetch', asyn
   expect(request).toHaveBeenCalledWith('/api/connections', expect.objectContaining({ headers: expect.any(Headers) }));
   expect(new Headers(request.mock.calls[0]![1]?.headers).get('Authorization')).toBe('Bearer browser-token');
 });
+
+it('surfaces a non-JSON connection error without inventing problem details', async () => {
+  const request = vi.fn(async () => new Response('Connection service unavailable', { status: 503 }));
+  const authenticated = createDevelopmentAuthenticationAdapter({ subjectId: 'operator-1', tenantId: 'tenant-1' }, 'memory-token');
+
+  await expect(fetchConnections(request, authenticated, new AbortController().signal)).rejects.toMatchObject({ status: 503, problem: null });
+});

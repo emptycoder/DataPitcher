@@ -3,6 +3,7 @@ import {
   consumeEventStream,
   presentationForJob,
   reduceJobEvent,
+  tableProgressLabel,
   TransferEventPayload,
   type JobSnapshot,
 } from './transferMonitorModel';
@@ -39,4 +40,40 @@ it('validates lowercase event states before reducing them into job progress', ()
 
 it('never describes a verification failure as a successful transfer', () => {
   expect(presentationForJob({ ...job, state: 'verificationfailed' })).toEqual({ label: 'Verification failed', successful: false });
+});
+
+it('preserves valid retry guidance and ignores unknown event-stream fields', () => {
+  const parsed = consumeEventStream({ line: '', event: {} }, 'id: 4\r\nretry: 250\r\nunsupported: value\r\ndata: {}\r\n\r\n');
+
+  expect(parsed.events).toEqual([{ id: '4', data: '{}', retry: 250 }]);
+});
+
+it('ignores empty event frames and stream comments', () => {
+  const parsed = consumeEventStream({ line: '', event: {} }, ': heartbeat\n\n');
+
+  expect(parsed.events).toEqual([]);
+});
+
+it('treats data fields without a separator as empty data', () => {
+  const parsed = consumeEventStream({ line: '', event: {} }, 'data\n\n');
+
+  expect(parsed.events).toEqual([{ data: '' }]);
+});
+
+it('preserves the named event type in event-stream messages', () => {
+  const parsed = consumeEventStream({ line: '', event: {} }, 'event: progress\ndata: {}\n\n');
+
+  expect(parsed.events).toEqual([{ event: 'progress', data: '{}' }]);
+});
+
+it('keeps an unspecified terminal state non-successful', () => {
+  expect(presentationForJob({ ...job, state: 'failed' })).toEqual({ label: 'failed', successful: false });
+});
+
+it('describes explicit success as successful', () => {
+  expect(presentationForJob({ ...job, state: 'succeeded' })).toEqual({ label: 'Transfer succeeded', successful: true });
+});
+
+it('labels table progress with readable row and byte counts', () => {
+  expect(tableProgressLabel({ table: 'sales.Orders', rowsTransferred: 1_234, bytesTransferred: 5_678 })).toBe('sales.Orders: 1,234 rows, 5,678 bytes');
 });
