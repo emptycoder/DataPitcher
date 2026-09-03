@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Text.Encodings.Web;
 using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
+using DataPitcher.Auth.Abstractions.Authorization;
 using DataPitcher.Core.Authorization;
 using DataPitcher.Infrastructure.Events;
 using DataPitcher.Infrastructure.Migrations;
@@ -49,6 +50,7 @@ public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
             services.AddSingleton<IDataPitcherApplication>(Application);
             services.AddSingleton<TestResourceAccessGrantReader>();
             services.AddSingleton<IResourceAccessGrantReader>(serviceProvider => serviceProvider.GetRequiredService<TestResourceAccessGrantReader>());
+            services.AddSingleton<IPermissionDecisionResolver, TestPermissionDecisionResolver>();
             services.AddSingleton<IValidatedAccessTokenLifetime, TestValidatedAccessTokenLifetime>();
             services.AddSingleton<IJobEventWriter>(Events);
             services.AddSingleton<IJobEventReader>(Events);
@@ -122,6 +124,18 @@ public sealed class TestResourceAccessGrantReader(IHttpContextAccessor accessor)
         };
         return Task.FromResult(deniedId is null || resourceId != deniedId);
     }
+}
+
+/// <summary>
+/// Reproduces the pre-fix "trust the permission claim" contract exactly, but only inside the test host: the
+/// production <see cref="ClaimsPermissionDecisionResolver"/> never reads this claim, so <see cref="TestAuthenticationHandler"/>
+/// keeps letting individual tests grant an arbitrary exact permission set via the X-Test-Permissions header
+/// without every test having to model role bundles.
+/// </summary>
+public sealed class TestPermissionDecisionResolver : IPermissionDecisionResolver
+{
+    public AuthorizationDecision Resolve(ClaimsPrincipal principal, Permission permission) =>
+        new(principal.HasClaim(ApiClaimTypes.Permission, permission.Value) ? AuthorizationOutcome.Granted : AuthorizationOutcome.Denied, PermissionSet.Empty);
 }
 
 public sealed class TestValidatedAccessTokenLifetime : IValidatedAccessTokenLifetime

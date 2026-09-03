@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DataPitcher.Api.Authorization;
 
@@ -10,6 +12,24 @@ public sealed class DevelopmentResourceAccessGrantReader : IResourceAccessGrantR
 {
     public Task<bool> IsGrantedAsync(ClaimsPrincipal principal, ApiResource resource, CancellationToken cancellationToken) =>
         Task.FromResult(true);
+}
+
+/// <summary>
+/// Registers <see cref="DevelopmentResourceAccessGrantReader"/> only in a Debug build with
+/// "Authorization:DevelopmentGrants:Enabled" set, mirroring the guard on the development authentication provider:
+/// startup fails rather than a permissive default silently activating in a Release artifact.
+/// </summary>
+public static class DevelopmentAccessDefaultsRegistration
+{
+    public static IServiceCollection AddDevelopmentResourceAccessGrantReader(this IServiceCollection services, IConfiguration configuration)
+    {
+#if DEBUG
+        if (configuration.GetValue<bool>("Authorization:DevelopmentGrants:Enabled")) services.AddSingleton<IResourceAccessGrantReader, DevelopmentResourceAccessGrantReader>();
+#else
+        if (configuration.GetValue<bool>("Authorization:DevelopmentGrants:Enabled")) throw new InvalidOperationException("Development resource-access grants cannot be enabled in a Release artifact.");
+#endif
+        return services;
+    }
 }
 
 /// <summary>

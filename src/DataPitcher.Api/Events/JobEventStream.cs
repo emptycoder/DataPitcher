@@ -33,7 +33,8 @@ public static class JobEventStream
 
         var resource = new JobResource(jobId);
         var authorization = await authorizationService.AuthorizeAsync(user, resource, new ResourcePermissionRequirement(Permissions.TransfersRead));
-        if (!authorization.Succeeded) return ApiAuthorizationResults.Forbidden(context, resource);
+        if (!authorization.Succeeded)
+            return AuthorizationFailureDiagnostics.IsIndeterminate(authorization.Failure) ? ApiAuthorizationResults.Indeterminate(context, resource) : ApiAuthorizationResults.Forbidden(context, resource);
 
         try
         {

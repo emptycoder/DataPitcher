@@ -49,7 +49,8 @@ public static class EndpointGroups
         HttpContext context, IAuthorizationService authorizationService, ClaimsPrincipal user, ApiResource resource, Permission permission)
     {
         var result = await authorizationService.AuthorizeAsync(user, resource, new ResourcePermissionRequirement(permission));
-        return result.Succeeded ? null : ApiAuthorizationResults.Forbidden(context, resource);
+        if (result.Succeeded) return null;
+        return AuthorizationFailureDiagnostics.IsIndeterminate(result.Failure) ? ApiAuthorizationResults.Indeterminate(context, resource) : ApiAuthorizationResults.Forbidden(context, resource);
     }
 
     private static async Task<Ok<IReadOnlyList<ConnectionResponse>>> ListConnectionsAsync(

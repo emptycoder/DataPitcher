@@ -15,7 +15,7 @@ builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddDataPitcherAuthenticationProviders(builder.Configuration, builder.Environment);
 builder.Services.AddApiAuthorization();
-builder.Services.AddSingleton<IResourceAccessGrantReader, DevelopmentResourceAccessGrantReader>();
+builder.Services.AddDevelopmentResourceAccessGrantReader(builder.Configuration);
 builder.Services.AddSingleton<IValidatedAccessTokenLifetime, DevelopmentValidatedAccessTokenLifetime>();
 builder.Services.AddDataPitcherComposition(builder.Configuration);
 builder.Services.AddOpenApi(options =>
