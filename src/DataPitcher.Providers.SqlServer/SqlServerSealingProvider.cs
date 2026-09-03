@@ -11,6 +11,8 @@ namespace DataPitcher.Providers.SqlServer;
 
 public sealed class SqlServerSealingProvider : ISealingProvider
 {
+    static SqlServerSealingProvider() => SqlServerEntraAuthentication.EnsureRegistered();
+
     public string ProviderId => "sqlserver";
 
     public async Task<ISealingSession> OpenAsync(

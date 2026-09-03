@@ -18,6 +18,8 @@ public sealed class SqlServerRunSessions(
     ISecretReferenceResolver secrets
 ) : IRunSessionProvider
 {
+    static SqlServerRunSessions() => SqlServerEntraAuthentication.EnsureRegistered();
+
     public string ProviderId => "sqlserver";
 
     public async Task<ITransferReadSession> OpenKeysetAsync(

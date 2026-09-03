@@ -37,6 +37,8 @@ public sealed class SqlServerSchemaSnapshot
 
 public sealed class SqlServerCatalogReader(string connectionString)
 {
+    static SqlServerCatalogReader() => SqlServerEntraAuthentication.EnsureRegistered();
+
     private const string ColumnsSql =
         "/* DataPitcher.Catalog.Columns */ SELECT t.name, c.name, ty.name, c.max_length, c.is_nullable, CAST(CASE WHEN cc.is_computed = 1 OR c.generated_always_type <> 0 THEN 1 ELSE 0 END AS bit) "
         + "FROM sys.tables t "

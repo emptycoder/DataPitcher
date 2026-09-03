@@ -11,6 +11,8 @@ namespace DataPitcher.Providers.SqlServer;
 
 public sealed class SqlServerConnectionProbe : ICapabilityDetector
 {
+    static SqlServerConnectionProbe() => SqlServerEntraAuthentication.EnsureRegistered();
+
     public async Task<ConnectionProbeEvidence> ProbeAsync(
         ConnectionProbeRequest request,
         CancellationToken cancellationToken
