@@ -1,0 +1,4 @@
+ALTER TABLE Selections ADD COLUMN RootSchema TEXT NULL;
+ALTER TABLE Selections ADD COLUMN RootTable TEXT NULL;
+ALTER TABLE Selections ADD COLUMN StableKeyConstraintName TEXT NULL;
+ALTER TABLE Selections ADD COLUMN StableKeyColumnsJson TEXT NULL;

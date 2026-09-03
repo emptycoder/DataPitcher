@@ -14,7 +14,7 @@ public sealed record ForeignKeyPathResponse(string ForeignKeyId, string ChildTab
 public sealed record SelectionWorkbenchSchemaResponse(IReadOnlyList<SelectionTableResponse> Tables, IReadOnlyList<ForeignKeyPathResponse> ForeignKeys, string SchemaRevision);
 
 public sealed record TypedParameterValueRequest(string Name, string Kind, object Value);
-public sealed record SelectionRequestBody(string Mode, object? Visual, string? RawSql, IReadOnlyList<TypedParameterValueRequest> Parameters, string SchemaRevision, Guid? ConnectionId = null, Guid? SnapshotId = null);
+public sealed record SelectionRequestBody(string Mode, object? Visual, string? RawSql, IReadOnlyList<TypedParameterValueRequest> Parameters, string SchemaRevision, Guid? ConnectionId = null, Guid? SnapshotId = null, string? RootSchema = null, string? RootTable = null, string? StableKeyConstraintName = null, IReadOnlyList<string>? StableKeyColumns = null);
 
 public sealed record TypedParameterDefinitionResponse(string Name, string Kind);
 public sealed record CompilationResponse(string SqlSnapshot, IReadOnlyList<TypedParameterDefinitionResponse> Parameters, IReadOnlyList<string> Warnings, string SchemaRevision);

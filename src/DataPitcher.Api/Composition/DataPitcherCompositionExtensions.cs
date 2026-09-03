@@ -39,6 +39,7 @@ public static class DataPitcherCompositionExtensions
         services.AddSingleton<JobStore>();
         services.AddSingleton<SelectionStore>();
         services.AddSingleton<PlanStore>();
+        services.AddSingleton<PlanSealingService>();
         services.AddSingleton<ConnectionHealthService>();
 
         services.AddSingleton<IConnectionProvider, PostgreSqlConnectionProvider>();
