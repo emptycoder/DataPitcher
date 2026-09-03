@@ -1,4 +1,5 @@
 using DataPitcher.Core.Connections;
+using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
 using DataPitcher.Infrastructure.Connections;
 using DataPitcher.Infrastructure.Events;
@@ -51,7 +52,17 @@ public sealed class DataPitcherApplication(
     public async Task<OperationReceiptResponse> QueueSchemaScanAsync(Guid connectionId, CancellationToken cancellationToken)
     {
         var scan = await snapshots.QueueAsync(connectionId, Guid.NewGuid().ToString(), cancellationToken);
-        return Receipt(connectionId: scan.ConnectionId);
+        return Receipt(scan.ScanId, connectionId: scan.ConnectionId, state: "queued");
+    }
+
+    public async Task<OperationStatusResponse?> GetOperationStatusAsync(Guid operationId, CancellationToken cancellationToken)
+    {
+        var scan = await snapshots.FindScanAsync(operationId, cancellationToken);
+        if (scan is not null)
+            return new(scan.ScanId, "schema-scan", scan.State.ToString(), scan.State is SchemaScanState.Completed or SchemaScanState.Failed, scan.State is SchemaScanState.Failed, scan.FailureCode, scan.ConnectionId, scan.SnapshotId, null, null);
+
+        var job = jobs.Find(operationId);
+        return job is null ? null : new(job.JobId, "job", job.State.ToString(), job.State is JobState.Cancelled or JobState.Succeeded or JobState.Failed or JobState.VerificationFailed, job.State is JobState.Failed or JobState.VerificationFailed, job.FailureCode, null, null, job.PlanId, job.JobId);
     }
 
     public async Task<SchemaSnapshotResponse> GetSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
@@ -108,7 +119,17 @@ public sealed class DataPitcherApplication(
     public Task<OperationReceiptResponse> StartJobAsync(Guid planId, string idempotencyKey, CancellationToken cancellationToken)
     {
         var result = jobs.Start(new StartJobRequest(planId, idempotencyKey));
-        return Task.FromResult(Receipt(planId: planId, jobId: result.Job.JobId));
+        return Task.FromResult(Receipt(result.Job.JobId, planId: planId, jobId: result.Job.JobId, state: "queued"));
+    }
+
+    public async Task<IReadOnlyList<JobSummaryResponse>> ListJobsAsync(CancellationToken cancellationToken)
+    {
+        var jobsToList = jobs.List(cancellationToken);
+        return await Task.WhenAll(jobsToList.Select(async job =>
+        {
+            var current = await GetJobAsync(job.JobId, cancellationToken);
+            return new JobSummaryResponse(job.JobId, job.PlanId, job.State.ToString(), job.CreatedUtc, job.UpdatedUtc, current.RowsTransferred, current.BytesTransferred);
+        }));
     }
 
     public async Task<JobResponse> GetJobAsync(Guid jobId, CancellationToken cancellationToken)
@@ -128,14 +149,17 @@ public sealed class DataPitcherApplication(
             JobCommand.Cancel => jobs.RequestCancelAsync(jobId, cancellationToken),
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         });
-        return Receipt(jobId: jobId);
+        return Receipt(jobId, jobId: jobId);
     }
 
     private static ConnectionResponse ToConnectionResponse(ConnectionProfileSummary summary) =>
         new(summary.ConnectionId, summary.DisplayName, summary.ProviderId, summary.Health.ToString(), summary.ETag);
 
-    private static OperationReceiptResponse Receipt(Guid? connectionId = null, Guid? planId = null, Guid? jobId = null) =>
-        new(Guid.NewGuid(), "queued", new Uri("https://datapitcher.local/api/operations/status"), connectionId, planId, jobId);
+    private static OperationReceiptResponse Receipt(Guid? operationId = null, Guid? connectionId = null, Guid? planId = null, Guid? jobId = null, string state = "unknown")
+    {
+        var id = operationId ?? Guid.NewGuid();
+        return new(id, state, new Uri("https://datapitcher.local/api/operations/" + id), connectionId, planId, jobId);
+    }
 
     private static string ETag(long version) => $"\"{version}\"";
 }

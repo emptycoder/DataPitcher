@@ -22,6 +22,9 @@ public static class EndpointGroups
         WithStandardProblems(connections.MapPost("/{connectionId:guid}/schema-scans", QueueSchemaScanAsync).RequireAuthorization(ApiPolicyNames.SchemaWrite));
         WithStandardProblems(connections.MapGet("/{connectionId:guid}/snapshots/{snapshotId:guid}", GetSnapshotAsync).RequireAuthorization(ApiPolicyNames.SchemaRead));
 
+        var operations = app.MapGroup("/api/operations");
+        WithStandardProblems(operations.MapGet("/{operationId:guid}", GetOperationStatusAsync).RequireAuthorization());
+
         var selections = app.MapGroup("/api/selections");
         WithStandardProblems(selections.MapPut("/{selectionId:guid}", SaveSelectionAsync).RequireAuthorization(ApiPolicyNames.SelectionsWrite));
         WithStandardProblems(selections.MapPost("/{selectionId:guid}/evaluations", QueueSelectionEvaluationAsync).RequireAuthorization(ApiPolicyNames.SelectionsWrite));
@@ -34,6 +37,7 @@ public static class EndpointGroups
         WithStandardProblems(plans.MapPost("/{planId:guid}/jobs", StartJobAsync).RequireAuthorization(ApiPolicyNames.TransfersStart));
 
         var jobs = app.MapGroup("/api/jobs");
+        WithStandardProblems(jobs.MapGet("", ListJobsAsync).RequireAuthorization(ApiPolicyNames.TransfersRead));
         WithStandardProblems(jobs.MapGet("/{jobId:guid}", GetJobAsync).RequireAuthorization(ApiPolicyNames.TransfersRead));
         WithStandardProblems(jobs.MapPost("/{jobId:guid}/commands", QueueJobCommandAsync).RequireAuthorization(ApiPolicyNames.TransfersWrite));
         JobEventStream.Map(jobs);
@@ -86,6 +90,17 @@ public static class EndpointGroups
     {
         if (await AuthorizeResourceAsync(context, authorizationService, user, new ConnectionResource(connectionId), Permissions.SchemaRead) is { } problem) return problem;
         return TypedResults.Ok(await application.GetSnapshotAsync(connectionId, snapshotId, cancellationToken));
+    }
+
+    private static async Task<Results<Ok<OperationStatusResponse>, NotFound, ProblemHttpResult>> GetOperationStatusAsync(
+        Guid operationId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+    {
+        var status = await application.GetOperationStatusAsync(operationId, cancellationToken);
+        if (status is null) return TypedResults.NotFound();
+        ApiResource resource = status.ConnectionId is { } connectionId ? new ConnectionResource(connectionId) : new JobResource(status.JobId!.Value);
+        var permission = status.ConnectionId is null ? Permissions.TransfersRead : Permissions.SchemaRead;
+        if (await AuthorizeResourceAsync(context, authorizationService, user, resource, permission) is { } problem) return problem;
+        return TypedResults.Ok(status);
     }
 
     private static async Task<Results<Ok<SelectionResponse>, ProblemHttpResult>> SaveSelectionAsync(
@@ -152,6 +167,19 @@ public static class EndpointGroups
     {
         if (await AuthorizeResourceAsync(context, authorizationService, user, new JobResource(jobId), Permissions.TransfersRead) is { } problem) return problem;
         return TypedResults.Ok(await application.GetJobAsync(jobId, cancellationToken));
+    }
+
+    private static async Task<Ok<IReadOnlyList<JobSummaryResponse>>> ListJobsAsync(
+        ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+    {
+        var jobs = await application.ListJobsAsync(cancellationToken);
+        var visible = new List<JobSummaryResponse>();
+        foreach (var job in jobs)
+        {
+            var authorization = await authorizationService.AuthorizeAsync(user, new JobResource(job.JobId), new ResourcePermissionRequirement(Permissions.TransfersRead));
+            if (authorization.Succeeded) visible.Add(job);
+        }
+        return TypedResults.Ok<IReadOnlyList<JobSummaryResponse>>(visible);
     }
 
     private static async Task<Results<Accepted<OperationReceiptResponse>, ProblemHttpResult>> QueueJobCommandAsync(

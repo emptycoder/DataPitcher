@@ -58,6 +58,11 @@ public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
             services.AddSingleton(EventSignal);
             services.AddAuthentication(TestAuthenticationHandler.SchemeName)
                 .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>(TestAuthenticationHandler.SchemeName, _ => { });
+            services.PostConfigure<AuthenticationOptions>(options =>
+            {
+                options.DefaultAuthenticateScheme = TestAuthenticationHandler.SchemeName;
+                options.DefaultChallengeScheme = TestAuthenticationHandler.SchemeName;
+            });
         });
     }
 
@@ -153,6 +158,8 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public CancellationToken? LastCancellationToken { get; private set; }
     public string? LastIdempotencyKey { get; private set; }
     public Func<CancellationToken, Task>? Delay { get; set; }
+    public OperationStatusResponse? OperationStatus { get; set; }
+    public IReadOnlyList<JobSummaryResponse>? JobSummaries { get; set; }
 
     public Task<IReadOnlyList<ConnectionResponse>> ListConnectionsAsync(CancellationToken cancellationToken) =>
         ObserveAsync(nameof(ListConnectionsAsync), cancellationToken,
@@ -166,7 +173,10 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
         ObserveAsync(nameof(QueueConnectionCheckAsync), cancellationToken, () => Receipt(connectionId: connectionId));
 
     public Task<OperationReceiptResponse> QueueSchemaScanAsync(Guid connectionId, CancellationToken cancellationToken) =>
-        ObserveAsync(nameof(QueueSchemaScanAsync), cancellationToken, () => Receipt(connectionId: connectionId));
+        ObserveAsync(nameof(QueueSchemaScanAsync), cancellationToken, () => Receipt(connectionId: connectionId, state: "queued"));
+
+    public Task<OperationStatusResponse?> GetOperationStatusAsync(Guid operationId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(GetOperationStatusAsync), cancellationToken, () => OperationStatus is null ? null : OperationStatus with { OperationId = operationId });
 
     public Task<SchemaSnapshotResponse> GetSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(GetSnapshotAsync), cancellationToken,
@@ -193,8 +203,11 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public Task<OperationReceiptResponse> StartJobAsync(Guid planId, string idempotencyKey, CancellationToken cancellationToken)
     {
         LastIdempotencyKey = idempotencyKey;
-        return ObserveAsync(nameof(StartJobAsync), cancellationToken, () => Receipt(planId: planId));
+        return ObserveAsync(nameof(StartJobAsync), cancellationToken, () => Receipt(planId: planId, state: "queued"));
     }
+
+    public Task<IReadOnlyList<JobSummaryResponse>> ListJobsAsync(CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(ListJobsAsync), cancellationToken, () => JobSummaries ?? [new JobSummaryResponse(Guid.NewGuid(), Guid.NewGuid(), "Running", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, 10, 100)]);
 
     public Task<JobResponse> GetJobAsync(Guid jobId, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(GetJobAsync), cancellationToken, () => new JobResponse(jobId, Guid.NewGuid(), "Running", 10, 100));
@@ -202,8 +215,11 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public Task<OperationReceiptResponse> QueueJobCommandAsync(Guid jobId, JobCommand command, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(QueueJobCommandAsync), cancellationToken, () => Receipt(jobId: jobId));
 
-    private static OperationReceiptResponse Receipt(Guid? connectionId = null, Guid? planId = null, Guid? jobId = null) =>
-        new(Guid.NewGuid(), "queued", new Uri("https://example.test/api/operations/status"), connectionId, planId, jobId);
+    private static OperationReceiptResponse Receipt(Guid? operationId = null, Guid? connectionId = null, Guid? planId = null, Guid? jobId = null, string state = "unknown")
+    {
+        var id = operationId ?? Guid.NewGuid();
+        return new(id, state, new Uri("https://example.test/api/operations/" + id), connectionId, planId, jobId);
+    }
 
     private async Task<T> ObserveAsync<T>(string name, CancellationToken cancellationToken, Func<T> result)
     {

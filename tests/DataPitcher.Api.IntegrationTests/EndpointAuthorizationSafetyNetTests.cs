@@ -96,6 +96,63 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
     }
 
     [Fact]
+    public async Task JobList_ExcludesJobsWithoutAResourceGrant()
+    {
+        var job = new JobSummaryResponse(Guid.NewGuid(), Guid.NewGuid(), "Running", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, 0, 0);
+        _factory.Application.JobSummaries = [job];
+        _factory.Grants.AllowJob(job.JobId, false);
+        try
+        {
+            using var response = await _client.GetAsync("/api/jobs", CancellationToken.None);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var jobs = await response.Content.ReadFromJsonAsync<List<JobSummaryResponse>>();
+            Assert.Empty(jobs!);
+        }
+        finally
+        {
+            _factory.Application.JobSummaries = null;
+        }
+    }
+
+    [Fact]
+    public async Task OperationStatus_UsesTheOperationResourceGrant()
+    {
+        var connectionId = Guid.NewGuid();
+        _factory.Application.OperationStatus = new(Guid.NewGuid(), "schema-scan", "Queued", false, false, null, connectionId, null, null, null);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/operations/{Guid.NewGuid()}");
+            request.Headers.Add("X-Test-Denied-Resource", connectionId.ToString());
+            using var response = await _client.SendAsync(request, CancellationToken.None);
+
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+        finally
+        {
+            _factory.Application.OperationStatus = null;
+        }
+    }
+
+    [Fact]
+    public async Task OperationStatus_UsesTheJobResourceGrant()
+    {
+        var jobId = Guid.NewGuid();
+        _factory.Application.OperationStatus = new(Guid.NewGuid(), "job", "Queued", false, false, null, null, null, Guid.NewGuid(), jobId);
+        _factory.Grants.AllowJob(jobId, false);
+        try
+        {
+            using var response = await _client.GetAsync($"/api/operations/{Guid.NewGuid()}", CancellationToken.None);
+
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+        finally
+        {
+            _factory.Application.OperationStatus = null;
+        }
+    }
+
+    [Fact]
     public async Task ResourceAuthorization_GrantsOnlyTheSpecificConnectionIdentifier()
     {
         var deniedConnectionId = Guid.NewGuid();

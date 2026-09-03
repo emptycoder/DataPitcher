@@ -174,6 +174,96 @@ public sealed class ProductionCompositionTests
         Assert.Equal("Cancelling", fixture.Jobs.Get(started.JobId.Value).State.ToString());
     }
 
+    [Theory]
+    [InlineData("Queued", false, false, null)]
+    [InlineData("Completed", true, false, null)]
+    [InlineData("Failed", true, true, "schema_scan_failed")]
+    public async Task DataPitcherApplication_ProjectsPersistedSchemaScanStatus(string state, bool finished, bool failed, string? failureCode)
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var connection = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "status-connection"), CancellationToken.None);
+        var receipt = await fixture.Application.QueueSchemaScanAsync(connection.ConnectionId, CancellationToken.None);
+        var snapshotId = Guid.NewGuid();
+        using (var database = fixture.Database.Open()) database.Execute("UPDATE SchemaScans SET State = @state, SnapshotId = @snapshotId, FailureCode = @failureCode WHERE ScanId = @scanId", new DataParameter[] { new("state", state), new("snapshotId", string.Equals(state, "Completed", StringComparison.Ordinal) ? snapshotId.ToString() : null), new("failureCode", failureCode), new("scanId", receipt.OperationId.ToString()) });
+
+        var status = await fixture.Application.GetOperationStatusAsync(receipt.OperationId, CancellationToken.None);
+
+        Assert.NotNull(status);
+        Assert.Equal(receipt.OperationId, status!.OperationId);
+        Assert.Equal("schema-scan", status.Operation);
+        Assert.Equal(state, status.State);
+        Assert.Equal(finished, status.Finished);
+        Assert.Equal(failed, status.Failed);
+        Assert.Equal(failureCode, status.FailureCode);
+        Assert.Equal(string.Equals(state, "Completed", StringComparison.Ordinal) ? snapshotId : null, status.SnapshotId);
+        Assert.Equal("/api/operations/" + receipt.OperationId, receipt.StatusUri.AbsolutePath);
+    }
+
+    [Theory]
+    [InlineData("Queued", false, false, null)]
+    [InlineData("Cancelled", true, false, null)]
+    [InlineData("Succeeded", true, false, null)]
+    [InlineData("Failed", true, true, "worker_failed")]
+    [InlineData("VerificationFailed", true, true, "verification_failed")]
+    public async Task DataPitcherApplication_ProjectsPersistedJobStatus(string state, bool finished, bool failed, string? failureCode)
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var receipt = await fixture.Application.StartJobAsync(Guid.NewGuid(), "status-job-" + state, CancellationToken.None);
+        using (var database = fixture.Database.Open()) database.Execute("UPDATE Jobs SET State = @state, FailureCode = @failureCode WHERE JobId = @jobId", new DataParameter[] { new("state", state), new("failureCode", failureCode), new("jobId", receipt.OperationId.ToString()) });
+
+        var status = await fixture.Application.GetOperationStatusAsync(receipt.OperationId, CancellationToken.None);
+
+        Assert.NotNull(status);
+        Assert.Equal(receipt.OperationId, status!.OperationId);
+        Assert.Equal("job", status.Operation);
+        Assert.Equal(state, status.State);
+        Assert.Equal(finished, status.Finished);
+        Assert.Equal(failed, status.Failed);
+        Assert.Equal(failureCode, status.FailureCode);
+        Assert.Equal(receipt.JobId, status.JobId);
+        Assert.Equal("/api/operations/" + receipt.OperationId, receipt.StatusUri.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_WhenOperationIsUnknown_ReturnsNull()
+    {
+        using var fixture = new ProductionApplicationFixture();
+
+        var status = await fixture.Application.GetOperationStatusAsync(Guid.NewGuid(), CancellationToken.None);
+
+        Assert.Null(status);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_ReturnsUnknownReceiptForUnpersistedPlanSealing()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var planId = Guid.NewGuid();
+        _ = await fixture.Application.SavePlanAsync(planId, new SavePlanRequest("Plan", null, "plan-create"), CancellationToken.None);
+
+        var receipt = await fixture.Application.QueuePlanSealAsync(planId, CancellationToken.None);
+        var status = await fixture.Application.GetOperationStatusAsync(receipt.OperationId, CancellationToken.None);
+
+        Assert.Equal("unknown", receipt.State);
+        Assert.Null(status);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_ListsStartedJobs()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var started = await fixture.Application.StartJobAsync(Guid.NewGuid(), "list-job", CancellationToken.None);
+
+        var jobs = await fixture.Application.ListJobsAsync(CancellationToken.None);
+
+        var job = Assert.Single(jobs);
+        Assert.Equal(started.JobId, job.JobId);
+        Assert.Equal("Queued", job.State);
+        Assert.Equal(fixture.Clock.UtcNow, job.CreatedUtc);
+        Assert.Equal(fixture.Clock.UtcNow, job.UpdatedUtc);
+        Assert.Equal(0, job.RowsTransferred);
+    }
+
     [Fact]
     public async Task DataPitcherApplication_RejectsUnknownJobCommands()
     {

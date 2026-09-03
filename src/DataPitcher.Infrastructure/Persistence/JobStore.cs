@@ -10,7 +10,7 @@ using DataPitcher.Infrastructure.Worker;
 
 namespace DataPitcher.Infrastructure.Persistence;
 
-public sealed record TransferJob(Guid JobId, Guid RunId, Guid PlanId, string IdempotencyKey, JobState State);
+public sealed record TransferJob(Guid JobId, Guid RunId, Guid PlanId, string IdempotencyKey, JobState State, string? FailureCode = null, DateTimeOffset CreatedUtc = default, DateTimeOffset UpdatedUtc = default);
 public sealed record StartJobRequest(Guid PlanId, string IdempotencyKey);
 public sealed record StartJobResult(TransferJob Job, bool Created);
 public sealed record JobTransitionResult(TransferJob? Job, int RowsAffected);
@@ -74,6 +74,8 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobContr
     }
 
     public TransferJob Get(Guid jobId) => ToJob(database.Open().GetTable<JobRow>().Single(row => row.JobId == jobId.ToString()));
+    public TransferJob? Find(Guid jobId) { var row = database.Open().GetTable<JobRow>().SingleOrDefault(item => item.JobId == jobId.ToString()); return row is null ? null : ToJob(row); }
+    public IReadOnlyList<TransferJob> List(CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); return database.Open().GetTable<JobRow>().ToArray().OrderByDescending(row => row.CreatedUtc, StringComparer.Ordinal).ThenBy(row => row.JobId, StringComparer.Ordinal).Select(ToJob).ToArray(); }
     public IReadOnlyList<(JobState From, JobState To)> GetHistory(Guid jobId) => database.Open().GetTable<JobStateTransitionRow>().Where(row => row.JobId == jobId.ToString()).OrderBy(row => row.OccurredUtc).Select(row => new { row.FromState, row.ToState }).AsEnumerable().Select(row => (Enum.Parse<JobState>(row.FromState), Enum.Parse<JobState>(row.ToState))).ToArray();
 
     private async Task TransitionOperatorIntentAsync(Guid jobId, JobState to, CancellationToken cancellationToken)
@@ -102,6 +104,6 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobContr
 
     private static void PersistHistory(DataConnection db, Guid jobId, JobState from, JobState to, string now) => db.Insert(new JobStateTransitionRow { TransitionId = Guid.NewGuid().ToString(), JobId = jobId.ToString(), FromState = from.ToString(), ToState = to.ToString(), OccurredUtc = now });
     private static Task<int> PersistHistoryAsync(DataConnection db, Guid jobId, JobState from, JobState to, string now, CancellationToken cancellationToken) => db.ExecuteAsync("INSERT INTO JobStateTransitions (TransitionId, JobId, FromState, ToState, OccurredUtc) VALUES (@transitionId, @jobId, @fromState, @toState, @occurredUtc)", cancellationToken, new DataParameter[] { new("transitionId", Guid.NewGuid().ToString()), new("jobId", jobId.ToString()), new("fromState", from.ToString()), new("toState", to.ToString()), new("occurredUtc", now) });
-    private static TransferJob ToJob(JobRow row) => new(Guid.Parse(row.JobId), Guid.Parse(row.RunId), Guid.Parse(row.PlanId), row.IdempotencyKey, Enum.Parse<JobState>(row.State));
+    private static TransferJob ToJob(JobRow row) => new(Guid.Parse(row.JobId), Guid.Parse(row.RunId), Guid.Parse(row.PlanId), row.IdempotencyKey, Enum.Parse<JobState>(row.State), row.FailureCode, DateTimeOffset.Parse(row.CreatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), DateTimeOffset.Parse(row.UpdatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
 }
