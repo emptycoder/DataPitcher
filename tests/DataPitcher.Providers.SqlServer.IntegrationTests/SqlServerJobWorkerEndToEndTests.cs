@@ -178,17 +178,28 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
         await using var scope = await fixture.CreateScopeAsync();
         const string ddl =
             "CREATE TABLE dbo.worker_nodes (id int NOT NULL CONSTRAINT PK_worker_nodes PRIMARY KEY, parent_id int NULL CONSTRAINT FK_worker_nodes_parent FOREIGN KEY REFERENCES dbo.worker_nodes(id));";
-        // 2,001 rows: every row points at the last one, which the 2,000-row batches only reach in the second batch.
+        // A root that is its own parent with 2,000 children the 2,000-row batches only reach after it, plus a two-way
+        // cycle (2002 <-> 2003) with rows below it that no levelling can reach.
         await scope.ExecuteAsync(
             ddl
-                + " INSERT dbo.worker_nodes (id, parent_id) VALUES (2001, NULL); WITH n AS (SELECT TOP (2000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS i FROM sys.all_objects a CROSS JOIN sys.all_objects b) INSERT dbo.worker_nodes (id, parent_id) SELECT i, 2001 FROM n;"
+                + " INSERT dbo.worker_nodes (id, parent_id) VALUES (2001, 2001); WITH n AS (SELECT TOP (2000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS i FROM sys.all_objects a CROSS JOIN sys.all_objects b) INSERT dbo.worker_nodes (id, parent_id) SELECT i, 2001 FROM n;"
+                + " INSERT dbo.worker_nodes (id, parent_id) VALUES (2002, NULL), (2003, 2002); UPDATE dbo.worker_nodes SET parent_id = 2003 WHERE id = 2002;"
+                + " INSERT dbo.worker_nodes (id, parent_id) VALUES (2004, 2003), (2005, 2004);"
         );
         await scope.ExecuteTargetAsync(ddl);
 
         var job = await RunTransferAsync(scope, "worker_nodes", "PK_worker_nodes", "SELECT * FROM dbo.worker_nodes");
 
         Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
-        Assert.Equal(2001, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_nodes"));
+        Assert.Equal(2005, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_nodes"));
+        Assert.Equal(
+            0,
+            await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_nodes WHERE parent_id IS NULL")
+        );
+        Assert.Equal(
+            2000L * 2001 + 2001 + 2003 + 2002 + 2003 + 2004,
+            await scope.ScalarTargetAsync<long>("SELECT SUM(CAST(parent_id AS bigint)) FROM dbo.worker_nodes")
+        );
         Assert.Equal(
             1,
             await scope.ScalarTargetAsync<int>(

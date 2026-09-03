@@ -106,6 +106,20 @@ public sealed class TransferAttemptException(CommitDisposition disposition, Exce
     public CommitDisposition Disposition { get; } = disposition;
 }
 
+/// <summary>Carries which unit the target was writing when it failed, so the failure detail names table and phase.</summary>
+public sealed class TransferUnitException(TransferUnit unit, Exception innerException)
+    : Exception(Describe(unit, innerException), innerException)
+{
+    public TransferUnit Unit { get; } = unit;
+
+    private static string Describe(TransferUnit unit, Exception innerException)
+    {
+        var table = unit.Table is null ? "the target" : unit.Table.Schema + "." + unit.Table.Name;
+        var what = unit.Kind == TransferUnitKind.DeferredColumns ? "deferred columns" : "rows";
+        return $"Writing {what} of {table} (batch {unit.BatchSequence}) failed: {innerException.GetBaseException().Message}";
+    }
+}
+
 public sealed class TargetFenceLostException : InvalidOperationException
 {
     public TargetFenceLostException()

@@ -213,6 +213,17 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
             " AND ",
             parentColumns.Select((column, i) => "s." + PostgreSqlIdentifier.Quote(column) + " = h." + Key(i))
         );
+        // A row that is its own parent is a root too, and must not feed the recursion.
+        var parentIsSelf =
+            "("
+            + string.Join(
+                " AND ",
+                parentColumns.Select(
+                    (column, i) =>
+                        "s." + PostgreSqlIdentifier.Quote(column) + " = s." + PostgreSqlIdentifier.Quote(keyColumns[i])
+                )
+            )
+            + ")";
         var joinLevels = string.Join(" AND ", keyColumns.Select((_, i) => "f." + Key(i) + " = m." + Key(i)));
         var sql =
             "WITH RECURSIVE h AS (SELECT "
@@ -225,7 +236,9 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
             + joinSource
             + " WHERE ("
             + parentNull
-            + ") OR NOT "
+            + ") OR "
+            + parentIsSelf
+            + " OR NOT "
             + parentInKeys
             + " UNION ALL SELECT "
             + fKeys
@@ -237,10 +250,14 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
             + joinSource
             + " JOIN h ON "
             + joinParent
-            + " WHERE h.lvl < 4096) "
+            + " WHERE h.lvl < 4096 AND NOT "
+            + parentIsSelf
+            + ") "
+            // Levels are stored as -(level + 1): 0 and above stays the closure generation of rows the levelling
+            // could not reach (rows on a cycle inside the table and everything below them).
             + "UPDATE "
             + keys
-            + " f SET __generation = -m.lvl FROM (SELECT "
+            + " f SET __generation = -(m.lvl + 1) FROM (SELECT "
             + mKeys
             + ", max(lvl) AS lvl FROM h GROUP BY "
             + mKeys

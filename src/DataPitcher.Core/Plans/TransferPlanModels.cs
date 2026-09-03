@@ -158,7 +158,8 @@ public sealed class PlanTable
         ManifestCounts manifest,
         TopologicalGroup topologicalGroup,
         CycleStrategy cycleStrategy,
-        IReadOnlyList<string>? deferredColumns = null
+        IReadOnlyList<string>? deferredColumns = null,
+        IReadOnlyList<string>? hierarchyColumns = null
     )
     {
         Mapping = mapping;
@@ -167,6 +168,7 @@ public sealed class PlanTable
         TopologicalGroup = topologicalGroup;
         CycleStrategy = cycleStrategy;
         DeferredColumns = Array.AsReadOnly((deferredColumns ?? []).ToArray());
+        HierarchyColumns = Array.AsReadOnly((hierarchyColumns ?? []).ToArray());
     }
 
     public TableMapping Mapping { get; }
@@ -180,6 +182,18 @@ public sealed class PlanTable
     /// columns NULL and the values are filled in once every table has been written, so constraints stay enforced.
     /// </summary>
     public IReadOnlyList<string> DeferredColumns { get; }
+
+    /// <summary>
+    /// Source columns of a nullable self reference that sealing levelled through the sealed keys. Rows the levelling
+    /// could not reach (rows on a cycle within the table and everything below them) are written with these columns
+    /// NULL and get their values in the second phase.
+    /// </summary>
+    public IReadOnlyList<string> HierarchyColumns { get; }
+
+    /// <summary>Every column the second phase writes: the deferred columns plus the hierarchy columns.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> BackfilledColumns =>
+        DeferredColumns.Concat(HierarchyColumns).Distinct(StringComparer.Ordinal).ToArray();
 }
 
 public sealed class TransferPlanContent

@@ -78,6 +78,8 @@ public static class CanonicalPlanHasher
         // Only written when present so plans sealed before deferred columns existed keep their hash.
         if (x.DeferredColumns.Count > 0)
             Ordered(w, x.DeferredColumns, (a, v) => a.Text(v));
+        if (x.HierarchyColumns.Count > 0)
+            Ordered(w, x.HierarchyColumns, (a, v) => a.Text(v));
     }
 
     private static void Mapping(Writer w, TableMapping x)

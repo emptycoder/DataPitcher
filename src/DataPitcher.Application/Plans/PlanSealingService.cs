@@ -185,6 +185,14 @@ public sealed class PlanSealingService(
                     .SelectMany(relationship => relationship.FromColumns)
                     .Distinct(StringComparer.Ordinal)
                     .ToArray();
+                // A nullable levelled self reference can also be held back for the rows the levelling cannot reach.
+                var hierarchy = order
+                    .Levelled.Where(relationship =>
+                        relationship.FromTable == group.Key && IsNullable(relationship, targetSchema)
+                    )
+                    .SelectMany(relationship => relationship.FromColumns)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
                 return new PlanTable(
                     new TableMapping(
                         address,
@@ -197,7 +205,8 @@ public sealed class PlanSealingService(
                     deferred.Length > 0 ? CycleStrategy.NullableForeignKeyTwoPhase
                         : order.Blocked.Contains(group.Key) ? CycleStrategy.Blocked
                         : CycleStrategy.NotApplicable,
-                    deferred
+                    deferred,
+                    hierarchy
                 );
             })
             .ToArray();

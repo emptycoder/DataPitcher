@@ -186,17 +186,28 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
         await using var scope = await fixture.CreateScopeAsync();
         const string ddl =
             "CREATE TABLE worker_nodes (id integer NOT NULL CONSTRAINT pk_worker_nodes PRIMARY KEY, parent_id integer NULL CONSTRAINT fk_worker_nodes_parent REFERENCES worker_nodes(id));";
-        // 2,001 rows: every row points at the last one, which the 2,000-row batches only reach in the second batch.
+        // A root that is its own parent with 2,000 children the 2,000-row batches only reach after it, plus a two-way
+        // cycle (2002 <-> 2003) with rows below it that no levelling can reach.
         await scope.ExecuteAsync(
             ddl
-                + " INSERT INTO worker_nodes (id, parent_id) VALUES (2001, NULL); INSERT INTO worker_nodes (id, parent_id) SELECT g, 2001 FROM generate_series(1, 2000) g;"
+                + " INSERT INTO worker_nodes (id, parent_id) VALUES (2001, 2001); INSERT INTO worker_nodes (id, parent_id) SELECT g, 2001 FROM generate_series(1, 2000) g;"
+                + " INSERT INTO worker_nodes (id, parent_id) VALUES (2002, NULL), (2003, 2002); UPDATE worker_nodes SET parent_id = 2003 WHERE id = 2002;"
+                + " INSERT INTO worker_nodes (id, parent_id) VALUES (2004, 2003), (2005, 2004);"
         );
         await scope.ExecuteTargetAsync(ddl);
 
         var job = await RunTransferAsync(scope, "worker_nodes", "pk_worker_nodes", "SELECT * FROM worker_nodes");
 
         Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
-        Assert.Equal(2001L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_nodes"));
+        Assert.Equal(2005L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_nodes"));
+        Assert.Equal(
+            0L,
+            await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_nodes WHERE parent_id IS NULL")
+        );
+        Assert.Equal(
+            2000L * 2001 + 2001 + 2003 + 2002 + 2003 + 2004,
+            await scope.ScalarTargetAsync<long>("SELECT sum(parent_id) FROM worker_nodes")
+        );
     }
 
     [Fact]

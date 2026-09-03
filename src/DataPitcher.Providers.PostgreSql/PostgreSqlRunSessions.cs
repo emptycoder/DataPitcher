@@ -135,14 +135,9 @@ public sealed class PostgreSqlRunSessions(
                         : DeferredTable(sourceSchema, planTable, stableKey);
             }
             // Deferred columns leave the source as NULL in the rows phase; the second phase writes their values.
-            var withheld =
-                _phase == TransferPhase.Rows
-                    ? source
-                        .InsertColumns.Select((column, index) => (column.Name, Index: index))
-                        .Where(item => planTable.DeferredColumns.Contains(item.Name, StringComparer.Ordinal))
-                        .Select(item => item.Index)
-                        .ToArray()
-                    : [];
+            // Hierarchy columns are held back only for rows the levelling could not reach (generation 0 or above).
+            var withheld = Indexes(source, _phase == TransferPhase.Rows ? planTable.DeferredColumns : []);
+            var withheldUnlevelled = Indexes(source, _phase == TransferPhase.Rows ? planTable.HierarchyColumns : []);
             var join =
                 " JOIN "
                 + PostgreSqlStagingTables.Qualified(
@@ -155,6 +150,9 @@ public sealed class PostgreSqlRunSessions(
                         (column, index) => "s." + PostgreSqlIdentifier.Quote(column.Name) + "=f.k" + index
                     )
                 );
+            // Only hierarchy columns to fill in: just the rows the levelling could not reach need the second pass.
+            if (_phase == TransferPhase.DeferredColumns && planTable.DeferredColumns.Count == 0)
+                join += " AND f.__generation >= 0";
             if (_after is not null && _afterGeneration is null)
                 _afterGeneration = await GenerationAsync(planTable, source, _after, cancellationToken);
             var query = PostgreSqlKeysetSeek.Build(
@@ -177,14 +175,18 @@ public sealed class PostgreSqlRunSessions(
                 var values = source
                     .InsertColumns.Select((_, index) => reader.IsDBNull(index) ? null : reader.GetValue(index))
                     .ToArray();
+                var generation = reader.GetInt32(source.InsertColumns.Count);
                 foreach (var index in withheld)
                     values[index] = null;
+                if (generation >= 0)
+                    foreach (var index in withheldUnlevelled)
+                        values[index] = null;
                 var payload = values.Sum(PayloadBytes);
                 if (rows.Count != 0 && bytes + payload > content.BatchTarget.MaximumBytes)
                     break;
                 rows.Add(new TransferRow(values, payload));
-                lastGeneration = reader.GetInt32(source.InsertColumns.Count);
                 bytes += payload;
+                lastGeneration = generation;
                 last = new StableKey(
                     source.StableKeyColumns.Select(column => new KeyComponent(
                         column.Name,
@@ -206,6 +208,13 @@ public sealed class PostgreSqlRunSessions(
                 rows
             );
         }
+
+        private static int[] Indexes(PostgreSqlWriteTable source, IReadOnlyList<string> columns) =>
+            source
+                .InsertColumns.Select((column, index) => (column.Name, Index: index))
+                .Where(item => columns.Contains(item.Name, StringComparer.Ordinal))
+                .Select(item => item.Index)
+                .ToArray();
 
         /// <summary>The closure generation sealing stamped on a key; needed to resume generation-ordered paging.</summary>
         private async Task<int> GenerationAsync(
@@ -312,7 +321,7 @@ public sealed class PostgreSqlRunSessions(
             {
                 // Stable key plus the deferred columns only: the values held back to break a cycle.
                 var deferredTargets = planTable
-                    .DeferredColumns.Select(column =>
+                    .BackfilledColumns.Select(column =>
                         mappings.Single(mapping => StringComparer.Ordinal.Equals(mapping.Source, column)).Target
                     )
                     .ToArray();
@@ -322,7 +331,7 @@ public sealed class PostgreSqlRunSessions(
                         column.IsStableKey || deferredTargets.Contains(column.Name, StringComparer.Ordinal)
                     )
                 );
-                var deferredSources = stableKey.Columns.Concat(planTable.DeferredColumns).ToArray();
+                var deferredSources = stableKey.Columns.Concat(planTable.BackfilledColumns).ToArray();
                 var backfill = new PostgreSqlTransferBatch(
                     BatchSequence.ProviderFromWorker(unit.BatchSequence),
                     rows.Select(row => TargetRow(row, deferredSources, mappings, subset)),
@@ -428,13 +437,13 @@ public sealed class PostgreSqlRunSessions(
 
     /// <summary>Tables with columns held back to break a cycle, in write order; the second phase fills them in.</summary>
     private static IReadOnlyList<PlanTable> Deferred(TransferPlanContent content) =>
-        Tables(content).Where(table => table.DeferredColumns.Count > 0).ToArray();
+        Tables(content).Where(table => table.BackfilledColumns.Count > 0).ToArray();
 
     private static PostgreSqlWriteTable DeferredTable(
         PostgreSqlWriteTable schema,
         PlanTable table,
         StableKeyDefinition stableKey
-    ) => new(schema.Target, stableKey.Columns.Concat(table.DeferredColumns).Select(schema.Column));
+    ) => new(schema.Target, stableKey.Columns.Concat(table.BackfilledColumns).Select(schema.Column));
 
     private static int StartIndex(IReadOnlyList<PlanTable> tables, TableAddress? startTable) =>
         startTable is null

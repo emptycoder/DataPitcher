@@ -169,6 +169,17 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
             " AND ",
             parentColumns.Select((column, i) => "s." + SqlServerIdentifier.Quote(column) + "=h." + Key(i))
         );
+        // A row that is its own parent is a root too, and must not feed the recursion.
+        var parentIsSelf =
+            "("
+            + string.Join(
+                " AND ",
+                parentColumns.Select(
+                    (column, i) =>
+                        "s." + SqlServerIdentifier.Quote(column) + "=s." + SqlServerIdentifier.Quote(keyColumns[i])
+                )
+            )
+            + ")";
         var joinLevels = string.Join(" AND ", keyColumns.Select((_, i) => "f." + Key(i) + "=m." + Key(i)));
         var sql =
             ";WITH h AS (SELECT "
@@ -181,7 +192,9 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
             + joinSource
             + " WHERE ("
             + parentNull
-            + ") OR NOT "
+            + ") OR "
+            + parentIsSelf
+            + " OR NOT "
             + parentInKeys
             + " UNION ALL SELECT "
             + fKeys
@@ -193,8 +206,12 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
             + joinSource
             + " JOIN h ON "
             + joinParent
-            + " WHERE h.lvl < 4096) "
-            + "UPDATE f SET [__generation] = -m.lvl FROM "
+            + " WHERE h.lvl < 4096 AND NOT "
+            + parentIsSelf
+            + ") "
+            // Levels are stored as -(level + 1): 0 and above stays the closure generation of rows the levelling
+            // could not reach (rows on a cycle inside the table and everything below them).
+            + "UPDATE f SET [__generation] = -(m.lvl + 1) FROM "
             + keys
             + " f JOIN (SELECT "
             + mKeys

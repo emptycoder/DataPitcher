@@ -86,7 +86,14 @@ public sealed class JobWorker(
             for (TransferUnit? unit; (unit = await source.ReadNextAsync(leaseLost.Token)) is not null; )
             {
                 await faults.HitAsync(TransferFaultPoint.BeforeTargetCommit, leaseLost.Token);
-                checkpoint = await target.ApplyAsync(run, claim.Lease, unit, leaseLost.Token);
+                try
+                {
+                    checkpoint = await target.ApplyAsync(run, claim.Lease, unit, leaseLost.Token);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    throw new TransferUnitException(unit, exception);
+                }
                 (rows, bytes) = (checkpoint.RowCount, checkpoint.BytesTransferred);
                 if (checkpoint.SkippedRows > skipped)
                 {
@@ -192,8 +199,9 @@ public sealed class JobWorker(
     internal static (string Code, string Detail) Describe(Exception exception)
     {
         var root = exception.GetBaseException();
-        var message = root.Message.Length > 2000 ? root.Message[..2000] : root.Message;
-        var code = exception switch
+        var text = exception is TransferUnitException unit ? unit.Message : root.Message;
+        var message = text.Length > 2000 ? text[..2000] : text;
+        var code = (exception is TransferUnitException wrapped ? wrapped.InnerException! : exception) switch
         {
             ConnectionNotHealthyException => "connection_unhealthy",
             NotSupportedException => "not_supported",
