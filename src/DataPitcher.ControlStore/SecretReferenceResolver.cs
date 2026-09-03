@@ -26,7 +26,7 @@ public sealed class SecretReferenceResolver(string secretsRoot) : ISecretReferen
 
     private async Task<string> ReadMountedAsync(string locator, CancellationToken cancellationToken)
     {
-        var root = Path.GetFullPath(secretsRoot);
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(secretsRoot));
         var path = Path.GetFullPath(locator);
         if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             throw new InvalidOperationException("Mounted secret reference is outside the configured root.");

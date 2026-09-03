@@ -15,6 +15,19 @@ export function useProviders() {
   return useQuery({ queryKey: queryKeys.providers, queryFn: ({ signal }) => connectionsApi.providers(signal), staleTime: Infinity });
 }
 
+/** Stored settings of a connection minus the password; only fetched while an edit dialog is open. */
+export function useConnectionDetails(connectionId: string | null) {
+  const { authentication } = useAuth();
+  return useQuery({
+    queryKey: queryKeys.connectionDetails(connectionId ?? ''),
+    queryFn: ({ signal }) => connectionsApi.details(connectionId!, authentication, signal),
+    enabled: connectionId !== null && connectionId !== '',
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+  });
+}
+
 export function useSnapshots(connectionId: string | null) {
   const { authentication } = useAuth();
   return useQuery({

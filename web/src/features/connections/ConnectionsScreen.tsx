@@ -1,11 +1,13 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { connectionsApi, providerLabels, type Connection, type ConnectionTest } from '../../api/connections';
 import {
     authOption,
     authOptionsFor,
     buildConnectionString,
     defaultConnectionDetails,
+    needsStoredPassword,
+    parseConnectionString,
     validateConnectionDetails,
     withProvider,
     type AuthMethod,
@@ -42,7 +44,7 @@ import {
 } from '../../ui';
 import { Icons } from '../../ui/icons';
 import { useToast } from '../../ui/toast';
-import { useConnections, useProviders, useSnapshots } from '../shared/queries';
+import { useConnectionDetails, useConnections, useProviders, useSnapshots } from '../shared/queries';
 
 export function ConnectionsScreen() {
     const connections = useConnections();
@@ -461,9 +463,21 @@ export function ProviderMark({ providerId, size = 'md' }: Readonly<{ providerId:
     );
 }
 
-/* --------------------------- Add connection dialog ------------------------- */
+/* ------------------------- Add / edit connection dialog ---------------------- */
 
-type CredentialMode = 'details' | 'raw' | 'keep';
+type CredentialMode = 'details' | 'raw';
+
+type StoredBaseline = Readonly<{
+    details: ConnectionDetails;
+    raw: string;
+    unsupportedKeys: readonly string[];
+}>;
+
+type SavePayload = Readonly<{ connectionString: string | null; keepStoredPassword: boolean }>;
+
+function sameDetails(left: ConnectionDetails, right: ConnectionDetails): boolean {
+    return (Object.keys(left) as (keyof ConnectionDetails)[]).every((key) => left[key] === right[key]);
+}
 
 function ConnectionDialog({
     open,
@@ -475,41 +489,87 @@ function ConnectionDialog({
     const queryClient = useQueryClient();
     const toast = useToast();
     const providers = useProviders();
-    const [displayName, setDisplayName] = useState(existing?.displayName ?? '');
-    const [details, setDetails] = useState<ConnectionDetails>(() =>
-        defaultConnectionDetails(existing?.providerId ?? 'sqlserver'),
+    // The API returns the stored connection string minus its password so the form can be prefilled.
+    const stored = useConnectionDetails(isEdit && open ? existing.connectionId : null);
+    const fallback = useMemo(
+        () => defaultConnectionDetails(existing?.providerId ?? 'sqlserver'),
+        [existing?.providerId],
     );
-    const [mode, setMode] = useState<CredentialMode>(isEdit ? 'keep' : 'details');
-    const [rawConnectionString, setRawConnectionString] = useState('');
+    const baseline = useMemo<StoredBaseline | null>(() => {
+        if (!stored.data) return null;
+        const parsed = parseConnectionString(stored.data.providerId, stored.data.connectionString);
+        return { details: parsed.details, raw: stored.data.connectionString, unsupportedKeys: parsed.unsupportedKeys };
+    }, [stored.data]);
+    const hasStoredPassword = stored.data?.hasPassword ?? false;
+
+    const [displayName, setDisplayName] = useState(existing?.displayName ?? '');
+    // Null means "whatever was loaded (or the defaults)": the operator has not touched the credentials yet.
+    const [editedDetails, setEditedDetails] = useState<ConnectionDetails | null>(null);
+    const [editedRaw, setEditedRaw] = useState<string | null>(null);
+    const [mode, setMode] = useState<CredentialMode>('details');
+    const [keepRawPassword, setKeepRawPassword] = useState(true);
     const [credentialId, setCredentialId] = useState(() => crypto.randomUUID());
     const [error, setError] = useState<string | null>(null);
     const [testResult, setTestResult] = useState<ConnectionTest | null>(null);
+
+    const baselineDetails = baseline?.details ?? fallback;
+    const baselineRaw = baseline?.raw ?? '';
+    const details = editedDetails ?? baselineDetails;
+    const rawConnectionString = editedRaw ?? baselineRaw;
     const providerId = details.providerId;
+    const passwordOptional = isEdit && hasStoredPassword;
+    const setDetails = (update: (current: ConnectionDetails) => ConnectionDetails) =>
+        setEditedDetails((current) => update(current ?? baselineDetails));
+    const patch = (changes: Partial<ConnectionDetails>) => setDetails((current) => ({ ...current, ...changes }));
 
     function reset() {
         setDisplayName('');
-        setDetails(defaultConnectionDetails('sqlserver'));
-        setRawConnectionString('');
+        setEditedDetails(null);
+        setEditedRaw(null);
         setCredentialId(crypto.randomUUID());
         setError(null);
+        setTestResult(null);
     }
 
-    const connectionString = () =>
-        mode === 'details' ? buildConnectionString(details) : mode === 'raw' ? rawConnectionString.trim() : null;
-    const credentialsReady =
-        mode === 'keep'
-            ? existing !== undefined
-            : mode === 'raw'
-              ? rawConnectionString.trim().length > 0
-              : validateConnectionDetails(details) === null;
+    const credentialsUnchanged =
+        isEdit &&
+        (mode === 'details'
+            ? sameDetails(details, baselineDetails)
+            : rawConnectionString.trim() === baselineRaw.trim());
+    const validationProblem =
+        mode === 'details'
+            ? validateConnectionDetails(details, { passwordOptional })
+            : rawConnectionString.trim()
+              ? null
+              : 'Paste a connection string.';
+    const credentialsReady = credentialsUnchanged || validationProblem === null;
+
+    /** What the API should store: null keeps the current secret untouched. */
+    function payload(): SavePayload {
+        if (credentialsUnchanged) return { connectionString: null, keepStoredPassword: false };
+        return mode === 'details'
+            ? {
+                  connectionString: buildConnectionString(details),
+                  keepStoredPassword: passwordOptional && needsStoredPassword(details),
+              }
+            : { connectionString: rawConnectionString.trim(), keepStoredPassword: passwordOptional && keepRawPassword };
+    }
+
     const test = useMutation({
-        mutationFn: () =>
-            connectionsApi.test(
-                mode === 'keep'
+        mutationFn: () => {
+            const { connectionString, keepStoredPassword } = payload();
+            return connectionsApi.test(
+                connectionString === null
                     ? { providerId, connectionId: existing!.connectionId }
-                    : { providerId, connectionString: connectionString() },
+                    : {
+                          providerId,
+                          connectionString,
+                          connectionId: existing?.connectionId ?? null,
+                          keepStoredPassword,
+                      },
                 authentication,
-            ),
+            );
+        },
         onSuccess: setTestResult,
         onError: (caught) =>
             setTestResult({
@@ -522,12 +582,17 @@ function ConnectionDialog({
                 error: describeError(caught, 'The test request failed.'),
             }),
     });
-    const create = useMutation({
-        mutationFn: () =>
+    const save = useMutation({
+        mutationFn: (input: SavePayload) =>
             existing
                 ? connectionsApi.update(
                       existing.connectionId,
-                      { displayName: displayName.trim(), providerId, connectionString: connectionString() },
+                      {
+                          displayName: displayName.trim(),
+                          providerId,
+                          connectionString: input.connectionString,
+                          keepStoredPassword: input.keepStoredPassword,
+                      },
                       existing.eTag,
                       authentication,
                   )
@@ -536,20 +601,23 @@ function ConnectionDialog({
                           displayName: displayName.trim(),
                           providerId,
                           credentialId,
-                          connectionString: connectionString() ?? '',
+                          connectionString: input.connectionString ?? '',
                       },
                       authentication,
                   ),
-        onSuccess: async (connection) => {
+        onSuccess: async (connection, input) => {
             await queryClient.invalidateQueries({ queryKey: queryKeys.connections });
-            if (existing)
+            if (existing) {
+                await queryClient.invalidateQueries({ queryKey: queryKeys.connectionDetails(existing.connectionId) });
                 toast.success(
                     'Connection updated',
-                    mode === 'keep'
+                    input.connectionString === null
                         ? 'Credentials were left unchanged.'
-                        : 'New credentials are stored on the API host.',
+                        : input.keepStoredPassword
+                          ? 'Settings were updated and the stored password was kept.'
+                          : 'New credentials are stored on the API host.',
                 );
-            else toast.success('Connection added', `${connection.displayName} is registered. Check its health next.`);
+            } else toast.success('Connection added', `${connection.displayName} is registered. Check its health next.`);
             reset();
             onClose();
         },
@@ -563,29 +631,24 @@ function ConnectionDialog({
         event.preventDefault();
         setError(null);
         if (!displayName.trim()) return setError('Give the connection a name.');
-        if (mode === 'details') {
-            const problem = validateConnectionDetails(details);
-            if (problem) return setError(problem);
-        }
-        if (mode === 'raw' && !rawConnectionString.trim()) return setError('Paste a connection string.');
-        if (mode === 'keep' && existing && existing.providerId !== providerId)
+        if (credentialsUnchanged && existing && existing.providerId !== providerId)
             return setError(
                 'Changing the provider requires new credentials. Enter connection details or a connection string.',
             );
-        create.mutate();
+        if (!credentialsUnchanged && validationProblem) return setError(validationProblem);
+        save.mutate(payload());
     }
     const example =
         providerId === 'postgresql'
             ? 'Host=localhost;Port=5432;Database=app;Username=app;Password=…'
             : 'Server=localhost,1433;Database=app;User Id=sa;Password=…;TrustServerCertificate=True';
     const option = authOption(details);
-    const patch = (changes: Partial<ConnectionDetails>) => setDetails((current) => ({ ...current, ...changes }));
 
     return (
         <Modal
             description={
                 isEdit
-                    ? 'Stored credentials are never sent back to the browser. Keep them as they are, or replace them; the previous secret is deleted from the API host once the new one is saved.'
+                    ? 'The stored settings are shown below without the password, which never leaves the API host. Leave the password blank to keep it, or type a new one to replace it.'
                     : 'The connection string is stored on the API host under its secrets folder, never in the control database, and is never sent back to the browser.'
             }
             footer={
@@ -600,7 +663,7 @@ function ConnectionDialog({
                         Test connection
                     </Button>
                     <Button onClick={onClose}>Cancel</Button>
-                    <Button form="add-connection" loading={create.isPending} type="submit" variant="primary">
+                    <Button form="add-connection" loading={save.isPending} type="submit" variant="primary">
                         {isEdit ? 'Save changes' : 'Add connection'}
                     </Button>
                 </>
@@ -655,18 +718,10 @@ function ConnectionDialog({
                 </div>
 
                 <Tabs
-                    items={
-                        isEdit
-                            ? [
-                                  { value: 'keep', label: 'Keep current credentials' },
-                                  { value: 'details', label: 'Replace with details' },
-                                  { value: 'raw', label: 'Replace with connection string' },
-                              ]
-                            : [
-                                  { value: 'details', label: 'Connection details' },
-                                  { value: 'raw', label: 'Connection string' },
-                              ]
-                    }
+                    items={[
+                        { value: 'details', label: 'Connection details' },
+                        { value: 'raw', label: 'Connection string' },
+                    ]}
                     onChange={(next) => {
                         setMode(next);
                         setTestResult(null);
@@ -674,15 +729,30 @@ function ConnectionDialog({
                     value={mode}
                 />
 
-                {mode === 'keep' ? (
+                {isEdit && stored.isPending ? (
+                    <Alert tone="info">Loading the stored settings…</Alert>
+                ) : isEdit && stored.isError ? (
+                    <Alert title="Stored settings could not be read" tone="warning">
+                        {describeError(stored.error)} The stored credentials stay as they are unless you enter new ones
+                        below.
+                    </Alert>
+                ) : isEdit && credentialsUnchanged ? (
                     <Alert tone="info">
-                        The stored connection string stays on the API host unchanged. Only the display name
-                        {existing && existing.providerId !== providerId ? ' and provider' : ''} will be updated.
+                        Credentials are unchanged. Only the display name will be updated unless you edit the settings
+                        below.
                     </Alert>
                 ) : null}
 
                 {mode === 'details' ? (
                     <div className="grid gap-4">
+                        {baseline && baseline.unsupportedKeys.length > 0 ? (
+                            <Alert tone="warning">
+                                The stored connection string also sets{' '}
+                                <span className="font-mono">{baseline.unsupportedKeys.join(', ')}</span>, which this
+                                form cannot show. Saving from this tab drops them; use the connection string tab to keep
+                                them.
+                            </Alert>
+                        ) : null}
                         <div className="grid gap-4 sm:grid-cols-[1fr_120px_1fr]">
                             <Field label="Server host" required>
                                 <TextInput
@@ -738,10 +808,19 @@ function ConnectionDialog({
                                     </Field>
                                 ) : null}
                                 {option.passwordLabel ? (
-                                    <Field label={option.passwordLabel} required>
+                                    <Field
+                                        hint={
+                                            passwordOptional
+                                                ? `Leave blank to keep the stored ${option.passwordLabel.toLowerCase()}.`
+                                                : undefined
+                                        }
+                                        label={option.passwordLabel}
+                                        required={!passwordOptional}
+                                    >
                                         <SecretInput
                                             autoComplete="new-password"
                                             onChange={(event) => patch({ password: event.target.value })}
+                                            placeholder={passwordOptional ? '••••••••  (unchanged)' : undefined}
                                             value={details.password}
                                         />
                                     </Field>
@@ -786,21 +865,43 @@ function ConnectionDialog({
                 ) : null}
 
                 {mode === 'raw' ? (
-                    <Field
-                        hint="Use the provider's native format. It is sent once over the API connection and stored on the API host."
-                        label="Connection string"
-                        required
-                    >
-                        <TextArea
-                            autoComplete="off"
-                            className="font-mono text-[12.5px]"
-                            onChange={(event) => setRawConnectionString(event.target.value)}
-                            placeholder={example}
-                            rows={4}
-                            spellCheck={false}
-                            value={rawConnectionString}
-                        />
-                    </Field>
+                    <div className="grid gap-4">
+                        <Field
+                            hint={
+                                isEdit
+                                    ? 'The stored string is shown without its password. Edit it freely; it is sent once over the API connection and stored on the API host.'
+                                    : "Use the provider's native format. It is sent once over the API connection and stored on the API host."
+                            }
+                            label="Connection string"
+                            required
+                        >
+                            <TextArea
+                                autoComplete="off"
+                                className="font-mono text-[12.5px]"
+                                onChange={(event) => setEditedRaw(event.target.value)}
+                                placeholder={example}
+                                rows={4}
+                                spellCheck={false}
+                                value={rawConnectionString}
+                            />
+                        </Field>
+                        {passwordOptional ? (
+                            <label className="flex items-start gap-2 text-sm text-fg">
+                                <input
+                                    checked={keepRawPassword}
+                                    className="accent-accent mt-0.5"
+                                    onChange={(event) => setKeepRawPassword(event.target.checked)}
+                                    type="checkbox"
+                                />
+                                <span>
+                                    Keep the stored password
+                                    <span className="block text-xs text-fg-muted">
+                                        Appended on the API host when the string above has no password of its own.
+                                    </span>
+                                </span>
+                            </label>
+                        ) : null}
+                    </div>
                 ) : null}
 
                 {testResult ? (

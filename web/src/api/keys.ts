@@ -1,6 +1,7 @@
 export const queryKeys = {
   providers: ['providers'] as const,
   connections: ['connections'] as const,
+  connectionDetails: (connectionId: string) => ['connections', connectionId, 'details'] as const,
   snapshots: (connectionId: string) => ['connections', connectionId, 'snapshots'] as const,
   snapshot: (connectionId: string, snapshotId: string) => ['connections', connectionId, 'snapshots', snapshotId] as const,
   operation: (operationId: string) => ['operations', operationId] as const,

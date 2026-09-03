@@ -196,16 +196,29 @@ function quote(value: string): string {
     return /[;'"=\s]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
-export function validateConnectionDetails(details: ConnectionDetails): string | null {
+export function validateConnectionDetails(
+    details: ConnectionDetails,
+    options: Readonly<{ passwordOptional?: boolean }> = {},
+): string | null {
     if (!details.host.trim()) return 'Enter the server host.';
     if (details.port.trim() && !/^\d{1,5}$/.test(details.port.trim())) return 'Port must be a number.';
     if (!details.database.trim()) return 'Enter the database name.';
     const option = authOption(details);
     if (option.usernameRequired && !details.username.trim()) return `Enter the ${option.usernameLabel!.toLowerCase()}.`;
-    if (option.passwordLabel && !details.password) return `Enter the ${option.passwordLabel.toLowerCase()}.`;
+    if (option.passwordLabel && !details.password && !options.passwordOptional)
+        return `Enter the ${option.passwordLabel.toLowerCase()}.`;
     return null;
 }
 
+/** True when the login method needs a password (or client secret) that the operator has not typed. */
+export function needsStoredPassword(details: ConnectionDetails): boolean {
+    return authOption(details).passwordLabel !== null && details.password === '';
+}
+
+/**
+ * Renders the provider's native connection string. An empty password is omitted rather than written as
+ * `Password=` so the API can append the stored one when an existing connection is edited.
+ */
 export function buildConnectionString(
     details: ConnectionDetails,
     options: Readonly<{ maskPassword?: boolean }> = {},
@@ -220,7 +233,7 @@ export function buildConnectionString(
         if (port) parts.push(`Port=${port}`);
         parts.push(`Database=${quote(details.database.trim())}`);
         parts.push(`Username=${quote(user)}`);
-        parts.push(`Password=${quote(password)}`);
+        if (password) parts.push(`Password=${quote(password)}`);
         parts.push(`SSL Mode=${details.encrypt ? 'Require' : 'Prefer'}`);
         if (details.encrypt && details.trustServerCertificate) parts.push('Trust Server Certificate=true');
         return parts.join(';');
@@ -229,15 +242,214 @@ export function buildConnectionString(
     parts.push(`Database=${quote(details.database.trim())}`);
     const option = authOption(details);
     if (details.auth === 'sql-login') {
-        parts.push(`User Id=${quote(user)}`, `Password=${quote(password)}`);
+        parts.push(`User Id=${quote(user)}`);
+        if (password) parts.push(`Password=${quote(password)}`);
     } else if (details.auth === 'integrated') {
         parts.push('Integrated Security=True');
     } else {
         parts.push(`Authentication=${entraKeywords[details.auth as keyof typeof entraKeywords]}`);
         if (user && option.usernameLabel) parts.push(`User Id=${quote(user)}`);
-        if (option.passwordLabel) parts.push(`Password=${quote(password)}`);
+        if (option.passwordLabel && password) parts.push(`Password=${quote(password)}`);
     }
     parts.push(`Encrypt=${details.encrypt ? 'True' : 'False'}`);
     parts.push(`TrustServerCertificate=${details.trustServerCertificate ? 'True' : 'False'}`);
     return parts.join(';');
+}
+
+/* ------------------------------ Parsing ------------------------------ */
+
+export type ParsedConnectionString = Readonly<{
+    details: ConnectionDetails;
+    /** Keys of the stored string that the form has no field for; saving from the form drops them. */
+    unsupportedKeys: readonly string[];
+}>;
+
+/** Splits `key=value;` pairs, honouring single or double quoted values with doubled quotes as escapes. */
+export function tokenizeConnectionString(value: string): readonly (readonly [string, string])[] {
+    const pairs: [string, string][] = [];
+    let index = 0;
+    const length = value.length;
+    while (index < length) {
+        while (index < length && /[\s;]/.test(value[index]!)) index += 1;
+        if (index >= length) break;
+        const keyStart = index;
+        while (index < length && value[index] !== '=' && value[index] !== ';') index += 1;
+        const key = value.slice(keyStart, index).trim();
+        if (value[index] !== '=') {
+            if (key) pairs.push([key, '']);
+            continue;
+        }
+        index += 1;
+        while (index < length && /[ \t]/.test(value[index]!)) index += 1;
+        let parsed = '';
+        const quote = value[index];
+        if (quote === '"' || quote === "'") {
+            index += 1;
+            for (;;) {
+                if (index >= length) break;
+                if (value[index] === quote) {
+                    if (value[index + 1] === quote) {
+                        parsed += quote;
+                        index += 2;
+                        continue;
+                    }
+                    index += 1;
+                    break;
+                }
+                parsed += value[index];
+                index += 1;
+            }
+            while (index < length && value[index] !== ';') index += 1;
+        } else {
+            const valueStart = index;
+            while (index < length && value[index] !== ';') index += 1;
+            parsed = value.slice(valueStart, index).trim();
+        }
+        if (key) pairs.push([key, parsed]);
+    }
+    return pairs;
+}
+
+function normalizeKey(key: string): string {
+    return key.replace(/\s+/g, '').toLowerCase();
+}
+
+function parseBoolean(value: string): boolean | null {
+    switch (value.trim().toLowerCase()) {
+        case 'true':
+        case 'yes':
+        case '1':
+        case 'sspi':
+        case 'mandatory':
+        case 'strict':
+        case 'require':
+        case 'verifyca':
+        case 'verify-ca':
+        case 'verifyfull':
+        case 'verify-full':
+            return true;
+        case 'false':
+        case 'no':
+        case '0':
+        case 'optional':
+        case 'disable':
+        case 'allow':
+        case 'prefer':
+            return false;
+        default:
+            return null;
+    }
+}
+
+const entraKeywordsByNormalizedValue: Readonly<Record<string, SqlServerAuth>> = Object.fromEntries([
+    ...Object.entries(entraKeywords).map(([auth, keyword]) => [normalizeKey(keyword), auth as SqlServerAuth]),
+    ['activedirectorymsi', 'entra-managed-identity'],
+    ['activedirectoryintegrated', 'entra-integrated'],
+    ['sqlpassword', 'sql-login'],
+]);
+
+function splitHostPort(value: string): Readonly<{ host: string; port: string }> {
+    const withoutProtocol = value.replace(/^tcp:/i, '').trim();
+    const comma = withoutProtocol.lastIndexOf(',');
+    if (comma === -1) return { host: withoutProtocol, port: '' };
+    const port = withoutProtocol.slice(comma + 1).trim();
+    return /^\d{1,5}$/.test(port)
+        ? { host: withoutProtocol.slice(0, comma).trim(), port }
+        : { host: withoutProtocol, port: '' };
+}
+
+/**
+ * Reads a stored connection string back into the form. Passwords are never present in what the API returns, so the
+ * result always has an empty password; keys the form cannot represent are reported rather than silently dropped.
+ */
+export function parseConnectionString(providerId: string, value: string): ParsedConnectionString {
+    const details: { -readonly [K in keyof ConnectionDetails]: ConnectionDetails[K] } = {
+        ...defaultConnectionDetails(providerId),
+        host: '',
+        port: '',
+    };
+    const unsupportedKeys: string[] = [];
+    let explicitPort: string | null = null;
+    for (const [rawKey, rawValue] of tokenizeConnectionString(value)) {
+        const key = normalizeKey(rawKey);
+        if (key === 'password' || key === 'pwd' || key === 'psw' || key.endsWith('password')) continue;
+        if (providerId === 'postgresql') {
+            switch (key) {
+                case 'host':
+                case 'server':
+                    details.host = rawValue;
+                    break;
+                case 'port':
+                    explicitPort = rawValue.trim();
+                    break;
+                case 'database':
+                case 'db':
+                    details.database = rawValue;
+                    break;
+                case 'username':
+                case 'user':
+                case 'userid':
+                case 'uid':
+                    details.username = rawValue;
+                    break;
+                case 'sslmode': {
+                    const flag = parseBoolean(rawValue);
+                    if (flag === null) unsupportedKeys.push(rawKey);
+                    else details.encrypt = flag;
+                    break;
+                }
+                case 'trustservercertificate':
+                    details.trustServerCertificate = parseBoolean(rawValue) ?? details.trustServerCertificate;
+                    break;
+                default:
+                    unsupportedKeys.push(rawKey);
+            }
+            continue;
+        }
+        switch (key) {
+            case 'server':
+            case 'datasource':
+            case 'address':
+            case 'addr':
+            case 'networkaddress': {
+                const { host, port } = splitHostPort(rawValue);
+                details.host = host;
+                if (port) explicitPort = port;
+                break;
+            }
+            case 'database':
+            case 'initialcatalog':
+                details.database = rawValue;
+                break;
+            case 'userid':
+            case 'uid':
+            case 'user':
+            case 'username':
+                details.username = rawValue;
+                break;
+            case 'integratedsecurity':
+            case 'trustedconnection':
+                if (parseBoolean(rawValue) === true) details.auth = 'integrated';
+                break;
+            case 'authentication': {
+                const auth = entraKeywordsByNormalizedValue[normalizeKey(rawValue)];
+                if (auth) details.auth = auth;
+                else unsupportedKeys.push(rawKey);
+                break;
+            }
+            case 'encrypt': {
+                const flag = parseBoolean(rawValue);
+                if (flag === null) unsupportedKeys.push(rawKey);
+                else details.encrypt = flag;
+                break;
+            }
+            case 'trustservercertificate':
+                details.trustServerCertificate = parseBoolean(rawValue) ?? details.trustServerCertificate;
+                break;
+            default:
+                unsupportedKeys.push(rawKey);
+        }
+    }
+    details.port = explicitPort ?? '';
+    return { details, unsupportedKeys };
 }

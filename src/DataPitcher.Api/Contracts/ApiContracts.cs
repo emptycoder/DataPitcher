@@ -8,6 +8,11 @@ using DataPitcher.Core.Transfer;
 
 namespace DataPitcher.Api.Contracts;
 
+/// <summary>
+/// Registers a connection. <paramref name="IfMatch"/> doubles as the idempotency key: repeating a request with the same
+/// key returns the profile it created. The wildcard <c>*</c> means "no specific key", in which case the credential id
+/// (unique per stored secret) is used so that distinct submissions never collapse into one profile.
+/// </summary>
 public sealed record CreateConnectionRequest(
     string DisplayName,
     string ProviderId,
@@ -16,22 +21,41 @@ public sealed record CreateConnectionRequest(
     string ConnectionString
 );
 
-/// <summary>Updates a connection. A null connection string keeps the stored credentials; the API never returns them.</summary>
+/// <summary>
+/// Updates a connection. A null connection string keeps the stored credentials; the API never returns them. When
+/// <paramref name="KeepStoredPassword"/> is set and the supplied connection string carries no password, the password
+/// from the stored credentials is appended so an operator can change other settings without retyping it.
+/// </summary>
 public sealed record UpdateConnectionRequest(
     string DisplayName,
     string ProviderId,
     string IfMatch,
-    string? ConnectionString = null
+    string? ConnectionString = null,
+    bool KeepStoredPassword = false
+);
+
+/// <summary>
+/// The editable settings of a stored connection: its connection string with every password removed. Returned only to
+/// identities allowed to write the connection, and never containing the secret itself.
+/// </summary>
+public sealed record ConnectionDetailsResponse(
+    Guid ConnectionId,
+    string ProviderId,
+    string ConnectionString,
+    bool HasPassword
 );
 
 /// <summary>
 /// Probes a database without persisting anything: either credentials supplied inline (for a connection being added or
-/// edited) or the credentials stored for an existing connection. The response never echoes the connection string.
+/// edited) or the credentials stored for an existing connection. When both a connection string and a connection id
+/// are given with <paramref name="KeepStoredPassword"/>, the stored password is appended to the supplied string if it
+/// carries none. The response never echoes the connection string.
 /// </summary>
 public sealed record ConnectionTestRequest(
     string ProviderId,
     string? ConnectionString = null,
-    Guid? ConnectionId = null
+    Guid? ConnectionId = null,
+    bool KeepStoredPassword = false
 );
 
 public sealed record ConnectionTestResponse(

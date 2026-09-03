@@ -15,7 +15,7 @@ namespace DataPitcher.ControlStore;
 /// </summary>
 public sealed class FileSecretStore(string secretsRoot) : ISecretWriter
 {
-    private readonly string root = Path.GetFullPath(secretsRoot);
+    private readonly string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(secretsRoot));
 
     public async Task<SecretReference> StoreAsync(Guid credentialId, string secret, CancellationToken cancellationToken)
     {

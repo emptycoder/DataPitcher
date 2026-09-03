@@ -233,6 +233,22 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(DeleteConnectionAsync), cancellationToken, () => connectionId);
 
+    public Task<ConnectionDetailsResponse> GetConnectionDetailsAsync(
+        Guid connectionId,
+        CancellationToken cancellationToken
+    ) =>
+        ObserveAsync(
+            nameof(GetConnectionDetailsAsync),
+            cancellationToken,
+            () =>
+                new ConnectionDetailsResponse(
+                    connectionId,
+                    "sqlserver",
+                    "Server=localhost;Database=app;User Id=sa",
+                    true
+                )
+        );
+
     public Task<OperationReceiptResponse> QueueConnectionCheckAsync(
         Guid connectionId,
         CancellationToken cancellationToken

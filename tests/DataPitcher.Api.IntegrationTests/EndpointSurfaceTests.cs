@@ -66,6 +66,32 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task GetConnectionDetails_ReturnsTheRedactedConnectionString()
+    {
+        var connectionId = Guid.NewGuid();
+
+        using var response = await _client.GetAsync($"/api/connections/{connectionId}/details", CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var details = await response.Content.ReadFromJsonAsync<ConnectionDetailsResponse>();
+        Assert.Equal(connectionId, details!.ConnectionId);
+        Assert.Equal("Server=localhost;Database=app;User Id=sa", details.ConnectionString);
+        Assert.True(details.HasPassword);
+        Assert.Contains("GetConnectionDetailsAsync", _factory.Application.Invocations);
+    }
+
+    [Fact]
+    public async Task GetConnectionDetails_RequiresConnectionsWrite()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/connections/{Guid.NewGuid()}/details");
+        request.Headers.Add("X-Test-Permissions", Permissions.ConnectionsRead.Value);
+
+        using var response = await _client.SendAsync(request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task TestConnection_ProbesInlineCredentials()
     {
         var request = new ConnectionTestRequest("postgresql", "Host=localhost;Database=app");

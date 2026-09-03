@@ -21,6 +21,7 @@ public interface IDataPitcherApplication
         CancellationToken cancellationToken
     );
     Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken);
+    Task<ConnectionDetailsResponse> GetConnectionDetailsAsync(Guid connectionId, CancellationToken cancellationToken);
     Task<ConnectionTestResponse> TestConnectionAsync(
         ConnectionTestRequest request,
         CancellationToken cancellationToken

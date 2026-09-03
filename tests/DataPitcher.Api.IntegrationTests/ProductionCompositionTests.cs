@@ -182,6 +182,100 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
+    public async Task DataPitcherApplication_CreateConnection_WithWildcardIfMatch_CreatesDistinctProfiles()
+    {
+        using var fixture = new ProductionApplicationFixture();
+
+        var first = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("LocalDB", "sqlserver", Guid.NewGuid(), "*", "Server=(localdb)\\x;Database=a"),
+            CancellationToken.None
+        );
+        var second = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Staging", "postgresql", Guid.NewGuid(), "*", "Host=two;Database=b"),
+            CancellationToken.None
+        );
+        var connections = await fixture.Application.ListConnectionsAsync(CancellationToken.None);
+
+        Assert.NotEqual(first.ConnectionId, second.ConnectionId);
+        Assert.Equal("Staging", second.DisplayName);
+        Assert.Equal(["LocalDB", "Staging"], connections.Select(connection => connection.DisplayName).ToArray());
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_CreateConnection_WithTheSameIdempotencyKey_ReturnsTheExistingProfile()
+    {
+        using var fixture = new ProductionApplicationFixture();
+
+        var first = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "same-key", "Host=one;Database=a"),
+            CancellationToken.None
+        );
+        var retried = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "same-key", "Host=one;Database=a"),
+            CancellationToken.None
+        );
+
+        Assert.Equal(first.ConnectionId, retried.ConnectionId);
+        Assert.Single(await fixture.Application.ListConnectionsAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_ConnectionDetails_RedactsThePasswordAndUpdateCanKeepIt()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var created = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest(
+                "Source",
+                "postgresql",
+                Guid.NewGuid(),
+                "create",
+                "Host=one;Database=app;Username=app;Password=\"top;secret\""
+            ),
+            CancellationToken.None
+        );
+
+        var details = await fixture.Application.GetConnectionDetailsAsync(created.ConnectionId, CancellationToken.None);
+        var updated = await fixture.Application.UpdateConnectionAsync(
+            created.ConnectionId,
+            new UpdateConnectionRequest(
+                "Source",
+                "postgresql",
+                created.ETag,
+                "Host=two;Database=app;Username=app",
+                KeepStoredPassword: true
+            ),
+            CancellationToken.None
+        );
+        var profile = await fixture.Profiles.GetProfileAsync(created.ConnectionId, CancellationToken.None);
+        var stored = await File.ReadAllTextAsync(profile.SecretReference.Locator);
+        var replaced = await fixture.Application.UpdateConnectionAsync(
+            created.ConnectionId,
+            new UpdateConnectionRequest(
+                "Source",
+                "postgresql",
+                updated.ETag,
+                "Host=three;Database=app;Username=app;Password=fresh",
+                KeepStoredPassword: true
+            ),
+            CancellationToken.None
+        );
+        var replacedProfile = await fixture.Profiles.GetProfileAsync(created.ConnectionId, CancellationToken.None);
+
+        Assert.True(details.HasPassword);
+        Assert.Equal("postgresql", details.ProviderId);
+        Assert.DoesNotContain("secret", details.ConnectionString);
+        Assert.Contains("host=one", details.ConnectionString);
+        Assert.Contains("username=app", details.ConnectionString);
+        Assert.StartsWith("Host=two;Database=app;Username=app;", stored);
+        Assert.Equal("top;secret", ConnectionStringSecrets.ExtractPassword(stored));
+        Assert.NotEqual(created.ETag, replaced.ETag);
+        Assert.Equal(
+            "Host=three;Database=app;Username=app;Password=fresh",
+            await File.ReadAllTextAsync(replacedProfile.SecretReference.Locator)
+        );
+    }
+
+    [Fact]
     public async Task DataPitcherApplication_TestConnection_ReportsTheDriverFailureWithoutSecrets()
     {
         using var fixture = new ProductionApplicationFixture();
@@ -709,6 +803,11 @@ public sealed class ProductionCompositionTests
             $"datapitcher-application-{Guid.NewGuid():N}.db"
         );
 
+        private readonly string _secretsRoot = Path.Combine(
+            Path.GetTempPath(),
+            "datapitcher-secrets-" + Guid.NewGuid().ToString("N")
+        );
+
         public ProductionApplicationFixture()
         {
             Database = new ControlDatabase($"Data Source={_databasePath}");
@@ -724,7 +823,7 @@ public sealed class ProductionCompositionTests
                 Profiles,
                 new ConnectionHealthService(
                     Profiles,
-                    new SecretReferenceResolver(Path.GetTempPath()),
+                    new SecretReferenceResolver(_secretsRoot),
                     new ConnectionProviderRegistry([new PostgreSqlConnectionProvider()])
                 ),
                 snapshots,
@@ -733,10 +832,8 @@ public sealed class ProductionCompositionTests
                 Jobs,
                 Events,
                 providers: new ConnectionProviderRegistry([new PostgreSqlConnectionProvider()]),
-                secretResolver: new SecretReferenceResolver(Path.GetTempPath()),
-                secretWriter: new FileSecretStore(
-                    Path.Combine(Path.GetTempPath(), "datapitcher-secrets-" + Guid.NewGuid().ToString("N"))
-                )
+                secretResolver: new SecretReferenceResolver(_secretsRoot),
+                secretWriter: new FileSecretStore(_secretsRoot)
             );
         }
 
@@ -784,6 +881,8 @@ public sealed class ProductionCompositionTests
         {
             if (File.Exists(_databasePath))
                 File.Delete(_databasePath);
+            if (Directory.Exists(_secretsRoot))
+                Directory.Delete(_secretsRoot, recursive: true);
         }
     }
 

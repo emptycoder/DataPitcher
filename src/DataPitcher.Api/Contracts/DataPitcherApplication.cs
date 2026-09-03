@@ -62,7 +62,8 @@ public sealed class DataPitcherApplication(
             DefaultBusinessSchema,
             DefaultStagingSchema
         );
-        var profile = await connections.CreateAsync(draft, request.IfMatch, cancellationToken);
+        var idempotencyKey = request.IfMatch.Trim() == "*" ? request.CredentialId.ToString("N") : request.IfMatch;
+        var profile = await connections.CreateAsync(draft, idempotencyKey, cancellationToken);
         return new ConnectionResponse(
             profile.ConnectionId,
             profile.DisplayName,
@@ -83,7 +84,13 @@ public sealed class DataPitcherApplication(
         var secretReference = replacingSecret
             ? await (
                 secretWriter ?? throw new InvalidOperationException("Connection secret storage is not configured.")
-            ).StoreAsync(Guid.NewGuid(), request.ConnectionString!, cancellationToken)
+            ).StoreAsync(
+                Guid.NewGuid(),
+                request.KeepStoredPassword
+                    ? await WithStoredPasswordAsync(existing, request.ConnectionString!, cancellationToken)
+                    : request.ConnectionString!,
+                cancellationToken
+            )
             : existing.SecretReference;
         var profile = await connections.UpdateAsync(
             connectionId,
@@ -101,6 +108,38 @@ public sealed class DataPitcherApplication(
             await secretWriter.RemoveAsync(existing.SecretReference, cancellationToken);
         var summary = await connections.GetSummaryAsync(profile.ConnectionId, cancellationToken);
         return ToConnectionResponse(summary);
+    }
+
+    public async Task<ConnectionDetailsResponse> GetConnectionDetailsAsync(
+        Guid connectionId,
+        CancellationToken cancellationToken
+    )
+    {
+        var profile = await connections.GetProfileAsync(connectionId, cancellationToken);
+        var stored = await ResolveSecretAsync(profile, cancellationToken);
+        var (redacted, hasPassword) = ConnectionStringSecrets.Redact(stored);
+        return new ConnectionDetailsResponse(profile.ConnectionId, profile.ProviderId, redacted, hasPassword);
+    }
+
+    private Task<string> ResolveSecretAsync(ConnectionProfile profile, CancellationToken cancellationToken) =>
+        (secretResolver ?? throw new InvalidOperationException("Secret resolution is not configured.")).ResolveAsync(
+            profile.SecretReference,
+            cancellationToken
+        );
+
+    /// <summary>Appends the password stored for <paramref name="profile"/> to a connection string that carries none.</summary>
+    private async Task<string> WithStoredPasswordAsync(
+        ConnectionProfile profile,
+        string connectionString,
+        CancellationToken cancellationToken
+    )
+    {
+        if (ConnectionStringSecrets.ExtractPassword(connectionString) is not null)
+            return connectionString;
+        var stored = await ResolveSecretAsync(profile, cancellationToken);
+        return ConnectionStringSecrets.ExtractPassword(stored) is { } password
+            ? ConnectionStringSecrets.WithPassword(connectionString, password)
+            : connectionString;
     }
 
     public async Task<ConnectionTestResponse> TestConnectionAsync(
@@ -122,7 +161,14 @@ public sealed class DataPitcherApplication(
                 DefaultStagingSchema,
                 0
             );
-            connectionString = request.ConnectionString;
+            connectionString =
+                request.KeepStoredPassword && request.ConnectionId is Guid storedConnectionId
+                    ? await WithStoredPasswordAsync(
+                        await connections.GetProfileAsync(storedConnectionId, cancellationToken),
+                        request.ConnectionString,
+                        cancellationToken
+                    )
+                    : request.ConnectionString;
         }
         else if (request.ConnectionId is Guid connectionId)
         {

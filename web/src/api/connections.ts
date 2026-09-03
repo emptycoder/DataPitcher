@@ -74,8 +74,20 @@ export function credentialEnvironmentVariable(credentialId: string) {
 export type UpdateConnectionInput = Readonly<{
     displayName: string;
     providerId: string;
+    /** Null keeps the stored credentials untouched. */
     connectionString: string | null;
+    /** When the new connection string has no password, the API appends the stored one. */
+    keepStoredPassword?: boolean;
 }>;
+
+/** The stored connection string with every password removed, so an operator can edit the other settings. */
+export const ConnectionDetailsSchema = z.object({
+    connectionId: z.string(),
+    providerId: z.string(),
+    connectionString: z.string(),
+    hasPassword: z.boolean(),
+});
+export type ConnectionDetails = z.infer<typeof ConnectionDetailsSchema>;
 
 export const ConnectionTestSchema = z.object({
     succeeded: z.boolean(),
@@ -91,6 +103,7 @@ export type ConnectionTestInput = Readonly<{
     providerId: string;
     connectionString?: string | null;
     connectionId?: string | null;
+    keepStoredPassword?: boolean;
 }>;
 
 export const connectionsApi = {
@@ -112,9 +125,15 @@ export const connectionsApi = {
         requestJson<unknown>('/api/connections', auth, { signal }).then((data) =>
             z.array(ConnectionSchema).parse(data),
         ),
+    /** The credential id doubles as the idempotency key: a retry of the same submission returns the same profile. */
     create: (input: CreateConnectionInput, auth: AuthenticationAdapter) =>
-        requestJson<unknown>('/api/connections', auth, { method: 'POST', body: { ...input, ifMatch: '*' } }).then(
-            (data) => ConnectionSchema.parse(data),
+        requestJson<unknown>('/api/connections', auth, {
+            method: 'POST',
+            body: { ...input, ifMatch: input.credentialId },
+        }).then((data) => ConnectionSchema.parse(data)),
+    details: (connectionId: string, auth: AuthenticationAdapter, signal?: AbortSignal) =>
+        requestJson<unknown>(`/api/connections/${connectionId}/details`, auth, { signal }).then((data) =>
+            ConnectionDetailsSchema.parse(data),
         ),
     remove: (connectionId: string, eTag: string, auth: AuthenticationAdapter) =>
         requestJson<void>(`/api/connections/${connectionId}`, auth, {
