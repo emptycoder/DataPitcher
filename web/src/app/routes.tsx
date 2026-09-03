@@ -37,7 +37,7 @@ function planReviewRoute(params: RouteParams, context: RouteContext) {
 }
 
 function selectionWorkbenchRoute(_: RouteParams, context: RouteContext) {
-  return <SelectionWorkbenchScreen request={fetch} authentication={context.authentication} />;
+  return <SelectionWorkbenchScreen authentication={context.authentication} />;
 }
 
 function transferMonitorRoute(params: RouteParams, context: RouteContext) {
