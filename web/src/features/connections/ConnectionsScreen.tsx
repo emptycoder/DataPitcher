@@ -221,6 +221,20 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
         onError: (error) => toast.error('Unable to start schema scan', describeError(error)),
     });
 
+    const [removingSnapshot, setRemovingSnapshot] = useState(false);
+    const removeSnapshot = useMutation({
+        mutationFn: (snapshotId: string) =>
+            connectionsApi.removeSnapshot(connection.connectionId, snapshotId, authentication),
+        onSuccess: async () => {
+            setRemovingSnapshot(false);
+            await queryClient.invalidateQueries({ queryKey: queryKeys.snapshots(connection.connectionId) });
+            toast.success('Snapshot removed');
+        },
+        onError: (error) => {
+            setRemovingSnapshot(false);
+            toast.error('Unable to remove the snapshot', describeError(error));
+        },
+    });
     const remove = useMutation({
         mutationFn: () => connectionsApi.remove(connection.connectionId, connection.eTag, authentication),
         onSuccess: async () => {
@@ -338,12 +352,23 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                                 <span className="font-mono">{latest.hash.slice(0, 10)}</span>
                             </div>
                         </div>
-                        <Link
-                            className="flex items-center gap-1 text-[13px] font-medium text-accent hover:underline"
-                            to={`/schema/${connection.connectionId}/${latest.snapshotId}`}
-                        >
-                            Explore <Icons.ArrowRight size={14} />
-                        </Link>
+                        <div className="flex items-center gap-1">
+                            <Link
+                                className="flex items-center gap-1 text-[13px] font-medium text-accent hover:underline"
+                                to={`/schema/${connection.connectionId}/${latest.snapshotId}`}
+                            >
+                                Explore <Icons.ArrowRight size={14} />
+                            </Link>
+                            {canScan ? (
+                                <IconButton
+                                    label="Remove latest snapshot"
+                                    onClick={() => setRemovingSnapshot(true)}
+                                    size="sm"
+                                >
+                                    <Icons.X size={14} />
+                                </IconButton>
+                            ) : null}
+                        </div>
                     </div>
                 ) : (
                     <div className="text-fg-muted">
@@ -384,6 +409,28 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
             </div>
 
             {editing ? <ConnectionDialog existing={connection} onClose={() => setEditing(false)} open /> : null}
+            <Modal
+                description="Only DataPitcher's captured copy of the schema is deleted; the database is not touched. Selections built on this snapshot keep it until they are edited or removed."
+                footer={
+                    <>
+                        <Button disabled={removeSnapshot.isPending} onClick={() => setRemovingSnapshot(false)}>
+                            Keep
+                        </Button>
+                        <Button
+                            icon={<Icons.X size={15} />}
+                            loading={removeSnapshot.isPending}
+                            onClick={() => latest && removeSnapshot.mutate(latest.snapshotId)}
+                            variant="danger"
+                        >
+                            Remove snapshot
+                        </Button>
+                    </>
+                }
+                onClose={() => setRemovingSnapshot(false)}
+                open={removingSnapshot}
+                title="Remove the latest snapshot?"
+                tone="danger"
+            />
             <Modal
                 description="This deletes the connection profile and every schema snapshot captured from it. Plans that reference it will no longer load until they are edited."
                 footer={

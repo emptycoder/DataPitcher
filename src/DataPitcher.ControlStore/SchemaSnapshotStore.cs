@@ -133,6 +133,26 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
         return Task.FromResult(row is null ? null : ToSnapshot(row));
     }
 
+    public Task<bool> DeleteAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        using var transaction = db.BeginTransaction();
+        var selections = db.Scalar<long>(
+            "SELECT COUNT(*) FROM Selections WHERE SnapshotId = @snapshotId",
+            new ControlParameter("snapshotId", snapshotId.ToString())
+        );
+        if (selections > 0)
+            throw new SchemaSnapshotInUseException(checked((int)selections));
+        var affected = db.Execute(
+            "DELETE FROM SchemaSnapshots WHERE ConnectionId = @connectionId AND SnapshotId = @snapshotId",
+            new ControlParameter("connectionId", connectionId.ToString()),
+            new ControlParameter("snapshotId", snapshotId.ToString())
+        );
+        transaction.Commit();
+        return Task.FromResult(affected == 1);
+    }
+
     public Task<StoredSchemaSnapshot?> FindByHashAsync(
         Guid connectionId,
         string hash,

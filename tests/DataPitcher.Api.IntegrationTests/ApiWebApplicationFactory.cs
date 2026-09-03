@@ -265,6 +265,9 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
             () => Receipt(connectionId: connectionId, state: "queued")
         );
 
+    public Task DeleteSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(DeleteSnapshotAsync), cancellationToken, () => snapshotId);
+
     public Task<OperationStatusResponse?> GetOperationStatusAsync(
         Guid operationId,
         CancellationToken cancellationToken

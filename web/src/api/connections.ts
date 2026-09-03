@@ -167,6 +167,8 @@ export const connectionsApi = {
                 .parse(data)
                 .toSorted((left, right) => right.capturedAtUtc.localeCompare(left.capturedAtUtc)),
         ),
+    removeSnapshot: (connectionId: string, snapshotId: string, auth: AuthenticationAdapter) =>
+        requestJson<void>(`/api/connections/${connectionId}/snapshots/${snapshotId}`, auth, { method: 'DELETE' }),
     snapshot: (connectionId: string, snapshotId: string, auth: AuthenticationAdapter, signal?: AbortSignal) =>
         requestJson<unknown>(`/api/connections/${connectionId}/snapshots/${snapshotId}`, auth, { signal }).then(
             (data) => SnapshotSchema.parse(data),

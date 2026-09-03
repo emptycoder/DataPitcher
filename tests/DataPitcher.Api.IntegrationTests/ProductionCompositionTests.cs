@@ -12,6 +12,7 @@ using DataPitcher.ControlStore;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
+using DataPitcher.Core.Schema;
 using DataPitcher.Core.Time;
 using DataPitcher.Providers.PostgreSql;
 using DataPitcher.Providers.SqlServer;
@@ -344,6 +345,35 @@ public sealed class ProductionCompositionTests
         Assert.False(string.IsNullOrWhiteSpace(result.Error));
         Assert.DoesNotContain("topsecret", result.Error);
         Assert.Contains("CanConnect", result.MissingRequired);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_DeleteSnapshot_RemovesItUnlessASelectionStillUsesIt()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var connection = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "*", "Host=one;Database=app"),
+            CancellationToken.None
+        );
+        var used = fixture.SeedSnapshot(connection.ConnectionId);
+        var unused = fixture.SeedSnapshot(connection.ConnectionId);
+        _ = await fixture.Application.SaveSelectionAsync(
+            Guid.NewGuid(),
+            new SaveSelectionRequest("*", "Orders", OrdersQuery() with { SnapshotId = used }),
+            CancellationToken.None
+        );
+
+        await fixture.Application.DeleteSnapshotAsync(connection.ConnectionId, unused, CancellationToken.None);
+        var inUse = await Assert.ThrowsAsync<SchemaSnapshotInUseException>(() =>
+            fixture.Application.DeleteSnapshotAsync(connection.ConnectionId, used, CancellationToken.None)
+        );
+        await Assert.ThrowsAsync<SnapshotNotFoundException>(() =>
+            fixture.Application.DeleteSnapshotAsync(connection.ConnectionId, unused, CancellationToken.None)
+        );
+        var remaining = await fixture.Application.ListSnapshotsAsync(connection.ConnectionId, CancellationToken.None);
+
+        Assert.Equal(1, inUse.Selections);
+        Assert.Single(remaining, snapshot => snapshot.SnapshotId == used);
     }
 
     [Fact]

@@ -20,6 +20,8 @@ public sealed class PlanNotSealedException() : InvalidOperationException("Plan m
 
 public sealed class SelectionNotFoundException() : InvalidOperationException("Selection was not found.");
 
+public sealed class SnapshotNotFoundException() : InvalidOperationException("Schema snapshot was not found.");
+
 /// <summary>
 /// Production <see cref="IDataPitcherApplication"/> delegating to the real control-database stores and connection
 /// services. Connection, schema-scan/snapshot, selection, plan sealing, and job workflows are backed by durable,
@@ -350,6 +352,12 @@ public sealed class DataPitcherApplication(
                 snapshot.CapturedAtUtc
             ))
             .ToArray();
+
+    public async Task DeleteSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
+    {
+        if (!await snapshots.DeleteAsync(connectionId, snapshotId, cancellationToken))
+            throw new SnapshotNotFoundException();
+    }
 
     public async Task<SchemaSnapshotResponse> GetSnapshotAsync(
         Guid connectionId,

@@ -1,11 +1,16 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { connectionsApi } from '../../api/connections';
+import { queryKeys } from '../../api/keys';
 import type { Snapshot, SnapshotForeignKey, SnapshotTable } from '../../api/connections';
 import { formatDateTime, formatNumber } from '../../api/format';
 import { describeError } from '../../api/problem';
+import { useAuth } from '../../auth/AuthContext';
 import { usePermissions } from '../../auth/permissions';
 import { Link, navigate } from '../../app/router';
 import { useSourceConnectionId } from '../../stores/sessionStore';
-import { Alert, Badge, Button, Card, Code, DataTable, EmptyState, Field, PageHeader, Select, Skeleton, Stat, Tabs, TextInput, cx } from '../../ui';
+import { Alert, Badge, Button, Card, Code, DataTable, EmptyState, Field, Modal, PageHeader, Select, Skeleton, Stat, Tabs, TextInput, cx } from '../../ui';
+import { useToast } from '../../ui/toast';
 import { Icons } from '../../ui/icons';
 import type { SchemaGraphProjection, SchemaTableAddress } from '../graph/graphLayout';
 import { useConnections, useSnapshot, useSnapshots } from '../shared/queries';
@@ -13,6 +18,10 @@ import { SchemaGraph, tableKey } from './SchemaGraph';
 
 export function SchemaExplorerScreen({ connectionId, snapshotId }: Readonly<{ connectionId: string | null; snapshotId: string | null }>) {
   const { isVerified, hasPermission } = usePermissions();
+  const { authentication } = useAuth();
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [removing, setRemoving] = useState(false);
   const connections = useConnections();
   const sourceId = useSourceConnectionId();
   const effectiveConnectionId = connectionId ?? sourceId ?? connections.data?.[0]?.connectionId ?? null;
@@ -25,6 +34,21 @@ export function SchemaExplorerScreen({ connectionId, snapshotId }: Readonly<{ co
     if (!effectiveConnectionId || !effectiveSnapshotId) return;
     if (connectionId !== effectiveConnectionId || snapshotId !== effectiveSnapshotId) navigate(`/schema/${effectiveConnectionId}/${effectiveSnapshotId}`, { replace: true });
   }, [connectionId, snapshotId, effectiveConnectionId, effectiveSnapshotId]);
+
+  const remove = useMutation({
+    mutationFn: () => connectionsApi.removeSnapshot(effectiveConnectionId!, effectiveSnapshotId!, authentication),
+    onSuccess: async () => {
+      setRemoving(false);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.snapshots(effectiveConnectionId!) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.connections });
+      toast.success('Snapshot removed');
+      navigate(`/schema/${effectiveConnectionId}`, { replace: true });
+    },
+    onError: (error) => {
+      setRemoving(false);
+      toast.error('Unable to remove the snapshot', describeError(error));
+    },
+  });
 
   if (isVerified && !hasPermission('Schema.Read')) {
     return <Alert tone="danger">You do not have permission to browse schemas.</Alert>;
@@ -67,10 +91,32 @@ export function SchemaExplorerScreen({ connectionId, snapshotId }: Readonly<{ co
                 {(snapshots.data?.length ?? 0) === 0 ? <option value="">No snapshots</option> : null}
               </Select>
             </Field>
+            {hasPermission('Schema.Write') && effectiveSnapshotId ? (
+              <Button icon={<Icons.X size={15} />} onClick={() => setRemoving(true)}>
+                Remove snapshot
+              </Button>
+            ) : null}
           </div>
         }
         description="Browse captured tables, keys and foreign keys, and see how tables depend on each other."
         title="Schema explorer"
+      />
+      <Modal
+        description="Only DataPitcher's captured copy of the schema is deleted; the database is not touched. Selections that were built on this snapshot keep it until they are edited or removed."
+        footer={
+          <>
+            <Button disabled={remove.isPending} onClick={() => setRemoving(false)}>
+              Keep
+            </Button>
+            <Button icon={<Icons.X size={15} />} loading={remove.isPending} onClick={() => remove.mutate()} variant="danger">
+              Remove snapshot
+            </Button>
+          </>
+        }
+        onClose={() => setRemoving(false)}
+        open={removing}
+        title="Remove this snapshot?"
+        tone="danger"
       />
 
       {connections.isPending || (effectiveConnectionId && snapshots.isPending) ? (

@@ -69,6 +69,11 @@ public static class EndpointGroups
                     .RequireAuthorization(ApiPolicyNames.SchemaRead)
             )
             .ProducesProblem(StatusCodes.Status404NotFound);
+        WithStandardProblems(
+            connections
+                .MapDelete("/{connectionId:guid}/snapshots/{snapshotId:guid}", DeleteSnapshotAsync)
+                .RequireAuthorization(ApiPolicyNames.SchemaWrite)
+        );
 
         var operations = app.MapGroup("/api/operations");
         WithStandardProblems(operations.MapGet("/{operationId:guid}", GetOperationStatusAsync).RequireAuthorization());
@@ -332,6 +337,42 @@ public static class EndpointGroups
             return problem;
         var receipt = await application.QueueConnectionCheckAsync(connectionId, cancellationToken);
         return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
+    }
+
+    private static async Task<Results<NoContent, ProblemHttpResult>> DeleteSnapshotAsync(
+        Guid connectionId,
+        Guid snapshotId,
+        HttpContext context,
+        ClaimsPrincipal user,
+        IAuthorizationService authorizationService,
+        IDataPitcherApplication application,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            await AuthorizeResourceAsync(
+                context,
+                authorizationService,
+                user,
+                new ConnectionResource(connectionId),
+                Permissions.SchemaWrite
+            ) is
+            { } problem
+        )
+            return problem;
+        try
+        {
+            await application.DeleteSnapshotAsync(connectionId, snapshotId, cancellationToken);
+            return TypedResults.NoContent();
+        }
+        catch (SnapshotNotFoundException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: exception.Message);
+        }
+        catch (SchemaSnapshotInUseException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: exception.Message);
+        }
     }
 
     private static async Task<Results<Accepted<OperationReceiptResponse>, ProblemHttpResult>> QueueSchemaScanAsync(

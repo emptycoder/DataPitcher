@@ -32,6 +32,7 @@ public interface IDataPitcherApplication
         Guid connectionId,
         CancellationToken cancellationToken
     );
+    Task DeleteSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken);
     Task<OperationStatusResponse?> GetOperationStatusAsync(Guid operationId, CancellationToken cancellationToken);
     Task<SchemaSnapshotResponse> GetSnapshotAsync(
         Guid connectionId,

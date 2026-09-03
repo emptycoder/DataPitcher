@@ -33,6 +33,12 @@ public interface ISchemaSnapshotRepository
 
     Task<StoredSchemaSnapshot?> FindByHashAsync(Guid connectionId, string hash, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Deletes a snapshot. Returns false when it does not exist. Throws <see cref="SchemaSnapshotInUseException"/>
+    /// when a saved selection still references it, so the selection keeps a schema to load against.
+    /// </summary>
+    Task<bool> DeleteAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken);
+
     Task<SchemaGraphProjection> GetGraphAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken);
 
     Task<SchemaTableProjection> GetTableAsync(
@@ -59,4 +65,12 @@ public interface ISchemaSnapshotRepository
     Task CompleteAsync(SchemaScan scan, SchemaSnapshotContent content, CancellationToken cancellationToken);
 
     Task FailAsync(Guid scanId, string failureCode, CancellationToken cancellationToken);
+}
+
+public sealed class SchemaSnapshotInUseException(int selections)
+    : InvalidOperationException(
+        $"{selections} saved selection{(selections == 1 ? "" : "s")} still use this snapshot. Edit or remove them first."
+    )
+{
+    public int Selections { get; } = selections;
 }

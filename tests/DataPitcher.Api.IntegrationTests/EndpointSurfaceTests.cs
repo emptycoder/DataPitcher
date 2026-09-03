@@ -188,6 +188,32 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task DeleteSnapshot_ReturnsNoContent()
+    {
+        using var response = await _client.DeleteAsync(
+            $"/api/connections/{Guid.NewGuid()}/snapshots/{Guid.NewGuid()}",
+            CancellationToken.None
+        );
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Contains("DeleteSnapshotAsync", _factory.Application.Invocations);
+    }
+
+    [Fact]
+    public async Task DeleteSnapshot_RequiresSchemaWrite()
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Delete,
+            $"/api/connections/{Guid.NewGuid()}/snapshots/{Guid.NewGuid()}"
+        );
+        request.Headers.Add("X-Test-Permissions", Permissions.SchemaRead.Value);
+
+        using var response = await _client.SendAsync(request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task QueueConnectionCheck_ReturnsAcceptedReceipt()
     {
         var connectionId = Guid.NewGuid();
