@@ -156,6 +156,29 @@ public sealed class PostgreSqlSelectionExecutionTests : IClassFixture<PostgreSql
     }
 
     [Fact]
+    public async Task RawSql_WithoutAliases_IsWrappedSoSelectStarSeedsKeysAndCounts()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync("INSERT INTO customers (customer_id, external_code) VALUES (1, 'a'), (2, 'b')");
+        await scope.ExecuteAsync("INSERT INTO orders (order_id, customer_id) VALUES (10, 1), (11, 1), (12, 2)");
+        var schema = await new PostgreSqlCatalogReader(scope.Source).ReadAsync(scope.Schema, CancellationToken.None);
+        var orders = schema.Table("orders").Definition;
+        var executor = new PostgreSqlSelectionExecutor(scope.Source, schema);
+        var plain = Raw(orders, "SELECT * FROM orders WHERE customer_id = 1 ORDER BY order_id");
+
+        await executor.ValidateAsync(plain, CancellationToken.None);
+        var keys = await executor.ReadKeysAsync(plain, 100, CancellationToken.None);
+        var count = await executor.CountAsync(plain, CancellationToken.None);
+        var rejected = await Assert.ThrowsAsync<RawSqlValidationException>(() =>
+            executor.ValidateAsync(Raw(orders, "SELECT customer_id FROM orders"), CancellationToken.None)
+        );
+
+        Assert.Equal([10, 11], keys.Keys.Select(key => Convert.ToInt32(key.Components[0].Value)).Order());
+        Assert.Equal(2, count);
+        Assert.Contains("order_id", rejected.Message);
+    }
+
+    [Fact]
     public async Task ValidateAsync_WhenRawSqlOmitsAStableKeyAlias_RejectsTheResultShape()
     {
         await using var scope = await fixture.CreateScopeAsync();

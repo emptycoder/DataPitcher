@@ -1,7 +1,9 @@
 using System.Security.Claims;
+using System.Text.Json;
 using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
 using DataPitcher.Application.Schema;
+using DataPitcher.Application.Selection;
 using DataPitcher.ControlStore;
 using DataPitcher.Core.Authorization;
 using DataPitcher.Core.Connections;
@@ -98,8 +100,107 @@ public static class WorkbenchEndpoints
     private static Task<PreviewResponse> PreviewAsync(SelectionRequestBody request) =>
         throw new SelectionExecutionNotWiredException();
 
-    private static Task<CountResponse> CountAsync(SelectionRequestBody request) =>
-        throw new SelectionExecutionNotWiredException();
+    /// <summary>Counts the distinct start rows on the live source. Only the count travels back, never row data.</summary>
+    private static async Task<Results<Ok<CountResponse>, ProblemHttpResult>> CountAsync(
+        SelectionRequestBody request,
+        HttpContext context,
+        ClaimsPrincipal user,
+        IAuthorizationService authorizationService,
+        IConnectionProfileRepository connections,
+        ISecretReferenceResolver secrets,
+        IConnectionProviderRegistry providers,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!string.Equals(request.Mode, "raw", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(request.RawSql))
+            return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Write a SELECT first.");
+        if (request.ConnectionId is not Guid connectionId)
+            return TypedResults.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Choose a source connection first."
+            );
+        if (
+            string.IsNullOrWhiteSpace(request.RootSchema)
+            || string.IsNullOrWhiteSpace(request.RootTable)
+            || string.IsNullOrWhiteSpace(request.StableKeyConstraintName)
+            || request.StableKeyColumns is not { Count: > 0 }
+        )
+            return TypedResults.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Choose a root table with a primary key first."
+            );
+        if (
+            await EndpointGroups.AuthorizeResourceAsync(
+                context,
+                authorizationService,
+                user,
+                new ConnectionResource(connectionId),
+                Permissions.ConnectionsRead
+            ) is
+            { } problem
+        )
+            return problem;
+        ConnectionProfile profile;
+        try
+        {
+            profile = await connections.GetProfileAsync(connectionId, cancellationToken);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: exception.Message);
+        }
+        string connectionString;
+        try
+        {
+            connectionString = await secrets.ResolveAsync(profile.SecretReference, cancellationToken);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: exception.Message);
+        }
+        var parameters = request
+            .Parameters.Select(parameter =>
+                SelectionParameters.FromJson(
+                    parameter.Name,
+                    parameter.Kind,
+                    parameter.Value is JsonElement element
+                        ? element
+                        : JsonSerializer.SerializeToElement(parameter.Value)
+                )
+            )
+            .ToArray();
+        try
+        {
+            var count = await providers
+                .Get(profile.ProviderId)
+                .CountSelectionRootsAsync(
+                    profile,
+                    connectionString,
+                    new SelectionRootQuery(
+                        request.RootSchema,
+                        request.RootTable,
+                        request.StableKeyConstraintName,
+                        request.StableKeyColumns,
+                        request.RawSql,
+                        parameters
+                    ),
+                    cancellationToken
+                );
+            return TypedResults.Ok(new CountResponse(count));
+        }
+        catch (RawSqlValidationException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: exception.Message);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return TypedResults.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "The source database rejected the query.",
+                detail: exception.GetBaseException().Message
+            );
+        }
+    }
 
     private static async Task<Results<Ok<SavedSelectionResponse>, ProblemHttpResult>> SaveAsync(
         SelectionRequestBody request,

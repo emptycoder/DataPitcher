@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using DataPitcher.Api.Contracts;
 using DataPitcher.ControlStore;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,6 +12,28 @@ public sealed class WorkbenchEndpointsTests(ApiWebApplicationFactory factory) : 
 {
     private readonly ApiWebApplicationFactory _factory = factory;
     private readonly HttpClient _client = factory.CreateClient();
+
+    [Fact]
+    public async Task Count_WithoutAConnection_ExplainsWhatIsMissing()
+    {
+        var body = new SelectionRequestBody(
+            "raw",
+            null,
+            "SELECT * FROM app.Orders",
+            [],
+            "rev",
+            RootSchema: "app",
+            RootTable: "Orders",
+            StableKeyConstraintName: "PK_Orders",
+            StableKeyColumns: ["Id"]
+        );
+
+        using var response = await _client.PostAsJsonAsync("/api/selections/count", body, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Choose a source connection first.", problem.GetProperty("title").GetString());
+    }
 
     [Fact]
     public async Task SaveSelection_WithConnectionAndSnapshot_PersistsTheBinding()

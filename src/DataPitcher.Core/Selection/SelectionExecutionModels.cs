@@ -127,7 +127,25 @@ public static class SelectionKeyAliases
 
     public static IReadOnlyList<string> ForKey(UniqueConstraint key) =>
         Array.AsReadOnly(Enumerable.Range(0, key.Columns.Count).Select(For).ToArray());
+
+    /// <summary>
+    /// True when the SQL projects the key aliases itself. Operators no longer have to: a query that returns the root
+    /// table's key columns by name (for example <c>SELECT *</c>) is wrapped by the executor. This keeps older
+    /// selections that spelled the aliases out working unchanged.
+    /// </summary>
+    public static bool AreProjectedBy(string sql) =>
+        sql.Contains("__datapitcher_key_", StringComparison.OrdinalIgnoreCase);
 }
+
+/// <summary>A raw selection described by its root binding, ready to run against the live source.</summary>
+public sealed record SelectionRootQuery(
+    string Schema,
+    string Table,
+    string StableKeyName,
+    IReadOnlyList<string> StableKeyColumns,
+    string RawSql,
+    IReadOnlyList<SelectionSqlParameter> Parameters
+);
 
 public sealed record SelectionCountCacheKey(
     string SchemaSnapshotHash,

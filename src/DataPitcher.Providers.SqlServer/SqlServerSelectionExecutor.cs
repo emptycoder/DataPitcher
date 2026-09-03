@@ -25,8 +25,20 @@ public sealed class SqlServerSelectionExecutor(string sourceConnectionString, Sq
             "/* DataPitcher.Selection.Validate */ " + source.Prefix + " SELECT TOP (1) * FROM " + source.From,
             selection
         );
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        RequireAliases(reader, selection.RootStableKey);
+        try
+        {
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            RequireAliases(reader, selection.RootStableKey);
+        }
+        catch (SqlException exception) when (WrapsRawSql(selection))
+        {
+            throw new RawSqlValidationException(
+                "The query must return the root table's key column(s) "
+                    + string.Join(", ", selection.RootStableKey.Columns)
+                    + " (SELECT * FROM the root table does). The database said: "
+                    + exception.Message
+            );
+        }
     }
 
     public async Task<SelectionKeySet> ReadKeysAsync(
@@ -90,7 +102,9 @@ public sealed class SqlServerSelectionExecutor(string sourceConnectionString, Sq
             selection.RootStableKey.Columns.Select(column => rootAlias + "." + SqlServerIdentifier.Quote(column))
         );
         var source = Source(selection);
-        var cte = source.IsCte ? source.Prefix : "WITH selection AS (" + CommandText(selection) + "\n)";
+        var cte = source.IsCte
+            ? source.Prefix
+            : "WITH selection AS (" + Keyed(CommandText(selection), selection) + "\n)";
         var sql =
             "/* DataPitcher.Selection.Preview */ "
             + cte
@@ -222,8 +236,30 @@ public sealed class SqlServerSelectionExecutor(string sourceConnectionString, Sq
     {
         var text = CommandText(selection);
         return selection.IsRawSql && RawSqlSafetyValidator.TrySplitLeadingCte(text, out var ctes, out var query)
-            ? (";" + ctes + ", selection AS (" + query + "\n)", "selection", true)
-            : (string.Empty, "(" + text + "\n) AS selection", false);
+            ? (";" + ctes + ", selection AS (" + Keyed(query, selection) + "\n)", "selection", true)
+            : (string.Empty, "(" + Keyed(text, selection) + "\n) AS selection", false);
+    }
+
+    private static bool WrapsRawSql(GeneratedSelectionSql selection) =>
+        selection.IsRawSql && !SelectionKeyAliases.AreProjectedBy(selection.CommandText);
+
+    /// <summary>
+    /// Projects the root's key columns under the internal aliases on top of the operator's query, so any query that
+    /// returns those columns by name (including <c>SELECT *</c>) can seed a selection.
+    /// </summary>
+    private static string Keyed(string query, GeneratedSelectionSql selection)
+    {
+        if (!WrapsRawSql(selection))
+            return query;
+        var aliases = SelectionKeyAliases.ForKey(selection.RootStableKey);
+        var projection = string.Join(
+            ", ",
+            selection.RootStableKey.Columns.Select(
+                (column, index) =>
+                    SqlServerIdentifier.Quote(column) + " AS " + SqlServerIdentifier.Quote(aliases[index])
+            )
+        );
+        return "SELECT " + projection + " FROM (" + query + "\n) AS " + SqlServerIdentifier.Quote("__datapitcher_root");
     }
 
     private static string PreviewProjection(string rootAlias, ColumnDefinition column)

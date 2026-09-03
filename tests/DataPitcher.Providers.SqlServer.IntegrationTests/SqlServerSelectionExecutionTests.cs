@@ -131,6 +131,31 @@ public sealed class SqlServerSelectionExecutionTests(SqlServerClosureFixture fix
     }
 
     [Fact]
+    public async Task RawSql_WithoutAliases_IsWrappedSoSelectStarSeedsKeysAndCounts()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync("INSERT INTO dbo.customers (customer_id, external_code) VALUES (1, 'a'), (2, 'b')");
+        await scope.ExecuteAsync("INSERT INTO dbo.orders (order_id, customer_id) VALUES (10, 1), (11, 1), (12, 2)");
+        var schema = await SchemaAsync(scope);
+        var orders = schema.Table("orders").Definition;
+        var executor = Executor(scope, schema);
+        var plain = Raw(orders, "SELECT * FROM dbo.orders WHERE customer_id = 1 ORDER BY order_id");
+
+        await executor.ValidateAsync(plain, CancellationToken.None);
+        var keys = await executor.ReadKeysAsync(plain, 100, CancellationToken.None);
+        var count = await executor.CountAsync(plain, CancellationToken.None);
+        var preview = await executor.PreviewAsync(plain, 10, 64, 64, CancellationToken.None);
+        var rejected = await Assert.ThrowsAsync<RawSqlValidationException>(() =>
+            executor.ValidateAsync(Raw(orders, "SELECT customer_id FROM dbo.orders"), CancellationToken.None)
+        );
+
+        Assert.Equal([10, 11], keys.Keys.Select(key => Convert.ToInt32(key.Components[0].Value)).Order());
+        Assert.Equal(2, count);
+        Assert.Equal(2, preview.Rows.Count);
+        Assert.Contains("order_id", rejected.Message);
+    }
+
+    [Fact]
     public async Task ValidateAsync_WhenRawSqlOmitsAStableKeyAlias_RejectsTheResultShape()
     {
         await using var scope = await fixture.CreateScopeAsync();

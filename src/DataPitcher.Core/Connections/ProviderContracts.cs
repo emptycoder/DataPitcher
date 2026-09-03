@@ -30,6 +30,17 @@ public interface IConnectionProvider
     string ProviderId { get; }
     ICapabilityDetector CapabilityDetector { get; }
     ISchemaIntrospector SchemaIntrospector { get; }
+
+    /// <summary>
+    /// Counts the distinct start rows a raw selection returns on the live source. The Selections workbench calls this
+    /// so operators can size a selection before saving it.
+    /// </summary>
+    Task<long> CountSelectionRootsAsync(
+        ConnectionProfile profile,
+        string connectionString,
+        Selection.SelectionRootQuery query,
+        CancellationToken cancellationToken
+    ) => throw new NotSupportedException($"Provider '{ProviderId}' cannot count selections.");
 }
 
 public interface IConnectionProviderRegistry

@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import type { SnapshotTable } from '../../api/connections';
+import type { Snapshot, SnapshotTable } from '../../api/connections';
 import { formatNumber } from '../../api/format';
 import { queryKeys } from '../../api/keys';
 import { describeError, isNotWired } from '../../api/problem';
@@ -27,7 +27,6 @@ import {
     Button,
     Card,
     CardHeader,
-    Code,
     DataTable,
     Field,
     PageHeader,
@@ -44,24 +43,39 @@ import { useConnections, useSelection, useSnapshot, useSnapshots } from '../shar
 
 type ParameterDraft = Readonly<{ name: string; kind: ValueKind; raw: string }>;
 
-/** Sealing requires each stable-key column to be projected under a fixed alias, in key order. */
-export function stableKeyAlias(ordinal: number) {
-    return `__datapitcher_key_${ordinal}`;
-}
-
 export function quoteIdentifier(providerId: string, name: string) {
     return providerId === 'postgresql' ? `"${name.replace(/"/g, '""')}"` : `[${name.replace(/]/g, ']]')}]`;
 }
 
+/** The start-row query only has to return the root's key columns; selecting whole rows is the simplest way. */
 export function defaultSql(table: SnapshotTable, providerId: string) {
-    const columns = (table.primaryKey?.columns ?? []).map(
-        (column, index) => `${column} AS ${quoteIdentifier(providerId, stableKeyAlias(index))}`,
-    );
-    return `SELECT ${columns.length ? columns.join(', ') : '*'}\nFROM ${table.schema}.${table.name}\nWHERE 1 = 1\n`;
+    const root = `${quoteIdentifier(providerId, table.schema)}.${quoteIdentifier(providerId, table.name)}`;
+    return `SELECT *\nFROM ${root}\nWHERE 1 = 1\n`;
 }
 
-export function missingStableKeyAliases(sql: string, keyColumns: readonly string[]): readonly string[] {
-    return keyColumns.map((_, index) => stableKeyAlias(index)).filter((alias) => !sql.includes(alias));
+export type ConnectedTable = Readonly<{ key: string; via: string; depth: number }>;
+
+/**
+ * Tables the graph pulls in with the start rows: every parent reachable from the root through foreign keys, in
+ * breadth-first order. Child rows are never added, so only the child-to-parent direction is followed.
+ */
+export function connectedTables(snapshot: Snapshot, root: SnapshotTable): readonly ConnectedTable[] {
+    const rootKey = tableKey(root);
+    const seen = new Set<string>([rootKey]);
+    const queue: { key: string; depth: number }[] = [{ key: rootKey, depth: 0 }];
+    const result: ConnectedTable[] = [];
+    while (queue.length) {
+        const current = queue.shift()!;
+        for (const fk of snapshot.foreignKeys) {
+            if (tableKey(fk.childTable) !== current.key) continue;
+            const parent = tableKey(fk.parentTable);
+            if (seen.has(parent)) continue;
+            seen.add(parent);
+            result.push({ key: parent, via: fk.name, depth: current.depth + 1 });
+            queue.push({ key: parent, depth: current.depth + 1 });
+        }
+    }
+    return result;
 }
 
 /** Builds a new selection, or edits the one at `selectionId` with every field prefilled from the API. */
@@ -107,7 +121,10 @@ export function SelectionWorkbenchScreen({ selectionId = null }: Readonly<{ sele
     );
     const providerId =
         connections.data?.find((connection) => connection.connectionId === connectionId)?.providerId ?? 'sqlserver';
-    const missingAliases = rootTable ? missingStableKeyAliases(sql, rootTable.primaryKey?.columns ?? []) : [];
+    const connected = useMemo(
+        () => (snapshot.data && rootTable ? connectedTables(snapshot.data, rootTable) : []),
+        [snapshot.data, rootTable],
+    );
     const candidateTables = useMemo(
         () => (snapshot.data?.tables ?? []).filter((table) => table.primaryKey !== null),
         [snapshot.data],
@@ -198,22 +215,7 @@ export function SelectionWorkbenchScreen({ selectionId = null }: Readonly<{ sele
     });
     const count = useMutation({
         mutationFn: () => selectionsApi.count(body(), authentication),
-        onError: (error) =>
-            setLiveNote(
-                isNotWired(error)
-                    ? 'Live row counting is not wired to a source connection on this API build yet. Sealing the plan will validate and execute the query.'
-                    : describeError(error),
-            ),
-        onSuccess: () => setLiveNote(null),
-    });
-    const preview = useMutation({
-        mutationFn: () => selectionsApi.preview(body(), authentication),
-        onError: (error) =>
-            setLiveNote(
-                isNotWired(error)
-                    ? 'Live preview is not wired to a source connection on this API build yet. Sealing the plan will validate and execute the query.'
-                    : describeError(error),
-            ),
+        onError: (error) => setLiveNote(describeError(error)),
         onSuccess: () => setLiveNote(null),
     });
     const save = useMutation({
@@ -271,10 +273,6 @@ export function SelectionWorkbenchScreen({ selectionId = null }: Readonly<{ sele
         {
             label: 'SQL validated',
             done: (compilation !== null && !sqlDirty) || (loaded !== null && sql === loadedSql),
-        },
-        {
-            label: 'Key columns aliased as __datapitcher_key_N',
-            done: rootTable !== null && missingAliases.length === 0,
         },
         { label: 'Parameters filled in', done: parametersValid },
     ];
@@ -339,7 +337,7 @@ export function SelectionWorkbenchScreen({ selectionId = null }: Readonly<{ sele
                 description={
                     selectionId
                         ? 'Every field below is prefilled from the saved selection. Only what you change is sent back.'
-                        : "Write a SELECT that returns the root table's stable key columns. Only those rows and their required parents move."
+                        : 'Pick the start rows with a SELECT on the root table. Everything they reference through foreign keys is copied with them.'
                 }
                 eyebrow={selectionId ? 'Edit selection' : 'Selection workbench'}
                 title={name || (selectionId ? 'Edit selection' : 'New selection')}
@@ -488,7 +486,7 @@ export function SelectionWorkbenchScreen({ selectionId = null }: Readonly<{ sele
                                 placeholder={
                                     rootTable
                                         ? undefined
-                                        : 'Choose a root table to start from a template, or write SQL that returns the root key columns.'
+                                        : 'Choose a root table to start from a template, or write a SELECT on the root table that returns its key columns.'
                                 }
                                 ref={editorRef}
                                 spellCheck={false}
@@ -590,35 +588,9 @@ export function SelectionWorkbenchScreen({ selectionId = null }: Readonly<{ sele
                         {count.data ? (
                             <p className="mt-3 text-sm text-fg">
                                 <strong className="tnum">{formatNumber(count.data.distinctStableKeyCount)}</strong>{' '}
-                                distinct root keys.
+                                start row{count.data.distinctStableKeyCount === 1 ? '' : 's'} in{' '}
+                                {rootTable ? tableKey(rootTable) : 'the root table'}.
                             </p>
-                        ) : null}
-                        {preview.data ? (
-                            <div className="mt-3">
-                                <DataTable>
-                                    <thead>
-                                        <tr>
-                                            {preview.data.columns.map((column) => (
-                                                <th key={column}>{column}</th>
-                                            ))}
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {preview.data.rows.map((row, index) => (
-                                            <tr key={index}>
-                                                {preview.data.columns.map((column) => (
-                                                    <td className="font-mono text-[12px]" key={column}>
-                                                        {String(row[column] ?? 'NULL')}
-                                                    </td>
-                                                ))}
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </DataTable>
-                                {preview.data.hasMore ? (
-                                    <p className="mt-2 text-xs text-fg-faint">More rows exist.</p>
-                                ) : null}
-                            </div>
                         ) : null}
                         {liveNote ? (
                             <Alert className="mt-3" tone="info">
@@ -627,25 +599,16 @@ export function SelectionWorkbenchScreen({ selectionId = null }: Readonly<{ sele
                         ) : null}
                         <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
                             <Button
-                                disabled={!sql.trim()}
+                                disabled={!sql.trim() || !rootTable || !connectionId}
                                 icon={<Icons.Activity size={14} />}
                                 loading={count.isPending}
                                 onClick={() => count.mutate()}
                                 size="sm"
                             >
-                                Count keys
-                            </Button>
-                            <Button
-                                disabled={!sql.trim()}
-                                icon={<Icons.Eye size={14} />}
-                                loading={preview.isPending}
-                                onClick={() => preview.mutate()}
-                                size="sm"
-                            >
-                                Preview rows
+                                Count start rows
                             </Button>
                             <span className="self-center text-xs text-fg-faint">
-                                Live checks run against the source connection.
+                                Runs the query on the source connection; only the count comes back.
                             </span>
                         </div>
                     </Card>
@@ -695,25 +658,41 @@ export function SelectionWorkbenchScreen({ selectionId = null }: Readonly<{ sele
                             {saveLabel}
                         </Button>
                     </Card>
-                    <Card className="text-[13px] text-fg-muted">
-                        <div className="mb-2 flex items-center gap-2 font-semibold text-fg">
-                            <Icons.Info size={15} /> How selection works
-                        </div>
-                        <ul className="grid gap-2">
-                            <li>
-                                Project each stable key column of the root (its primary key) as{' '}
-                                <Code>__datapitcher_key_0</Code>, <Code>__datapitcher_key_1</Code>… in key order. The
-                                template does this for you.
-                            </li>
-                            <li>
-                                Rows referenced through foreign keys are added automatically. Child rows are{' '}
-                                <em>not</em>.
-                            </li>
-                            <li>Joins only help find keys. Joined tables never become transfer roots.</li>
-                            <li>
-                                The statement must be a single read-only <Code>SELECT</Code>.
-                            </li>
-                        </ul>
+                    <Card>
+                        <CardHeader
+                            description="The start rows plus every parent they reference, followed through foreign keys."
+                            icon={<Icons.Link size={16} />}
+                            title="What gets copied"
+                        />
+                        {!rootTable ? (
+                            <p className="text-[13px] text-fg-muted">Choose a root table to see its graph.</p>
+                        ) : (
+                            <ul className="grid gap-1.5 text-[13px]">
+                                <li className="flex items-center gap-2 font-medium text-fg">
+                                    <Icons.Target className="text-accent" size={14} />
+                                    <span className="font-mono">{tableKey(rootTable)}</span>
+                                    <Badge tone="accent">start rows</Badge>
+                                </li>
+                                {connected.map((table) => (
+                                    <li
+                                        className="flex items-center gap-2 text-fg-muted"
+                                        key={table.key}
+                                        style={{ paddingLeft: `${Math.min(table.depth, 6) * 12}px` }}
+                                    >
+                                        <Icons.ArrowRight size={12} />
+                                        <span className="font-mono text-fg">{table.key}</span>
+                                        <span className="truncate text-xs text-fg-faint">via {table.via}</span>
+                                    </li>
+                                ))}
+                                {connected.length === 0 ? (
+                                    <li className="text-fg-muted">No parent tables: only the start rows move.</li>
+                                ) : null}
+                            </ul>
+                        )}
+                        <p className="mt-3 text-xs text-fg-faint">
+                            {connected.length} connected table{connected.length === 1 ? '' : 's'}. Child rows are never
+                            added; joins only help find start rows.
+                        </p>
                     </Card>
                 </div>
             </div>

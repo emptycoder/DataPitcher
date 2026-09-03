@@ -23,8 +23,20 @@ public sealed class PostgreSqlSelectionExecutor(NpgsqlDataSource source, Postgre
                 + "\n) AS selection LIMIT 1",
             selection
         );
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        RequireAliases(reader, selection.RootStableKey);
+        try
+        {
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            RequireAliases(reader, selection.RootStableKey);
+        }
+        catch (PostgresException exception) when (WrapsRawSql(selection))
+        {
+            throw new RawSqlValidationException(
+                "The query must return the root table's key column(s) "
+                    + string.Join(", ", selection.RootStableKey.Columns)
+                    + " (SELECT * FROM the root table does). The database said: "
+                    + exception.MessageText
+            );
+        }
     }
 
     public async Task<SelectionKeySet> ReadKeysAsync(
@@ -193,7 +205,36 @@ public sealed class PostgreSqlSelectionExecutor(NpgsqlDataSource source, Postgre
         string.Join(", ", SelectionKeyAliases.ForKey(stableKey).Select(PostgreSqlIdentifier.Quote));
 
     private static string CommandText(GeneratedSelectionSql selection) =>
-        selection.IsRawSql ? RawSqlSafetyValidator.RemoveTrailingOrderBy(selection.CommandText) : selection.CommandText;
+        selection.IsRawSql
+            ? Keyed(RawSqlSafetyValidator.RemoveTrailingOrderBy(selection.CommandText), selection)
+            : selection.CommandText;
+
+    private static bool WrapsRawSql(GeneratedSelectionSql selection) =>
+        selection.IsRawSql && !SelectionKeyAliases.AreProjectedBy(selection.CommandText);
+
+    /// <summary>
+    /// Projects the root's key columns under the internal aliases on top of the operator's query, so any query that
+    /// returns those columns by name (including <c>SELECT *</c>) can seed a selection.
+    /// </summary>
+    private static string Keyed(string query, GeneratedSelectionSql selection)
+    {
+        if (!WrapsRawSql(selection))
+            return query;
+        var aliases = SelectionKeyAliases.ForKey(selection.RootStableKey);
+        var projection = string.Join(
+            ", ",
+            selection.RootStableKey.Columns.Select(
+                (column, index) =>
+                    PostgreSqlIdentifier.Quote(column) + " AS " + PostgreSqlIdentifier.Quote(aliases[index])
+            )
+        );
+        return "SELECT "
+            + projection
+            + " FROM ("
+            + query
+            + "\n) AS "
+            + PostgreSqlIdentifier.Quote("__datapitcher_root");
+    }
 
     private static string PreviewProjection(string rootAlias, ColumnDefinition column)
     {

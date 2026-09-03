@@ -56,7 +56,6 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         + "FROM pg_constraint con "
         + "JOIN pg_class c ON c.oid = con.conrelid "
         + "JOIN pg_namespace n ON n.oid = c.relnamespace "
-        + "JOIN pg_namespace pn ON pn.oid = p.relnamespace "
         + "JOIN unnest(con.conkey) WITH ORDINALITY k(attnum, ordinality) ON true "
         + "JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum "
         + "WHERE n.nspname = @schema AND con.contype IN ('p','u') "

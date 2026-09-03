@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using DataPitcher.Application.Connections;
 using DataPitcher.Application.Schema;
+using DataPitcher.Application.Selection;
 using DataPitcher.Core.Closure;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Jobs;
@@ -282,36 +283,12 @@ public sealed class PlanSealingService(
             || values.ValueKind != JsonValueKind.Array
         )
             throw new InvalidOperationException("Plan sealing supports saved raw SQL selections only.");
-        var parameters = values.EnumerateArray().Select(Parameter).ToArray();
+        var parameters = values.EnumerateArray().Select(SelectionParameters.FromJson).ToArray();
         return (
             raw.GetString()!,
             parameters,
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(values.GetRawText())))
         );
-    }
-
-    private static SelectionSqlParameter Parameter(JsonElement parameter)
-    {
-        var name =
-            parameter.GetProperty("Name").GetString()
-            ?? throw new InvalidOperationException("Selection parameter name is required.");
-        var value = parameter.GetProperty("Value");
-        return parameter.GetProperty("Kind").GetString() switch
-        {
-            "int" => new SelectionSqlParameter(name, typeof(int), value.GetInt32()),
-            "decimal" => new SelectionSqlParameter(name, typeof(decimal), value.GetDecimal()),
-            "boolean" => new SelectionSqlParameter(name, typeof(bool), value.GetBoolean()),
-            "date" => new SelectionSqlParameter(name, typeof(DateOnly), DateOnly.Parse(value.GetString()!)),
-            "time" => new SelectionSqlParameter(name, typeof(TimeOnly), TimeOnly.Parse(value.GetString()!)),
-            "dateTime" => new SelectionSqlParameter(name, typeof(DateTime), value.GetDateTime()),
-            "guid" => new SelectionSqlParameter(name, typeof(Guid), value.GetGuid()),
-            "string" => new SelectionSqlParameter(
-                name,
-                typeof(string),
-                value.GetString() ?? throw new InvalidOperationException("Selection parameter value is required.")
-            ),
-            _ => throw new InvalidOperationException("Selection parameter kind is not supported."),
-        };
     }
 
     private static TableAddress Address(TableDefinition table) => new(table.Schema, table.Name);
