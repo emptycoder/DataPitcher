@@ -40,7 +40,7 @@ public sealed class SqlServerCatalogReader(string connectionString)
     static SqlServerCatalogReader() => SqlServerEntraAuthentication.EnsureRegistered();
 
     private const string ColumnsSql =
-        "/* DataPitcher.Catalog.Columns */ SELECT t.name, c.name, ty.name, c.max_length, c.is_nullable, CAST(CASE WHEN cc.is_computed = 1 OR c.generated_always_type <> 0 THEN 1 ELSE 0 END AS bit) "
+        "/* DataPitcher.Catalog.Columns */ SELECT t.name, c.name, ty.name, c.max_length, c.is_nullable, CAST(CASE WHEN cc.is_computed = 1 OR c.generated_always_type <> 0 THEN 1 ELSE 0 END AS bit), c.precision, c.scale "
         + "FROM sys.tables t "
         + "JOIN sys.schemas s ON s.schema_id = t.schema_id "
         + "JOIN sys.columns c ON c.object_id = t.object_id "
@@ -108,7 +108,7 @@ public sealed class SqlServerCatalogReader(string connectionString)
             list.Add(
                 new SqlServerColumn(
                     rows.GetString(1),
-                    StoreType(typeName, rows.GetInt16(3)),
+                    StoreType(typeName, rows.GetInt16(3), rows.GetByte(6), rows.GetByte(7)),
                     Map(typeName),
                     rows.GetBoolean(4),
                     rows.GetBoolean(5)
@@ -228,15 +228,40 @@ public sealed class SqlServerCatalogReader(string connectionString)
         return command;
     }
 
-    private static Type Map(string type) =>
+    /// <summary>
+    /// CLR type used to move values of a SQL Server column. Types without a natural CLR shape (spatial, hierarchyid,
+    /// sql_variant, CLR user types) map to <see cref="object"/> so a scan never fails on them; the store type still
+    /// records exactly what the column is.
+    /// </summary>
+    internal static Type Map(string type) =>
         type switch
         {
+            "bigint" => typeof(long),
             "int" => typeof(int),
-            "nvarchar" => typeof(string),
-            "varbinary" => typeof(byte[]),
-            _ => throw new NotSupportedException($"SQL Server type '{type}' is not mapped."),
+            "smallint" => typeof(short),
+            "tinyint" => typeof(byte),
+            "bit" => typeof(bool),
+            "decimal" or "numeric" or "money" or "smallmoney" => typeof(decimal),
+            "float" => typeof(double),
+            "real" => typeof(float),
+            "date" => typeof(DateOnly),
+            "time" => typeof(TimeOnly),
+            "datetime" or "datetime2" or "smalldatetime" => typeof(DateTime),
+            "datetimeoffset" => typeof(DateTimeOffset),
+            "char" or "varchar" or "text" or "nchar" or "nvarchar" or "ntext" or "xml" or "sysname" => typeof(string),
+            "binary" or "varbinary" or "image" or "timestamp" or "rowversion" => typeof(byte[]),
+            "uniqueidentifier" => typeof(Guid),
+            _ => typeof(object),
         };
 
-    private static string StoreType(string type, short length) =>
-        string.Equals(type, "nvarchar", StringComparison.Ordinal) ? $"nvarchar({length / 2})" : type;
+    /// <summary>The column's declared type as valid DDL, so staging tables can mirror it exactly.</summary>
+    internal static string StoreType(string type, short length, byte precision, byte scale) =>
+        type switch
+        {
+            "nvarchar" or "nchar" => length < 0 ? $"{type}(max)" : $"{type}({length / 2})",
+            "varchar" or "char" or "varbinary" or "binary" => length < 0 ? $"{type}(max)" : $"{type}({length})",
+            "decimal" or "numeric" => $"{type}({precision},{scale})",
+            "datetime2" or "datetimeoffset" or "time" => $"{type}({scale})",
+            _ => type,
+        };
 }

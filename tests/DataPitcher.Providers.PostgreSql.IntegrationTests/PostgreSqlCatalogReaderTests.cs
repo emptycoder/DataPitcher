@@ -30,13 +30,26 @@ public sealed class PostgreSqlCatalogReaderTests : IClassFixture<PostgreSqlClosu
     }
 
     [Fact]
-    public async Task ReadAsync_WhenColumnTypeIsUnmapped_ThrowsNotSupportedException()
+    public async Task ReadAsync_MapsCommonTypesAndNeverFailsOnExoticOnes()
     {
         await using var scope = await _fixture.CreateScopeAsync();
-        await scope.ExecuteAsync("CREATE TABLE unmapped_type (id integer PRIMARY KEY, amount numeric NOT NULL)");
+        await scope.ExecuteAsync(
+            "CREATE TABLE many_types (id bigint PRIMARY KEY, amount numeric NOT NULL, label varchar(40), key_id uuid NOT NULL, at timestamptz NOT NULL, tags integer[] NULL, spot point NULL, doc jsonb NULL)"
+        );
         var reader = new PostgreSqlCatalogReader(scope.Source);
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => reader.ReadAsync(scope.Schema, CancellationToken.None));
+        var catalog = await reader.ReadAsync(scope.Schema, CancellationToken.None);
+        var table = catalog.Tables.Single(t => t.Definition.Name == "many_types");
+        var columns = table.Definition.Columns.ToDictionary(c => c.Name, StringComparer.Ordinal);
+
+        Assert.Equal(typeof(long), columns["id"].ClrType);
+        Assert.Equal(typeof(decimal), columns["amount"].ClrType);
+        Assert.Equal(typeof(string), columns["label"].ClrType);
+        Assert.Equal(typeof(Guid), columns["key_id"].ClrType);
+        Assert.Equal(typeof(DateTimeOffset), columns["at"].ClrType);
+        Assert.Equal(typeof(object), columns["tags"].ClrType);
+        Assert.Equal(typeof(object), columns["spot"].ClrType);
+        Assert.Equal(typeof(string), columns["doc"].ClrType);
     }
 
     [Fact]

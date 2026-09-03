@@ -50,5 +50,21 @@ public sealed class PostgreSqlSchemaIntrospector : ISchemaIntrospector
     private static SchemaKey? ToSchemaKey(UniqueConstraint? key) =>
         key is null ? null : new SchemaKey(key.Name, key.Columns);
 
-    private static string StoreType(Type type) => type == typeof(int) ? "integer" : "text";
+    /// <summary>A PostgreSQL type able to hold values of the CLR type; used for staging tables.</summary>
+    internal static string StoreType(Type type) =>
+        type == typeof(long) ? "bigint"
+        : type == typeof(int) ? "integer"
+        : type == typeof(short) ? "smallint"
+        : type == typeof(bool) ? "boolean"
+        : type == typeof(decimal) ? "numeric"
+        : type == typeof(double) ? "double precision"
+        : type == typeof(float) ? "real"
+        : type == typeof(Guid) ? "uuid"
+        : type == typeof(byte[]) ? "bytea"
+        : type == typeof(DateOnly) ? "date"
+        : type == typeof(TimeOnly) ? "time"
+        : type == typeof(DateTime) ? "timestamp"
+        : type == typeof(DateTimeOffset) ? "timestamptz"
+        : type == typeof(TimeSpan) ? "interval"
+        : "text";
 }

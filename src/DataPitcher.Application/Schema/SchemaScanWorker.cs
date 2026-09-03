@@ -27,9 +27,9 @@ public sealed class SchemaScanWorker(
         {
             profile = await profiles.GetProfileAsync(scan.ConnectionId, cancellationToken);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            await snapshots.FailAsync(scan.ScanId, "connection_failed", cancellationToken);
+            await snapshots.FailAsync(scan.ScanId, "connection_failed", Detail(exception, null), cancellationToken);
             return;
         }
         IConnectionProvider provider;
@@ -37,9 +37,9 @@ public sealed class SchemaScanWorker(
         {
             provider = providers.Get(profile.ProviderId);
         }
-        catch (UnsupportedConnectionProviderException)
+        catch (UnsupportedConnectionProviderException exception)
         {
-            await snapshots.FailAsync(scan.ScanId, "unsupported_provider", cancellationToken);
+            await snapshots.FailAsync(scan.ScanId, "unsupported_provider", Detail(exception, null), cancellationToken);
             return;
         }
         string resolved;
@@ -47,9 +47,9 @@ public sealed class SchemaScanWorker(
         {
             resolved = await resolver.ResolveAsync(profile.SecretReference, cancellationToken);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            await snapshots.FailAsync(scan.ScanId, "connection_failed", cancellationToken);
+            await snapshots.FailAsync(scan.ScanId, "connection_failed", Detail(exception, null), cancellationToken);
             return;
         }
         try
@@ -60,10 +60,28 @@ public sealed class SchemaScanWorker(
                 cancellationToken
             );
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            await snapshots.FailAsync(scan.ScanId, "schema_scan_failed", cancellationToken);
+            await snapshots.FailAsync(
+                scan.ScanId,
+                "schema_scan_failed",
+                Detail(exception, resolved),
+                cancellationToken
+            );
         }
+    }
+
+    /// <summary>The driver's own explanation, with the connection string and its password removed.</summary>
+    internal static string Detail(Exception exception, string? resolvedConnectionString)
+    {
+        var message = exception.GetBaseException().Message;
+        if (!string.IsNullOrEmpty(resolvedConnectionString))
+        {
+            message = message.Replace(resolvedConnectionString, "[connection string]", StringComparison.Ordinal);
+            if (ConnectionStringSecrets.TryExtractPassword(resolvedConnectionString) is { } password)
+                message = message.Replace(password, "[password]", StringComparison.Ordinal);
+        }
+        return message.Length > 2000 ? message[..2000] : message;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

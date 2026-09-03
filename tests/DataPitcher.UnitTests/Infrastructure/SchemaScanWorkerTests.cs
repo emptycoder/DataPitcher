@@ -141,7 +141,8 @@ public sealed class SchemaScanWorkerTests
 
         Assert.Equal(SchemaScanState.Failed, failed.State);
         Assert.Equal("schema_scan_failed", failed.FailureCode);
-        Assert.DoesNotContain("scan-secret-sentinel", JsonSerializer.Serialize(failed), StringComparison.Ordinal);
+        Assert.Equal("introspection failed for [connection string]", failed.FailureDetail);
+        Assert.DoesNotContain("resolved-secret", JsonSerializer.Serialize(failed), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -635,7 +636,10 @@ public sealed class SchemaScanWorkerTests
             ConnectionProfile profile,
             string resolvedConnectionString,
             CancellationToken cancellationToken
-        ) => Task.FromException<SchemaSnapshotContent>(new InvalidOperationException("scan-secret-sentinel"));
+        ) =>
+            Task.FromException<SchemaSnapshotContent>(
+                new InvalidOperationException("introspection failed for " + resolvedConnectionString)
+            );
     }
 
     private sealed class ImmediateIntrospector(SchemaSnapshotContent content) : ISchemaIntrospector

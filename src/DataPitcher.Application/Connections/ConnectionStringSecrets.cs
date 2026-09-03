@@ -25,6 +25,19 @@ public static class ConnectionStringSecrets
     /// <summary>The first non-empty password entry, or null when the string carries none.</summary>
     public static string? ExtractPassword(string connectionString) => ExtractPassword(Parse(connectionString));
 
+    /// <summary>Like <see cref="ExtractPassword(string)"/> but returns null for text that is not a connection string.</summary>
+    public static string? TryExtractPassword(string connectionString)
+    {
+        try
+        {
+            return ExtractPassword(connectionString);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>
     /// Returns <paramref name="connectionString"/> with <paramref name="password"/> appended unless the string already
     /// carries a non-empty password of its own. The original text is preserved verbatim.

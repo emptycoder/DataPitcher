@@ -14,7 +14,7 @@ namespace DataPitcher.ControlStore;
 public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) : ISchemaSnapshotRepository
 {
     private const string ScanSelect =
-        "SELECT ScanId, ConnectionId, IdempotencyKey, State, SnapshotId, SnapshotHash, FailureCode, CreatedUtc, UpdatedUtc FROM SchemaScans";
+        "SELECT ScanId, ConnectionId, IdempotencyKey, State, SnapshotId, SnapshotHash, FailureCode, CreatedUtc, UpdatedUtc, FailureDetail FROM SchemaScans";
 
     private const string SnapshotSelect =
         "SELECT SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc FROM SchemaSnapshots";
@@ -324,14 +324,15 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
         return Task.CompletedTask;
     }
 
-    public Task FailAsync(Guid scanId, string failureCode, CancellationToken cancellationToken)
+    public Task FailAsync(Guid scanId, string failureCode, string? failureDetail, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var db = database.Open();
         db.Execute(
-            "UPDATE SchemaScans SET State = @state, FailureCode = @failureCode, UpdatedUtc = @updatedUtc WHERE ScanId = @scanId AND State = @running",
+            "UPDATE SchemaScans SET State = @state, FailureCode = @failureCode, FailureDetail = @failureDetail, UpdatedUtc = @updatedUtc WHERE ScanId = @scanId AND State = @running",
             new ControlParameter("state", SchemaScanState.Failed.ToString()),
             new ControlParameter("failureCode", failureCode),
+            new ControlParameter("failureDetail", failureDetail),
             new ControlParameter("updatedUtc", Stamp(clock.UtcNow)),
             new ControlParameter("scanId", scanId.ToString()),
             new ControlParameter("running", SchemaScanState.Running.ToString())
@@ -349,7 +350,8 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
             reader.IsDBNull(5) ? null : reader.GetString(5),
             reader.IsDBNull(6) ? null : reader.GetString(6),
             reader.GetString(7),
-            reader.GetString(8)
+            reader.GetString(8),
+            reader.IsDBNull(9) ? null : reader.GetString(9)
         );
 
     private static SnapshotRecord ReadSnapshot(SqliteDataReader reader) =>
@@ -376,7 +378,8 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
             Enum.Parse<SchemaScanState>(row.State),
             row.SnapshotId is null ? null : Guid.Parse(row.SnapshotId),
             row.SnapshotHash,
-            row.FailureCode
+            row.FailureCode,
+            row.FailureDetail
         );
 
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
@@ -473,7 +476,8 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
         string? SnapshotHash,
         string? FailureCode,
         string CreatedUtc,
-        string UpdatedUtc
+        string UpdatedUtc,
+        string? FailureDetail = null
     );
 
     private sealed record SnapshotRecord(

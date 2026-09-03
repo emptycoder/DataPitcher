@@ -328,7 +328,8 @@ public sealed class DataPitcherApplication(
                 scan.ConnectionId,
                 scan.SnapshotId,
                 null,
-                null
+                null,
+                scan.FailureDetail
             );
 
         var job = jobs.Find(operationId);

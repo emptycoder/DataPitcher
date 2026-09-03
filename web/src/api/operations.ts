@@ -9,6 +9,7 @@ export const OperationStatusSchema = z.object({
   finished: z.boolean(),
   failed: z.boolean(),
   failureCode: z.string().nullable(),
+  failureDetail: z.string().nullable().optional(),
   connectionId: z.string().nullable().optional(),
   snapshotId: z.string().nullable().optional(),
   planId: z.string().nullable().optional(),

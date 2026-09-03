@@ -19,9 +19,27 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
 
     private static readonly Dictionary<Type, (string Sql, NpgsqlDbType Import)> ColumnTypes = new()
     {
+        [typeof(long)] = ("bigint", NpgsqlDbType.Bigint),
         [typeof(int)] = ("integer", NpgsqlDbType.Integer),
+        [typeof(short)] = ("smallint", NpgsqlDbType.Smallint),
+        [typeof(bool)] = ("boolean", NpgsqlDbType.Boolean),
+        [typeof(decimal)] = ("numeric", NpgsqlDbType.Numeric),
+        [typeof(double)] = ("double precision", NpgsqlDbType.Double),
+        [typeof(float)] = ("real", NpgsqlDbType.Real),
         [typeof(string)] = ("text", NpgsqlDbType.Text),
+        [typeof(Guid)] = ("uuid", NpgsqlDbType.Uuid),
+        [typeof(byte[])] = ("bytea", NpgsqlDbType.Bytea),
+        [typeof(DateOnly)] = ("date", NpgsqlDbType.Date),
+        [typeof(TimeOnly)] = ("time", NpgsqlDbType.Time),
+        [typeof(DateTime)] = ("timestamp", NpgsqlDbType.Timestamp),
+        [typeof(DateTimeOffset)] = ("timestamptz", NpgsqlDbType.TimestampTz),
     };
+
+    /// <summary>Stable keys must have a type staging can mirror; anything else is refused with a clear message.</summary>
+    private static (string Sql, NpgsqlDbType Import) ColumnType(Type type) =>
+        ColumnTypes.TryGetValue(type, out var mapped)
+            ? mapped
+            : throw new NotSupportedException($"Stable key columns of type '{type.Name}' cannot be staged.");
 
     private readonly NpgsqlDataSource _source;
     private readonly NpgsqlDataSource _target;
@@ -166,7 +184,7 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
         var metadata = _schema.Table(table.Name);
         var declarations = string.Join(
             ", ",
-            columns.Select((column, i) => $"k{i} {ColumnTypes[metadata.Column(column).ClrType].Sql} NOT NULL")
+            columns.Select((column, i) => $"k{i} {ColumnType(metadata.Column(column).ClrType).Sql} NOT NULL")
         );
         var unique = string.Join(", ", columns.Select((_, i) => $"k{i}"));
         await ExecuteAsync(
@@ -200,7 +218,7 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
             foreach (var column in columns)
                 await importer.WriteAsync(
                     key.Components.Single(x => x.Column == column).Value,
-                    ColumnTypes[metadata.Column(column).ClrType].Import,
+                    ColumnType(metadata.Column(column).ClrType).Import,
                     ct
                 );
             await importer.WriteAsync(generation, NpgsqlDbType.Integer, ct);

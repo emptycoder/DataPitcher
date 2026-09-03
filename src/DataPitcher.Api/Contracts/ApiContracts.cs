@@ -102,7 +102,8 @@ public sealed record OperationStatusResponse(
     Guid? ConnectionId,
     Guid? SnapshotId,
     Guid? PlanId,
-    Guid? JobId
+    Guid? JobId,
+    string? FailureDetail = null
 );
 
 public sealed record ProviderResponse(string ProviderId, string DisplayName);

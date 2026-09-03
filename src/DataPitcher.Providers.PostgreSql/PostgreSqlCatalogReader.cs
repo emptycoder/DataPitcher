@@ -170,12 +170,29 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
         return command;
     }
 
-    private static Type Map(string typeName) =>
+    /// <summary>
+    /// CLR type used to move values of a PostgreSQL column. Arrays, ranges, geometric and other exotic types map to
+    /// <see cref="object"/> so a scan never fails on them.
+    /// </summary>
+    internal static Type Map(string typeName) =>
         typeName switch
         {
-            "int4" => typeof(int),
-            "text" => typeof(string),
+            "int8" => typeof(long),
+            "int4" or "oid" => typeof(int),
+            "int2" => typeof(short),
+            "bool" => typeof(bool),
+            "numeric" or "money" => typeof(decimal),
+            "float8" => typeof(double),
+            "float4" => typeof(float),
+            "text" or "varchar" or "bpchar" or "char" or "name" or "citext" or "json" or "jsonb" or "xml" =>
+                typeof(string),
+            "uuid" => typeof(Guid),
             "bytea" => typeof(byte[]),
-            _ => throw new NotSupportedException($"PostgreSQL type '{typeName}' is not mapped."),
+            "date" => typeof(DateOnly),
+            "time" => typeof(TimeOnly),
+            "timestamp" => typeof(DateTime),
+            "timestamptz" => typeof(DateTimeOffset),
+            "interval" => typeof(TimeSpan),
+            _ => typeof(object),
         };
 }

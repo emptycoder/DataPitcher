@@ -1,0 +1,1 @@
+ALTER TABLE SchemaScans ADD COLUMN FailureDetail TEXT NULL;

@@ -60,6 +60,7 @@ public sealed class ControlDatabaseMigratorTests
                 "FailureCode",
                 "CreatedUtc",
                 "UpdatedUtc",
+                "FailureDetail",
             ],
             db.Query<string>("SELECT name FROM pragma_table_info('SchemaScans') ORDER BY cid").ToList()
         );

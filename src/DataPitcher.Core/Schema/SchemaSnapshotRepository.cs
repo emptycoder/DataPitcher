@@ -14,7 +14,8 @@ public sealed record SchemaScan(
     SchemaScanState State,
     Guid? SnapshotId,
     string? SnapshotHash,
-    string? FailureCode
+    string? FailureCode,
+    string? FailureDetail = null
 );
 
 public interface ISchemaSnapshotRepository
@@ -64,7 +65,8 @@ public interface ISchemaSnapshotRepository
 
     Task CompleteAsync(SchemaScan scan, SchemaSnapshotContent content, CancellationToken cancellationToken);
 
-    Task FailAsync(Guid scanId, string failureCode, CancellationToken cancellationToken);
+    /// <summary>Marks a running scan failed with a fixed code and an operator-readable detail (secrets removed).</summary>
+    Task FailAsync(Guid scanId, string failureCode, string? failureDetail, CancellationToken cancellationToken);
 }
 
 public sealed class SchemaSnapshotInUseException(int selections)

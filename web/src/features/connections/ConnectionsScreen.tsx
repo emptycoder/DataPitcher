@@ -32,7 +32,6 @@ import {
     Badge,
     Button,
     Card,
-    Code,
     cx,
     EmptyState,
     Field,
@@ -224,7 +223,10 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                 await queryClient.invalidateQueries({ queryKey: queryKeys.snapshots(connection.connectionId) });
                 await queryClient.invalidateQueries({ queryKey: queryKeys.connections });
                 if (failed)
-                    toast.error('Schema scan failed', outcome.status.failureCode ?? 'The scan did not complete.');
+                    toast.error(
+                        'Schema scan failed',
+                        outcome.status.failureDetail ?? outcome.status.failureCode ?? 'The scan did not complete.',
+                    );
                 else toast.success('Schema snapshot captured', `${connection.displayName} is ready to explore.`);
             } else {
                 setScan({
@@ -349,9 +351,9 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                             value={scanFraction(scan)}
                         />
                         {scan.phase === 'failed' ? (
-                            <p className="text-xs text-danger">
-                                The API could not introspect this database. Make sure{' '}
-                                <Code>{'DATAPITCHER_CREDENTIAL_…'}</Code> is set for the API process.
+                            <p className="text-xs break-words text-danger">
+                                {scan.status?.failureDetail ??
+                                    'The API could not read this schema. Run "Check health" on the connection for details.'}
                             </p>
                         ) : null}
                     </div>

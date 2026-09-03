@@ -38,15 +38,31 @@ public sealed class SqlServerCatalogReaderTests(SqlServerClosureFixture fixture)
     }
 
     [Fact]
-    public async Task ReadAsync_WhenColumnTypeIsUnmapped_ThrowsNotSupportedException()
+    public async Task ReadAsync_MapsCommonTypesAndNeverFailsOnExoticOnes()
     {
         await using var scope = await fixture.CreateScopeAsync();
         await scope.ExecuteAsync(
-            "CREATE TABLE dbo.unmapped_type (id int NOT NULL PRIMARY KEY, amount decimal(18,2) NOT NULL)"
+            "CREATE TABLE dbo.many_types (id bigint NOT NULL PRIMARY KEY, amount decimal(18,2) NOT NULL, label varchar(40) NULL, note nvarchar(max) NULL, at datetime2(3) NOT NULL, key_id uniqueidentifier NOT NULL, shape geography NULL, path hierarchyid NULL, anything sql_variant NULL, stamp rowversion)"
         );
         var reader = new SqlServerCatalogReader(scope.SourceConnectionString);
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => reader.ReadAsync("dbo", CancellationToken.None));
+        var catalog = await reader.ReadAsync("dbo", CancellationToken.None);
+        var table = catalog.Tables.Single(t => t.Definition.Name == "many_types");
+        var columns = table.Columns.ToDictionary(c => c.Name, StringComparer.Ordinal);
+
+        Assert.Equal(typeof(long), columns["id"].ClrType);
+        Assert.Equal(typeof(decimal), columns["amount"].ClrType);
+        Assert.Equal("decimal(18,2)", columns["amount"].StoreType);
+        Assert.Equal("varchar(40)", columns["label"].StoreType);
+        Assert.Equal("nvarchar(max)", columns["note"].StoreType);
+        Assert.Equal(typeof(DateTime), columns["at"].ClrType);
+        Assert.Equal("datetime2(3)", columns["at"].StoreType);
+        Assert.Equal(typeof(Guid), columns["key_id"].ClrType);
+        Assert.Equal(typeof(object), columns["shape"].ClrType);
+        Assert.Equal("geography", columns["shape"].StoreType);
+        Assert.Equal(typeof(object), columns["path"].ClrType);
+        Assert.Equal(typeof(object), columns["anything"].ClrType);
+        Assert.Equal(typeof(byte[]), columns["stamp"].ClrType);
     }
 
     [Fact]
