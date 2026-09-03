@@ -229,8 +229,9 @@ public sealed class DataPitcherApplication(
                 cancellationToken
             );
             var assessment = ConnectionHealthClassifier.Classify(requirements, evidence);
+            var usable = ConnectionHealthService.IsUsable(assessment.State);
             return new ConnectionTestResponse(
-                assessment.State is ConnectionHealthState.Healthy,
+                usable,
                 assessment.State.ToString(),
                 evidence.DatabaseIdentity,
                 evidence.ProviderVersion,
@@ -239,10 +240,15 @@ public sealed class DataPitcherApplication(
                     .MissingRequired.Select(capability => capability.ToString())
                     .Order(StringComparer.Ordinal)
                     .ToArray(),
-                assessment.State is ConnectionHealthState.Healthy
-                    ? null
+                usable ? null
+                    : evidence.CleanupFailureCode is not null
+                        ? "The database was reached but a staging object created by the probe could not be removed."
                     : $"The database was reached but required capabilities are missing (probed schema '{profile.BusinessSchema}').",
-                evidence.Notes
+                evidence.Notes,
+                assessment
+                    .MissingOptional.Select(capability => capability.ToString())
+                    .Order(StringComparer.Ordinal)
+                    .ToArray()
             );
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)

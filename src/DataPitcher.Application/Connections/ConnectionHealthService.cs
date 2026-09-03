@@ -35,23 +35,42 @@ public sealed class ConnectionHealthService(
         CancellationToken cancellationToken
     ) => CheckAsync(connectionId, mode, role, cancellationToken);
 
+    /// <summary>
+    /// Re-probes both connections before a transfer runs. Degraded connections (every required capability present,
+    /// only optional ones such as snapshot isolation missing) are allowed to proceed.
+    /// </summary>
     public async Task RevalidateAsync(TransferRun run, CancellationToken cancellationToken)
     {
         if (
-            (
-                await RecheckAsync(run.SourceConnectionId, run.TransferMode, ConnectionRole.Source, cancellationToken)
-            ).Health
-            is not ConnectionHealthState.Healthy
+            !IsUsable(
+                (
+                    await RecheckAsync(
+                        run.SourceConnectionId,
+                        run.TransferMode,
+                        ConnectionRole.Source,
+                        cancellationToken
+                    )
+                ).Health
+            )
         )
             throw new ConnectionNotHealthyException();
         if (
-            (
-                await RecheckAsync(run.TargetConnectionId, run.TransferMode, ConnectionRole.Target, cancellationToken)
-            ).Health
-            is not ConnectionHealthState.Healthy
+            !IsUsable(
+                (
+                    await RecheckAsync(
+                        run.TargetConnectionId,
+                        run.TransferMode,
+                        ConnectionRole.Target,
+                        cancellationToken
+                    )
+                ).Health
+            )
         )
             throw new ConnectionNotHealthyException();
     }
+
+    public static bool IsUsable(ConnectionHealthState health) =>
+        health is ConnectionHealthState.Healthy or ConnectionHealthState.Degraded;
 
     private async Task<ConnectionProfileSummary> CheckAsync(
         Guid connectionId,

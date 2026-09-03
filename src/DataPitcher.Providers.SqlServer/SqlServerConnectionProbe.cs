@@ -138,13 +138,18 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
                 ? "SELECT is granted at database level."
                 : $"SELECT is not granted at database level; {readableTables} user table(s) are readable."
         );
+        var snapshotIsolation = reader.GetByte(4) != 0;
+        if (!snapshotIsolation)
+            notes.Add(
+                "Snapshot isolation is off for this database (ALLOW_SNAPSHOT_ISOLATION); reads use the default isolation level. Optional."
+            );
         return (
             canReadSchema,
             reader.GetInt32(0) != 0,
             reader.GetInt32(1) != 0,
             reader.GetInt32(2) != 0,
             reader.GetInt32(3) != 0,
-            reader.GetByte(4) != 0
+            snapshotIsolation
         );
     }
 

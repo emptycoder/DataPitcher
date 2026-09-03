@@ -71,7 +71,8 @@ public sealed record ConnectionTestResponse(
     IReadOnlyList<string> Capabilities,
     IReadOnlyList<string> MissingRequired,
     string? Error,
-    IReadOnlyList<string>? Notes = null
+    IReadOnlyList<string>? Notes = null,
+    IReadOnlyList<string>? MissingOptional = null
 );
 
 public sealed record ConnectionResponse(

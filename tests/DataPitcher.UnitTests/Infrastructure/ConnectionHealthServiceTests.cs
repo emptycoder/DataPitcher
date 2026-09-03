@@ -148,6 +148,46 @@ public sealed class ConnectionHealthServiceTests
     }
 
     [Fact]
+    public async Task RevalidateAsync_WhenAConnectionIsOnlyDegraded_StillAllowsTheTransfer()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        var store = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var source = await store.CreateAsync(Draft("source"), "profile-degraded-source", CancellationToken.None);
+        var target = await store.CreateAsync(Draft("target"), "profile-degraded-target", CancellationToken.None);
+        var withoutSnapshotIsolation = new ConnectionProbeEvidence(
+            "identity",
+            "version",
+            Evidence().Available.Where(capability => capability != ConnectionCapability.CanUseSnapshotIsolation),
+            null
+        );
+        var detector = new Detector(withoutSnapshotIsolation, TargetEvidence());
+        var service = new ConnectionHealthService(
+            store,
+            new Resolver(),
+            new ConnectionProviderRegistry(new IConnectionProvider[] { new Provider(detector) })
+        );
+        var run = new TransferRun(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "seal",
+            true,
+            source.ConnectionId,
+            target.ConnectionId,
+            TransferMode.DirectFast
+        );
+
+        await service.RevalidateAsync(run, CancellationToken.None);
+
+        Assert.Equal(
+            ConnectionHealthState.Degraded,
+            (await store.GetSummaryAsync(source.ConnectionId, CancellationToken.None)).Health
+        );
+        Assert.True(ConnectionHealthService.IsUsable(ConnectionHealthState.Degraded));
+        Assert.False(ConnectionHealthService.IsUsable(ConnectionHealthState.Unhealthy));
+    }
+
+    [Fact]
     public async Task RevalidateAsync_WhenBothConnectionsAreHealthy_ProbesBothAndSucceeds()
     {
         using var fixture = new ControlDatabaseFixture();

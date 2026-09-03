@@ -160,6 +160,22 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
             if (health === 'Healthy') {
                 setCheckDetail(null);
                 toast.success(`${connection.displayName} is healthy`);
+            } else if (health === 'Degraded') {
+                // Every required capability is present; only optional ones (snapshot isolation) are missing.
+                try {
+                    setCheckDetail(
+                        await connectionsApi.test(
+                            { providerId: connection.providerId, connectionId: connection.connectionId },
+                            authentication,
+                        ),
+                    );
+                } catch {
+                    setCheckDetail(null);
+                }
+                toast.success(
+                    `${connection.displayName} is usable`,
+                    'Degraded: an optional capability is unavailable. Transfers can still run.',
+                );
             } else {
                 try {
                     setCheckDetail(
@@ -377,6 +393,13 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                 )}
             </div>
 
+            {checkDetail?.succeeded && checkDetail.missingOptional?.length ? (
+                <Alert tone="warning">
+                    <div className="font-medium">Usable with limitations</div>
+                    <div className="mt-0.5 text-xs opacity-80">Optional: {checkDetail.missingOptional.join(', ')}</div>
+                    <ProbeNotes notes={checkDetail.notes} />
+                </Alert>
+            ) : null}
             {checkDetail && !checkDetail.succeeded ? (
                 <Alert tone="danger">
                     <div className="font-medium">Connection check failed</div>
@@ -993,12 +1016,25 @@ function ConnectionDialog({
 
                 {testResult ? (
                     testResult.succeeded ? (
-                        <Alert tone="success" title="Connection succeeded">
+                        <Alert
+                            title={
+                                testResult.missingOptional?.length
+                                    ? 'Connection succeeded with limitations'
+                                    : 'Connection succeeded'
+                            }
+                            tone={testResult.missingOptional?.length ? 'warning' : 'success'}
+                        >
                             {testResult.databaseIdentity ? (
                                 <span className="font-mono">{testResult.databaseIdentity}</span>
                             ) : null}
                             {testResult.providerVersion ? <span> · {testResult.providerVersion}</span> : null}
                             <span> · {testResult.capabilities.length} capabilities verified</span>
+                            {testResult.missingOptional?.length ? (
+                                <div className="mt-1 text-xs opacity-80">
+                                    Optional, not available: {testResult.missingOptional.join(', ')}
+                                </div>
+                            ) : null}
+                            <ProbeNotes notes={testResult.notes} />
                         </Alert>
                     ) : (
                         <Alert tone="danger" title={`Connection failed (${testResult.health})`}>
