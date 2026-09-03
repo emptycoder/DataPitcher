@@ -2,6 +2,7 @@ using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using DataPitcher.Core.Identity;
+using DataPitcher.Core.Plans;
 using DataPitcher.Core.Schema;
 using Microsoft.Data.SqlClient;
 
@@ -30,6 +31,7 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
     public string TargetConnectionString => _target;
 
     public string SourceTableName(TableDefinition t) => Name("keys", t);
+    public static string SourceTableName(Guid planId, TableAddress table) => Name("keys", planId.ToString("D"), table.Schema, table.Name);
     public string InputTableName(TableDefinition t) => Name("input", t);
     public string TargetTableName(TableDefinition t) => Name("target", t);
 
@@ -80,7 +82,8 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
         }
     }
 
-    private string Name(string prefix, TableDefinition table) => prefix + "_" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(_plan + "\u001f" + table.Schema + "\u001f" + table.Name))).ToLowerInvariant();
+    private string Name(string prefix, TableDefinition table) => Name(prefix, _plan, table.Schema, table.Name);
+    private static string Name(string prefix, string plan, string schema, string table) => prefix + "_" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(plan + "\u001f" + schema + "\u001f" + table))).ToLowerInvariant();
 
     private IReadOnlyList<string> Columns(TableDefinition t) => _keys[t].Constraint!.Columns;
 
