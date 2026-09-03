@@ -101,6 +101,19 @@ public sealed class JobWorkerTests
     }
 
     [Fact]
+    public async Task JobWorker_WhenTransferCompletes_MarksTheJobSucceeded()
+    {
+        using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var store = new JobStore(fixture.Database, fixture.Clock); var job = store.Start(new(Guid.NewGuid(), "succeeded-run")).Job; var ttl = TimeSpan.FromMinutes(1); var run = new TransferRun(job.JobId, job.RunId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast); var unit = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch); var checkpoint = new TargetCheckpoint(job.JobId, job.RunId, 0, null, 0, "seal", 1); var source = new TestTransferReadSession(unit, "source"); var target = new TestTargetRunSession(checkpoint, "target", []); var mirror = new RecordingCheckpointMirror([]); var delay = new GateWorkerDelay();
+        var worker = new JobWorker(store, new TestJobRunCatalog(run), new NoopConnectionRevalidator(), new TestTargetRunSessionFactory(target), new TestTransferReadSessionFactory(source), new RecoveryCoordinator(mirror), new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()), mirror, new RecordingJobEventWriter(), new NoWorkerFaults(), delay, fixture.Clock, "worker-a", ttl, TimeSpan.FromMinutes(1));
+
+        await worker.StartAsync(CancellationToken.None);
+        await delay.FirstDue;
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal(JobState.Succeeded, await store.GetStateAsync(job.JobId, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Pause_WhenRequestedAtACommitBoundary_DiscardsThePrefetchedUnitAndPauses()
     {
         using var fixture = new ControlDatabaseFixture(); fixture.Migrator.Apply(); var jobId = fixture.SeedJob(); var runId = Guid.NewGuid(); var ttl = TimeSpan.FromMinutes(1); var lease = new LeaseGrant(jobId, "worker-a", 1, fixture.Clock.UtcNow.Add(ttl), fixture.Clock.UtcNow.AddMinutes(1));

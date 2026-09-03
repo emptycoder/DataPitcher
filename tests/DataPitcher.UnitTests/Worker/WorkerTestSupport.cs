@@ -53,6 +53,7 @@ internal sealed class NeverClaimsJobControl : IJobControl
     public Task MarkPausedAsync(LeaseGrant lease, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
     public Task MarkCancelledAsync(LeaseGrant lease, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
     public Task MarkVerifyingAsync(LeaseGrant lease, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
+    public Task MarkSucceededAsync(LeaseGrant lease, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
     public Task MarkFailedAsync(LeaseGrant lease, string failureCode, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
 }
 
@@ -67,6 +68,7 @@ internal sealed class SingleClaimJobControl(JobClaim claim, List<string> calls) 
     public Task PrepareAsync(JobClaim jobClaim, CancellationToken cancellationToken) { calls.Add("Prepare"); return Task.CompletedTask; }
     public Task MarkRunningAsync(LeaseGrant lease, CancellationToken cancellationToken) { calls.Add("Running"); return Task.CompletedTask; }
     public Task MarkVerifyingAsync(LeaseGrant lease, CancellationToken cancellationToken) { calls.Add("Verifying"); _verifying.TrySetResult(true); return Task.CompletedTask; }
+    public Task MarkSucceededAsync(LeaseGrant lease, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task RequestPauseAsync(Guid jobId, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
     public Task RequestResumeAsync(Guid jobId, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
     public Task RequestCancelAsync(Guid jobId, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
@@ -144,6 +146,7 @@ internal sealed class BoundaryJobControl(JobClaim claim) : IJobControl
     public Task MarkPausedAsync(LeaseGrant lease, CancellationToken cancellationToken) { State = JobState.Paused; _terminalState.TrySetResult(State); return Task.CompletedTask; }
     public Task MarkCancelledAsync(LeaseGrant lease, CancellationToken cancellationToken) { CancelledToken = cancellationToken; State = JobState.Cancelled; _terminalState.TrySetResult(State); return Task.CompletedTask; }
     public Task MarkVerifyingAsync(LeaseGrant lease, CancellationToken cancellationToken) { State = JobState.Verifying; _terminalState.TrySetResult(State); return Task.CompletedTask; }
+    public Task MarkSucceededAsync(LeaseGrant lease, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task MarkFailedAsync(LeaseGrant lease, string failureCode, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
     public Task RequestPauseAsync(Guid jobId, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
     public Task RequestResumeAsync(Guid jobId, CancellationToken cancellationToken) => Task.FromException(new NotSupportedException());
