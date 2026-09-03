@@ -1,5 +1,6 @@
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Plans;
+using DataPitcher.Core.Schema;
 using DataPitcher.Infrastructure.Connections;
 using DataPitcher.Infrastructure.Events;
 using DataPitcher.Infrastructure.Persistence;
@@ -54,10 +55,19 @@ public sealed class DataPitcherApplication(
         return Receipt(connectionId: scan.ConnectionId);
     }
 
+    public async Task<IReadOnlyList<SchemaSnapshotSummaryResponse>> ListSnapshotsAsync(Guid connectionId, CancellationToken cancellationToken) =>
+        (await snapshots.ListAsync(connectionId, cancellationToken)).Select(snapshot => new SchemaSnapshotSummaryResponse(snapshot.SnapshotId, snapshot.Hash, snapshot.CapturedAtUtc)).ToArray();
+
     public async Task<SchemaSnapshotResponse> GetSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
     {
         var snapshot = await snapshots.GetAsync(connectionId, snapshotId, cancellationToken);
-        return new SchemaSnapshotResponse(snapshot.ConnectionId, snapshot.SnapshotId, snapshot.Hash, snapshot.CapturedAtUtc);
+        return ToSnapshotResponse(snapshot);
+    }
+
+    public async Task<SchemaSnapshotResponse?> FindSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
+    {
+        var snapshot = await snapshots.FindAsync(connectionId, snapshotId, cancellationToken);
+        return snapshot is null ? null : ToSnapshotResponse(snapshot);
     }
 
     public async Task<SelectionResponse> SaveSelectionAsync(Guid selectionId, SaveSelectionRequest request, CancellationToken cancellationToken)
@@ -133,6 +143,23 @@ public sealed class DataPitcherApplication(
 
     private static ConnectionResponse ToConnectionResponse(ConnectionProfileSummary summary) =>
         new(summary.ConnectionId, summary.DisplayName, summary.ProviderId, summary.Health.ToString(), summary.ETag);
+
+    private static SchemaSnapshotResponse ToSnapshotResponse(StoredSchemaSnapshot snapshot) => new(snapshot.ConnectionId, snapshot.SnapshotId, snapshot.Hash, snapshot.CapturedAtUtc)
+    {
+        Tables = snapshot.Content.Tables.OrderBy(table => table.Schema, StringComparer.Ordinal).ThenBy(table => table.Name, StringComparer.Ordinal).Select(table => new SchemaSnapshotTableResponse(
+            table.Schema,
+            table.Name,
+            table.Columns.Select(column => new SchemaSnapshotColumnResponse(column.Name, column.StoreType, column.IsNullable)).ToArray(),
+            table.PrimaryKey is null ? null : new SchemaSnapshotKeyResponse(table.PrimaryKey.Name, table.PrimaryKey.Columns.ToArray()))).ToArray(),
+        ForeignKeys = snapshot.Content.ForeignKeys.OrderBy(foreignKey => foreignKey.Name, StringComparer.Ordinal).ThenBy(foreignKey => foreignKey.ChildTable.Schema, StringComparer.Ordinal).ThenBy(foreignKey => foreignKey.ChildTable.Name, StringComparer.Ordinal).Select(foreignKey => new SchemaSnapshotForeignKeyResponse(
+            foreignKey.Name,
+            new SchemaSnapshotAddressResponse(foreignKey.ChildTable.Schema, foreignKey.ChildTable.Name),
+            new SchemaSnapshotAddressResponse(foreignKey.ParentTable.Schema, foreignKey.ParentTable.Name),
+            foreignKey.ChildColumns.ToArray(),
+            foreignKey.ParentColumns.ToArray(),
+            foreignKey.IsEnforced,
+            foreignKey.IsTrusted)).ToArray(),
+    };
 
     private static OperationReceiptResponse Receipt(Guid? connectionId = null, Guid? planId = null, Guid? jobId = null) =>
         new(Guid.NewGuid(), "queued", new Uri("https://datapitcher.local/api/operations/status"), connectionId, planId, jobId);

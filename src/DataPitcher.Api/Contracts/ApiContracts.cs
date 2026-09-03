@@ -6,7 +6,17 @@ public sealed record OperationReceiptResponse(Guid OperationId, string State, Ur
 public sealed record ProviderResponse(string ProviderId, string DisplayName);
 public sealed record ResourceIdentifiers(Guid? ConnectionId, Guid? SnapshotId, Guid? SelectionId, Guid? PlanId, Guid? JobId);
 
-public sealed record SchemaSnapshotResponse(Guid ConnectionId, Guid SnapshotId, string Hash, DateTimeOffset CapturedAtUtc);
+public sealed record SchemaSnapshotSummaryResponse(Guid SnapshotId, string Hash, DateTimeOffset CapturedAtUtc);
+public sealed record SchemaSnapshotAddressResponse(string Schema, string Name);
+public sealed record SchemaSnapshotColumnResponse(string Name, string StoreType, bool IsNullable);
+public sealed record SchemaSnapshotKeyResponse(string Name, IReadOnlyList<string> Columns);
+public sealed record SchemaSnapshotTableResponse(string Schema, string Name, IReadOnlyList<SchemaSnapshotColumnResponse> Columns, SchemaSnapshotKeyResponse? PrimaryKey);
+public sealed record SchemaSnapshotForeignKeyResponse(string Name, SchemaSnapshotAddressResponse ChildTable, SchemaSnapshotAddressResponse ParentTable, IReadOnlyList<string> ChildColumns, IReadOnlyList<string> ParentColumns, bool IsEnforced, bool IsTrusted);
+public sealed record SchemaSnapshotResponse(Guid ConnectionId, Guid SnapshotId, string Hash, DateTimeOffset CapturedAtUtc)
+{
+    public IReadOnlyList<SchemaSnapshotTableResponse> Tables { get; init; } = [];
+    public IReadOnlyList<SchemaSnapshotForeignKeyResponse> ForeignKeys { get; init; } = [];
+}
 public sealed record SaveSelectionRequest(string DisplayName, string QueryJson, string IfMatch);
 public sealed record SelectionResponse(Guid SelectionId, long Version, string ETag);
 public sealed record SavePlanRequest(string DisplayName, string? OperatorNote, string IfMatch);

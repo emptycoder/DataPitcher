@@ -153,6 +153,7 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public CancellationToken? LastCancellationToken { get; private set; }
     public string? LastIdempotencyKey { get; private set; }
     public Func<CancellationToken, Task>? Delay { get; set; }
+    public Func<Guid, Guid, SchemaSnapshotResponse?>? SnapshotLookup { get; set; }
 
     public Task<IReadOnlyList<ConnectionResponse>> ListConnectionsAsync(CancellationToken cancellationToken) =>
         ObserveAsync(nameof(ListConnectionsAsync), cancellationToken,
@@ -168,9 +169,17 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public Task<OperationReceiptResponse> QueueSchemaScanAsync(Guid connectionId, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(QueueSchemaScanAsync), cancellationToken, () => Receipt(connectionId: connectionId));
 
+    public Task<IReadOnlyList<SchemaSnapshotSummaryResponse>> ListSnapshotsAsync(Guid connectionId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(ListSnapshotsAsync), cancellationToken,
+            () => (IReadOnlyList<SchemaSnapshotSummaryResponse>)[new SchemaSnapshotSummaryResponse(Guid.NewGuid(), "hash-1", DateTimeOffset.UnixEpoch)]);
+
     public Task<SchemaSnapshotResponse> GetSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(GetSnapshotAsync), cancellationToken,
-            () => new SchemaSnapshotResponse(connectionId, snapshotId, "hash-1", DateTimeOffset.UnixEpoch));
+            () => Snapshot(connectionId, snapshotId));
+
+    public Task<SchemaSnapshotResponse?> FindSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(FindSnapshotAsync), cancellationToken,
+            () => SnapshotLookup is null ? Snapshot(connectionId, snapshotId) : SnapshotLookup(connectionId, snapshotId));
 
     public Task<SelectionResponse> SaveSelectionAsync(Guid selectionId, SaveSelectionRequest request, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(SaveSelectionAsync), cancellationToken, () => new SelectionResponse(selectionId, 1, "etag-1"));
@@ -204,6 +213,12 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
 
     private static OperationReceiptResponse Receipt(Guid? connectionId = null, Guid? planId = null, Guid? jobId = null) =>
         new(Guid.NewGuid(), "queued", new Uri("https://example.test/api/operations/status"), connectionId, planId, jobId);
+
+    private static SchemaSnapshotResponse Snapshot(Guid connectionId, Guid snapshotId) => new(connectionId, snapshotId, "hash-1", DateTimeOffset.UnixEpoch)
+    {
+        Tables = [new SchemaSnapshotTableResponse("app", "Orders", [new SchemaSnapshotColumnResponse("CustomerId", "int", false)], new SchemaSnapshotKeyResponse("PK_Orders", ["CustomerId"]))],
+        ForeignKeys = [new SchemaSnapshotForeignKeyResponse("FK_Orders_Customers", new("app", "Orders"), new("app", "Customers"), ["CustomerId"], ["Id"], true, true)],
+    };
 
     private async Task<T> ObserveAsync<T>(string name, CancellationToken cancellationToken, Func<T> result)
     {

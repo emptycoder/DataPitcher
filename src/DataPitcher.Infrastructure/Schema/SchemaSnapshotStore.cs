@@ -35,13 +35,42 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock)
         return Task.FromResult(ToScan(db.GetTable<SchemaScanRow>().SingleOrDefault(scan => scan.ConnectionId == connectionId.ToString() && scan.ScanId == scanId.ToString()) ?? throw new InvalidOperationException("Schema scan was not found.")));
     }
 
+    public Task<IReadOnlyList<StoredSchemaSnapshot>> ListAsync(Guid connectionId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        var connectionKey = connectionId.ToString();
+        IReadOnlyList<StoredSchemaSnapshot> snapshots = db.GetTable<SchemaSnapshotRow>().ToArray().Where(snapshot => string.Equals(snapshot.ConnectionId, connectionKey, StringComparison.Ordinal))
+            .OrderByDescending(snapshot => snapshot.CreatedUtc, StringComparer.Ordinal).ThenBy(snapshot => snapshot.SnapshotId, StringComparer.Ordinal).Select(ToSnapshot).ToArray();
+        return Task.FromResult(snapshots);
+    }
+
     public Task<StoredSchemaSnapshot> GetAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var db = database.Open();
         var row = db.GetTable<SchemaSnapshotRow>().SingleOrDefault(snapshot => snapshot.ConnectionId == connectionId.ToString() && snapshot.SnapshotId == snapshotId.ToString()) ?? throw new InvalidOperationException("Schema snapshot was not found.");
-        var content = JsonSerializer.Deserialize<SnapshotRow>(row.ContentJson) ?? throw new InvalidOperationException("Schema snapshot is invalid.");
-        return Task.FromResult(new StoredSchemaSnapshot(snapshotId, connectionId, row.SnapshotHash, DateTimeOffset.Parse(row.CreatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), FromRow(content)));
+        return Task.FromResult(ToSnapshot(row));
+    }
+
+    public Task<StoredSchemaSnapshot?> FindAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        var connectionKey = connectionId.ToString();
+        var snapshotKey = snapshotId.ToString();
+        var row = db.GetTable<SchemaSnapshotRow>().ToArray().SingleOrDefault(snapshot => string.Equals(snapshot.ConnectionId, connectionKey, StringComparison.Ordinal) && string.Equals(snapshot.SnapshotId, snapshotKey, StringComparison.Ordinal));
+        return Task.FromResult(row is null ? null : ToSnapshot(row));
+    }
+
+    public Task<StoredSchemaSnapshot?> FindByHashAsync(Guid connectionId, string hash, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        var connectionKey = connectionId.ToString();
+        var row = db.GetTable<SchemaSnapshotRow>().ToArray().Where(snapshot => string.Equals(snapshot.ConnectionId, connectionKey, StringComparison.Ordinal) && string.Equals(snapshot.SnapshotHash, hash, StringComparison.Ordinal))
+            .OrderBy(snapshot => snapshot.CreatedUtc, StringComparer.Ordinal).ThenBy(snapshot => snapshot.SnapshotId, StringComparer.Ordinal).FirstOrDefault();
+        return Task.FromResult(row is null ? null : ToSnapshot(row));
     }
 
     public async Task<SchemaGraphProjection> GetGraphAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
@@ -85,8 +114,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock)
         using var db = database.Open();
         var row = db.GetTable<SchemaSnapshotRow>().ToArray().OrderByDescending(snapshot => snapshot.CreatedUtc, StringComparer.Ordinal).FirstOrDefault();
         if (row is null) return Task.FromResult<StoredSchemaSnapshot?>(null);
-        var content = JsonSerializer.Deserialize<SnapshotRow>(row.ContentJson) ?? throw new InvalidOperationException("Schema snapshot is invalid.");
-        return Task.FromResult<StoredSchemaSnapshot?>(new StoredSchemaSnapshot(Guid.Parse(row.SnapshotId), Guid.Parse(row.ConnectionId), row.SnapshotHash, DateTimeOffset.Parse(row.CreatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), FromRow(content)));
+        return Task.FromResult<StoredSchemaSnapshot?>(ToSnapshot(row));
     }
 
     internal Task<SchemaScan?> ClaimNextAsync(CancellationToken cancellationToken)
@@ -123,6 +151,11 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock)
         return Task.CompletedTask;
     }
 
+    private static StoredSchemaSnapshot ToSnapshot(SchemaSnapshotRow row)
+    {
+        var content = JsonSerializer.Deserialize<SnapshotRow>(row.ContentJson) ?? throw new InvalidOperationException("Schema snapshot is invalid.");
+        return new StoredSchemaSnapshot(Guid.Parse(row.SnapshotId), Guid.Parse(row.ConnectionId), row.SnapshotHash, DateTimeOffset.Parse(row.CreatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), FromRow(content));
+    }
     private static SchemaScan ToScan(SchemaScanRow row) => new(Guid.Parse(row.ScanId), Guid.Parse(row.ConnectionId), Enum.Parse<SchemaScanState>(row.State), row.SnapshotId is null ? null : Guid.Parse(row.SnapshotId), row.SnapshotHash, row.FailureCode);
     private static DataParameter[] Parameters(SchemaScanRow row) => new DataParameter[] { new("scanId", row.ScanId), new("connectionId", row.ConnectionId), new("idempotencyKey", row.IdempotencyKey), new("state", row.State), new("createdUtc", row.CreatedUtc), new("updatedUtc", row.UpdatedUtc) };
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);

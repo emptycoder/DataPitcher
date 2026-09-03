@@ -116,6 +116,50 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
+    public async Task DataPitcherApplication_ListsOnlyRequestedConnectionSnapshots()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var source = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"), CancellationToken.None);
+        var other = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Other", "postgresql", Guid.NewGuid(), "other-create"), CancellationToken.None);
+        var sourceSnapshotId = fixture.SeedSnapshot(source.ConnectionId);
+        _ = fixture.SeedSnapshot(other.ConnectionId);
+
+        var snapshots = await fixture.Application.ListSnapshotsAsync(source.ConnectionId, CancellationToken.None);
+
+        var snapshot = Assert.Single(snapshots);
+        Assert.Equal(sourceSnapshotId, snapshot.SnapshotId);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_DoesNotFindSnapshotFromAnotherConnection()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var source = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"), CancellationToken.None);
+        var other = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Other", "postgresql", Guid.NewGuid(), "other-create"), CancellationToken.None);
+        var otherSnapshotId = fixture.SeedSnapshot(other.ConnectionId);
+
+        var snapshot = await fixture.Application.FindSnapshotAsync(source.ConnectionId, otherSnapshotId, CancellationToken.None);
+
+        Assert.Null(snapshot);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_ProjectsSchemaSnapshotContent()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var source = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"), CancellationToken.None);
+        var snapshotId = fixture.SeedSnapshot(source.ConnectionId, "{\"Tables\":[{\"Schema\":\"app\",\"Name\":\"Customers\",\"Columns\":[],\"PrimaryKey\":null,\"UniqueConstraints\":[]},{\"Schema\":\"app\",\"Name\":\"Orders\",\"Columns\":[{\"Name\":\"CustomerId\",\"StoreType\":\"integer\",\"ClrType\":\"System.Int32\",\"IsNullable\":false}],\"PrimaryKey\":{\"Name\":\"PK_Orders\",\"Columns\":[\"CustomerId\"]},\"UniqueConstraints\":[]}],\"ForeignKeys\":[{\"Name\":\"FK_Orders_Customers\",\"ChildTable\":{\"Schema\":\"app\",\"Name\":\"Orders\"},\"ParentTable\":{\"Schema\":\"app\",\"Name\":\"Customers\"},\"ChildColumns\":[\"CustomerId\"],\"ParentColumns\":[\"Id\"],\"IsEnforced\":true,\"IsTrusted\":true}],\"DatabaseIdentity\":\"database\",\"ProviderVersion\":\"version\"}");
+
+        var snapshot = await fixture.Application.GetSnapshotAsync(source.ConnectionId, snapshotId, CancellationToken.None);
+        var orders = Assert.Single(snapshot.Tables, table => table.Name == "Orders");
+        var foreignKey = Assert.Single(snapshot.ForeignKeys);
+
+        Assert.Equal("integer", Assert.Single(orders.Columns).StoreType);
+        Assert.Equal("PK_Orders", orders.PrimaryKey!.Name);
+        Assert.Equal("Customers", foreignKey.ParentTable.Name);
+    }
+
+    [Fact]
     public async Task DataPitcherApplication_DelegatesSelectionOperations()
     {
         using var fixture = new ProductionApplicationFixture();
@@ -221,7 +265,7 @@ public sealed class ProductionCompositionTests
         public JobStore Jobs { get; }
         public ConnectionProfileStore Profiles { get; }
 
-        public Guid SeedSnapshot(Guid connectionId)
+        public Guid SeedSnapshot(Guid connectionId, string? content = null)
         {
             var snapshotId = Guid.NewGuid();
             using var database = Database.Open();
@@ -232,7 +276,7 @@ public sealed class ProductionCompositionTests
                     new("snapshotId", snapshotId.ToString()),
                     new("connectionId", connectionId.ToString()),
                     new("snapshotHash", "snapshot-hash"),
-                    new("contentJson", "{\"Tables\":[],\"ForeignKeys\":[],\"DatabaseIdentity\":\"database\",\"ProviderVersion\":\"version\"}"),
+                    new("contentJson", content ?? "{\"Tables\":[],\"ForeignKeys\":[],\"DatabaseIdentity\":\"database\",\"ProviderVersion\":\"version\"}"),
                     new("createdUtc", Clock.UtcNow.ToString("O", CultureInfo.InvariantCulture)),
                 });
             return snapshotId;

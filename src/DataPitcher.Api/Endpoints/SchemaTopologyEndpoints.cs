@@ -4,6 +4,7 @@ using DataPitcher.Api.Contracts;
 using DataPitcher.Core.Authorization;
 using DataPitcher.Core.Graph;
 using DataPitcher.Core.Schema;
+using DataPitcher.Infrastructure.Plans;
 using DataPitcher.Infrastructure.Schema;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -11,10 +12,9 @@ using Microsoft.AspNetCore.Http.HttpResults;
 namespace DataPitcher.Api.Endpoints;
 
 /// <summary>
-/// Real schema topology built from the latest captured schema snapshot via the existing tested
-/// <see cref="DependencyGraph"/>/<see cref="CondensedGraph"/> types. There is no persisted link between a plan and
-/// a specific selection or schema snapshot yet, so <c>plannedTableIds</c> is honestly empty and table state reports
-/// only what the schema graph itself proves (cycle membership), not plan selection membership.
+/// Real schema topology built from the source schema snapshot sealed in the requested plan via the existing tested
+/// <see cref="DependencyGraph"/>/<see cref="CondensedGraph"/> types. <c>plannedTableIds</c> remains empty and table
+/// state reports only what the schema graph itself proves (cycle membership), not plan selection membership.
 /// </summary>
 public static class SchemaTopologyEndpoints
 {
@@ -26,17 +26,20 @@ public static class SchemaTopologyEndpoints
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status500InternalServerError);
     }
 
     private static async Task<Results<Ok<PlanSchemaDependencyGraphResponse>, ProblemHttpResult>> GetSchemaDependencyGraphAsync(
-        Guid planId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, SchemaSnapshotStore snapshots, CancellationToken cancellationToken)
+        Guid planId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, PlanStore plans, SchemaSnapshotStore snapshots, CancellationToken cancellationToken)
     {
         var authorization = await authorizationService.AuthorizeAsync(user, new PlanResource(planId), new ResourcePermissionRequirement(Permissions.PlansRead));
         if (!authorization.Succeeded) return ApiAuthorizationResults.Forbidden(context, new PlanResource(planId));
 
-        var snapshot = await snapshots.GetLatestAsync(cancellationToken);
-        if (snapshot is null) return TypedResults.Ok(new PlanSchemaDependencyGraphResponse("", [], [], []));
+        var plan = await plans.LoadContentAsync(planId, cancellationToken);
+        if (plan is null) return TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: "Schema snapshot not found.");
+        var snapshot = await snapshots.FindByHashAsync(plan.Source.ConnectionId, plan.SourceSchema.Hash, cancellationToken);
+        if (snapshot is null) return TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: "Schema snapshot not found.");
 
         var tables = snapshot.Content.Tables.Select(table => new TableDefinition(table.Schema, table.Name, [], null, [])).ToArray();
         var foreignKeys = snapshot.Content.ForeignKeys.Select(foreignKey => new ForeignKeyDefinition(

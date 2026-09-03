@@ -6,7 +6,9 @@ public interface IDataPitcherApplication
     Task<ConnectionResponse> CreateConnectionAsync(CreateConnectionRequest request, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueConnectionCheckAsync(Guid connectionId, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueSchemaScanAsync(Guid connectionId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<SchemaSnapshotSummaryResponse>> ListSnapshotsAsync(Guid connectionId, CancellationToken cancellationToken);
     Task<SchemaSnapshotResponse> GetSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken);
+    Task<SchemaSnapshotResponse?> FindSnapshotAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken);
     Task<SelectionResponse> SaveSelectionAsync(Guid selectionId, SaveSelectionRequest request, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueSelectionEvaluationAsync(Guid selectionId, CancellationToken cancellationToken);
     Task<PlanResponse> SavePlanAsync(Guid planId, SavePlanRequest request, CancellationToken cancellationToken);
