@@ -38,7 +38,7 @@ public sealed class DependencyRuleTests
         Assert.Empty(References(core));
         Assert.Empty(Packages(core));
         var api = Project("DataPitcher.Api");
-        Assert.Equal(["DataPitcher.Auth.Abstractions", "DataPitcher.Core", "DataPitcher.Infrastructure"], References(api).OrderBy(name => name, StringComparer.Ordinal));
+        Assert.Equal(["DataPitcher.Auth.Abstractions", "DataPitcher.Auth.Hosting", "DataPitcher.Core", "DataPitcher.Infrastructure", "DataPitcher.Providers.PostgreSql", "DataPitcher.Providers.SqlServer"], References(api).OrderBy(name => name, StringComparer.Ordinal));
         Assert.DoesNotContain(Projects().Where(p => Path.GetRelativePath(Root, p).StartsWith("src" + Path.DirectorySeparatorChar, StringComparison.Ordinal) && Name(p) != "DataPitcher.Api").SelectMany(References), name => name == "DataPitcher.Api");
     }
     private static string Root { get; }=FindRoot();
