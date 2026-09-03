@@ -15,6 +15,11 @@ public interface IDataPitcherApplication
         CreateConnectionRequest request,
         CancellationToken cancellationToken
     );
+    Task<ConnectionResponse> UpdateConnectionAsync(
+        Guid connectionId,
+        UpdateConnectionRequest request,
+        CancellationToken cancellationToken
+    );
     Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueConnectionCheckAsync(Guid connectionId, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueSchemaScanAsync(Guid connectionId, CancellationToken cancellationToken);

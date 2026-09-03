@@ -16,6 +16,14 @@ public sealed record CreateConnectionRequest(
     string ConnectionString
 );
 
+/// <summary>Updates a connection. A null connection string keeps the stored credentials; the API never returns them.</summary>
+public sealed record UpdateConnectionRequest(
+    string DisplayName,
+    string ProviderId,
+    string IfMatch,
+    string? ConnectionString = null
+);
+
 public sealed record ConnectionResponse(
     Guid ConnectionId,
     string DisplayName,

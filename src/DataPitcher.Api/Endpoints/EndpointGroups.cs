@@ -32,6 +32,11 @@ public static class EndpointGroups
         );
         WithStandardProblems(
             connections
+                .MapPut("/{connectionId:guid}", UpdateConnectionAsync)
+                .RequireAuthorization(ApiPolicyNames.ConnectionsWrite)
+        );
+        WithStandardProblems(
+            connections
                 .MapDelete("/{connectionId:guid}", DeleteConnectionAsync)
                 .RequireAuthorization(ApiPolicyNames.ConnectionsWrite)
         );
@@ -156,6 +161,44 @@ public static class EndpointGroups
                 title: "A connection string is required."
             );
         return TypedResults.Ok(await application.CreateConnectionAsync(request, cancellationToken));
+    }
+
+    private static async Task<Results<Ok<ConnectionResponse>, ProblemHttpResult>> UpdateConnectionAsync(
+        Guid connectionId,
+        UpdateConnectionRequest request,
+        HttpContext context,
+        ClaimsPrincipal user,
+        IAuthorizationService authorizationService,
+        IDataPitcherApplication application,
+        CancellationToken cancellationToken
+    )
+    {
+        if (string.IsNullOrWhiteSpace(request.IfMatch))
+            return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "If-Match is required.");
+        if (string.IsNullOrWhiteSpace(request.DisplayName))
+            return TypedResults.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Display name is required."
+            );
+        if (
+            await AuthorizeResourceAsync(
+                context,
+                authorizationService,
+                user,
+                new ConnectionResource(connectionId),
+                Permissions.ConnectionsWrite
+            ) is
+            { } problem
+        )
+            return problem;
+        try
+        {
+            return TypedResults.Ok(await application.UpdateConnectionAsync(connectionId, request, cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: exception.Message);
+        }
     }
 
     private static async Task<Results<NoContent, ProblemHttpResult>> DeleteConnectionAsync(

@@ -151,6 +151,37 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
+    public async Task DataPitcherApplication_UpdateConnection_ReplacesSecretOnlyWhenProvided()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var created = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "create", "Host=one;Database=app"),
+            CancellationToken.None
+        );
+        var before = await fixture.Profiles.GetProfileAsync(created.ConnectionId, CancellationToken.None);
+
+        var renamed = await fixture.Application.UpdateConnectionAsync(
+            created.ConnectionId,
+            new UpdateConnectionRequest("Renamed", "postgresql", created.ETag, null),
+            CancellationToken.None
+        );
+        var kept = await fixture.Profiles.GetProfileAsync(created.ConnectionId, CancellationToken.None);
+        var replaced = await fixture.Application.UpdateConnectionAsync(
+            created.ConnectionId,
+            new UpdateConnectionRequest("Renamed again", "postgresql", renamed.ETag, "Host=two;Database=app"),
+            CancellationToken.None
+        );
+        var after = await fixture.Profiles.GetProfileAsync(created.ConnectionId, CancellationToken.None);
+
+        Assert.Equal("Renamed", renamed.DisplayName);
+        Assert.Equal(before.SecretReference, kept.SecretReference);
+        Assert.Equal("Renamed again", replaced.DisplayName);
+        Assert.NotEqual(before.SecretReference, after.SecretReference);
+        Assert.False(File.Exists(before.SecretReference.Locator));
+        Assert.Equal("Host=two;Database=app", await File.ReadAllTextAsync(after.SecretReference.Locator));
+    }
+
+    [Fact]
     public async Task DataPitcherApplication_ListsOnlyRequestedConnectionSnapshots()
     {
         using var fixture = new ProductionApplicationFixture();

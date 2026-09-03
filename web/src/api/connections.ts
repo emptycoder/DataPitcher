@@ -71,7 +71,18 @@ export function credentialEnvironmentVariable(credentialId: string) {
     return `DATAPITCHER_CREDENTIAL_${credentialId.replace(/-/g, '').toUpperCase()}`;
 }
 
+export type UpdateConnectionInput = Readonly<{
+    displayName: string;
+    providerId: string;
+    connectionString: string | null;
+}>;
+
 export const connectionsApi = {
+    update: (connectionId: string, input: UpdateConnectionInput, eTag: string, auth: AuthenticationAdapter) =>
+        requestJson<unknown>(`/api/connections/${connectionId}`, auth, {
+            method: 'PUT',
+            body: { ...input, ifMatch: eTag },
+        }).then((data) => ConnectionSchema.parse(data)),
     providers: async (signal?: AbortSignal) => {
         const response = await fetch('/api/providers', { signal });
         if (!response.ok) throw new Error('Unable to load providers.');

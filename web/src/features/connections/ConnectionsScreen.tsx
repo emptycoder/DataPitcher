@@ -101,7 +101,7 @@ export function ConnectionsScreen() {
                 </div>
             )}
 
-            <AddConnectionDialog onClose={() => setAdding(false)} open={adding} />
+            <ConnectionDialog onClose={() => setAdding(false)} open={adding} />
         </>
     );
 }
@@ -131,6 +131,7 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
     const snapshots = useSnapshots(connection.connectionId);
     const [scan, setScan] = useState<ScanProgress | null>(null);
     const [removing, setRemoving] = useState(false);
+    const [editing, setEditing] = useState(false);
     const abort = useRef<AbortController | null>(null);
     useEffect(() => () => abort.current?.abort(), []);
 
@@ -228,9 +229,14 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                 <div className="flex shrink-0 items-center gap-1">
                     <StatusBadge state={connection.health} />
                     {canWrite ? (
-                        <IconButton label="Remove connection" onClick={() => setRemoving(true)} size="sm">
-                            <Icons.X size={15} />
-                        </IconButton>
+                        <>
+                            <IconButton label="Edit connection" onClick={() => setEditing(true)} size="sm">
+                                <Icons.Clipboard size={15} />
+                            </IconButton>
+                            <IconButton label="Remove connection" onClick={() => setRemoving(true)} size="sm">
+                                <Icons.X size={15} />
+                            </IconButton>
+                        </>
                     ) : null}
                 </div>
             </div>
@@ -345,6 +351,7 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                 </Button>
             </div>
 
+            {editing ? <ConnectionDialog existing={connection} onClose={() => setEditing(false)} open /> : null}
             <Modal
                 description="This deletes the connection profile and every schema snapshot captured from it. Plans that reference it will no longer load until they are edited."
                 footer={
@@ -433,16 +440,23 @@ export function ProviderMark({ providerId, size = 'md' }: Readonly<{ providerId:
 
 /* --------------------------- Add connection dialog ------------------------- */
 
-type CredentialMode = 'details' | 'raw';
+type CredentialMode = 'details' | 'raw' | 'keep';
 
-function AddConnectionDialog({ open, onClose }: Readonly<{ open: boolean; onClose: () => void }>) {
+function ConnectionDialog({
+    open,
+    onClose,
+    existing,
+}: Readonly<{ open: boolean; onClose: () => void; existing?: Connection }>) {
+    const isEdit = existing !== undefined;
     const { authentication } = useAuth();
     const queryClient = useQueryClient();
     const toast = useToast();
     const providers = useProviders();
-    const [displayName, setDisplayName] = useState('');
-    const [details, setDetails] = useState<ConnectionDetails>(() => defaultConnectionDetails('sqlserver'));
-    const [mode, setMode] = useState<CredentialMode>('details');
+    const [displayName, setDisplayName] = useState(existing?.displayName ?? '');
+    const [details, setDetails] = useState<ConnectionDetails>(() =>
+        defaultConnectionDetails(existing?.providerId ?? 'sqlserver'),
+    );
+    const [mode, setMode] = useState<CredentialMode>(isEdit ? 'keep' : 'details');
     const [rawConnectionString, setRawConnectionString] = useState('');
     const [credentialId, setCredentialId] = useState(() => crypto.randomUUID());
     const [error, setError] = useState<string | null>(null);
@@ -456,29 +470,43 @@ function AddConnectionDialog({ open, onClose }: Readonly<{ open: boolean; onClos
         setError(null);
     }
 
+    const connectionString = () =>
+        mode === 'details' ? buildConnectionString(details) : mode === 'raw' ? rawConnectionString.trim() : null;
     const create = useMutation({
         mutationFn: () =>
-            connectionsApi.create(
-                {
-                    displayName: displayName.trim(),
-                    providerId,
-                    credentialId,
-                    connectionString:
-                        mode === 'details'
-                            ? buildConnectionString(details)
-                            : mode === 'raw'
-                              ? rawConnectionString.trim()
-                              : null,
-                },
-                authentication,
-            ),
+            existing
+                ? connectionsApi.update(
+                      existing.connectionId,
+                      { displayName: displayName.trim(), providerId, connectionString: connectionString() },
+                      existing.eTag,
+                      authentication,
+                  )
+                : connectionsApi.create(
+                      {
+                          displayName: displayName.trim(),
+                          providerId,
+                          credentialId,
+                          connectionString: connectionString() ?? '',
+                      },
+                      authentication,
+                  ),
         onSuccess: async (connection) => {
             await queryClient.invalidateQueries({ queryKey: queryKeys.connections });
-            toast.success('Connection added', `${connection.displayName} is registered. Check its health next.`);
+            if (existing)
+                toast.success(
+                    'Connection updated',
+                    mode === 'keep'
+                        ? 'Credentials were left unchanged.'
+                        : 'New credentials are stored on the API host.',
+                );
+            else toast.success('Connection added', `${connection.displayName} is registered. Check its health next.`);
             reset();
             onClose();
         },
-        onError: (caught) => setError(describeError(caught, 'Unable to add the connection.')),
+        onError: (caught) =>
+            setError(
+                describeError(caught, existing ? 'Unable to update the connection.' : 'Unable to add the connection.'),
+            ),
     });
 
     function submit(event: FormEvent) {
@@ -490,6 +518,10 @@ function AddConnectionDialog({ open, onClose }: Readonly<{ open: boolean; onClos
             if (problem) return setError(problem);
         }
         if (mode === 'raw' && !rawConnectionString.trim()) return setError('Paste a connection string.');
+        if (mode === 'keep' && existing && existing.providerId !== providerId)
+            return setError(
+                'Changing the provider requires new credentials. Enter connection details or a connection string.',
+            );
         create.mutate();
     }
     const example =
@@ -501,19 +533,23 @@ function AddConnectionDialog({ open, onClose }: Readonly<{ open: boolean; onClos
 
     return (
         <Modal
-            description="The connection string is stored on the API host under its secrets folder, never in the control database, and is never sent back to the browser."
+            description={
+                isEdit
+                    ? 'Stored credentials are never sent back to the browser. Keep them as they are, or replace them; the previous secret is deleted from the API host once the new one is saved.'
+                    : 'The connection string is stored on the API host under its secrets folder, never in the control database, and is never sent back to the browser.'
+            }
             footer={
                 <>
                     <Button onClick={onClose}>Cancel</Button>
                     <Button form="add-connection" loading={create.isPending} type="submit" variant="primary">
-                        Add connection
+                        {isEdit ? 'Save changes' : 'Add connection'}
                     </Button>
                 </>
             }
             onClose={onClose}
             open={open}
             size="lg"
-            title="Add connection"
+            title={isEdit ? `Edit ${existing.displayName}` : 'Add connection'}
         >
             <form className="grid min-w-0 gap-5" id="add-connection" onSubmit={submit}>
                 <div className="grid gap-4 md:grid-cols-[1fr_auto]">
@@ -560,13 +596,28 @@ function AddConnectionDialog({ open, onClose }: Readonly<{ open: boolean; onClos
                 </div>
 
                 <Tabs
-                    items={[
-                        { value: 'details', label: 'Connection details' },
-                        { value: 'raw', label: 'Connection string' },
-                    ]}
+                    items={
+                        isEdit
+                            ? [
+                                  { value: 'keep', label: 'Keep current credentials' },
+                                  { value: 'details', label: 'Replace with details' },
+                                  { value: 'raw', label: 'Replace with connection string' },
+                              ]
+                            : [
+                                  { value: 'details', label: 'Connection details' },
+                                  { value: 'raw', label: 'Connection string' },
+                              ]
+                    }
                     onChange={setMode}
                     value={mode}
                 />
+
+                {mode === 'keep' ? (
+                    <Alert tone="info">
+                        The stored connection string stays on the API host unchanged. Only the display name
+                        {existing && existing.providerId !== providerId ? ' and provider' : ''} will be updated.
+                    </Alert>
+                ) : null}
 
                 {mode === 'details' ? (
                     <div className="grid gap-4">

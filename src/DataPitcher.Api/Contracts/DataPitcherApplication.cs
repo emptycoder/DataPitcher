@@ -70,6 +70,37 @@ public sealed class DataPitcherApplication(
         );
     }
 
+    public async Task<ConnectionResponse> UpdateConnectionAsync(
+        Guid connectionId,
+        UpdateConnectionRequest request,
+        CancellationToken cancellationToken
+    )
+    {
+        var existing = await connections.GetProfileAsync(connectionId, cancellationToken);
+        var replacingSecret = !string.IsNullOrWhiteSpace(request.ConnectionString);
+        var secretReference = replacingSecret
+            ? await (
+                secretWriter ?? throw new InvalidOperationException("Connection secret storage is not configured.")
+            ).StoreAsync(Guid.NewGuid(), request.ConnectionString!, cancellationToken)
+            : existing.SecretReference;
+        var profile = await connections.UpdateAsync(
+            connectionId,
+            new ConnectionProfileDraft(
+                request.DisplayName,
+                request.ProviderId,
+                secretReference,
+                existing.BusinessSchema,
+                existing.StagingSchema
+            ),
+            request.IfMatch,
+            cancellationToken
+        );
+        if (replacingSecret && secretWriter is not null)
+            await secretWriter.RemoveAsync(existing.SecretReference, cancellationToken);
+        var summary = await connections.GetSummaryAsync(profile.ConnectionId, cancellationToken);
+        return ToConnectionResponse(summary);
+    }
+
     public async Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken)
     {
         var profile = await connections.GetProfileAsync(connectionId, cancellationToken);

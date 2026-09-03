@@ -209,6 +209,17 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
             () => new ConnectionResponse(Guid.NewGuid(), request.DisplayName, request.ProviderId, "Unknown", "etag-1")
         );
 
+    public Task<ConnectionResponse> UpdateConnectionAsync(
+        Guid connectionId,
+        UpdateConnectionRequest request,
+        CancellationToken cancellationToken
+    ) =>
+        ObserveAsync(
+            nameof(UpdateConnectionAsync),
+            cancellationToken,
+            () => new ConnectionResponse(connectionId, request.DisplayName, request.ProviderId, "Unknown", "etag-2")
+        );
+
     public Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(DeleteConnectionAsync), cancellationToken, () => connectionId);
 

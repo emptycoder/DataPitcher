@@ -66,6 +66,45 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task UpdateConnection_ReturnsTheUpdatedConnectionWithoutSecrets()
+    {
+        var connectionId = Guid.NewGuid();
+        var request = new UpdateConnectionRequest(
+            "Renamed",
+            "postgresql",
+            "\"1\"",
+            "Host=localhost;Database=app;Password=hidden"
+        );
+
+        using var response = await _client.PutAsJsonAsync(
+            $"/api/connections/{connectionId}",
+            request,
+            CancellationToken.None
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("hidden", body);
+        var connection = await response.Content.ReadFromJsonAsync<ConnectionResponse>();
+        Assert.Equal("Renamed", connection!.DisplayName);
+        Assert.Contains("UpdateConnectionAsync", _factory.Application.Invocations);
+    }
+
+    [Fact]
+    public async Task UpdateConnection_WhenIfMatchIsMissing_ReturnsValidationProblemDetails()
+    {
+        var request = new UpdateConnectionRequest("Renamed", "postgresql", "", null);
+
+        using var response = await _client.PutAsJsonAsync(
+            $"/api/connections/{Guid.NewGuid()}",
+            request,
+            CancellationToken.None
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task DeleteConnection_WithIfMatch_ReturnsNoContent()
     {
         var connectionId = Guid.NewGuid();
