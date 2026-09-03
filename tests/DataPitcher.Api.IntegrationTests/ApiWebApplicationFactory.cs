@@ -43,6 +43,7 @@ public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
     {
         builder.UseSetting("ControlDatabase:Path", _databasePath);
         builder.UseSetting("Secrets:Root", Path.GetTempPath());
+        builder.UseSetting("Authentication:Development:SigningKey", "api-integration-test-signing-key-32");
         builder.ConfigureServices(services =>
         {
             services.AddSingleton(_database);

@@ -22,6 +22,8 @@ The supported database design covers SQL Server and PostgreSQL. Same-provider pa
 
 The authentication design supports Microsoft Entra ID, generic OpenID Connect, and a Development-and-Test-only provider. The Development-and-Test provider is excluded from production builds. Authorization is permission-based and protects endpoints by default rather than relying on client-side controls. See [ADR 0006](docs/adr/0006-authentication-and-authorization-architecture.md).
 
+For Development authentication, run `Authentication__Development__SigningKey="$(openssl rand -base64 48)" dotnet run --project src/DataPitcher.Api`.
+
 ## Repository layout
 
 ```text
