@@ -1,19 +1,16 @@
 using System.Globalization;
 using System.Text.Json;
-using DataPitcher.Core.Connections;
-using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
-using DataPitcher.Core.Schema;
-using DataPitcher.Core.Selection;
 using DataPitcher.Core.Time;
-using DataPitcher.Core.Transfer;
-using LinqToDB;
-using LinqToDB.Data;
+using Microsoft.Data.Sqlite;
 
 namespace DataPitcher.ControlStore;
 
 public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRepository
 {
+    private const string SelectColumns =
+        "SELECT PlanId, DisplayName, OperatorNote, Version, CanonicalHash, UpdatedUtc, SelectionId, SourceConnectionId, TargetConnectionId FROM Plans";
+
     public Task<PlanRecord> SaveAsync(
         Guid planId,
         string displayName,
@@ -26,26 +23,35 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         using var transaction = db.BeginTransaction();
         var now = Stamp(clock.UtcNow);
-        var existing = db.GetTable<PlanRow>().SingleOrDefault(row => row.PlanId == planId.ToString());
+        var existing = Find(db, planId);
         if (existing is null)
         {
-            var row = new PlanRow
-            {
-                PlanId = planId.ToString(),
-                DisplayName = displayName,
-                OperatorNote = operatorNote,
-                Version = 1,
-                CanonicalHash = null,
-                CreatedUtc = now,
-                UpdatedUtc = now,
-                SelectionId = selectionId?.ToString(),
-                SourceConnectionId = sourceConnectionId?.ToString(),
-                TargetConnectionId = targetConnectionId?.ToString(),
-            };
-            db.Insert(row);
+            var row = new Row(
+                planId.ToString(),
+                displayName,
+                operatorNote,
+                1,
+                null,
+                now,
+                selectionId?.ToString(),
+                sourceConnectionId?.ToString(),
+                targetConnectionId?.ToString()
+            );
+            db.Execute(
+                "INSERT INTO Plans (PlanId, DisplayName, OperatorNote, Version, CanonicalHash, ContentJson, SealedUtc, CreatedUtc, UpdatedUtc, SelectionId, SourceConnectionId, TargetConnectionId) VALUES (@planId, @displayName, @operatorNote, @version, NULL, NULL, NULL, @createdUtc, @updatedUtc, @selectionId, @sourceConnectionId, @targetConnectionId)",
+                new ControlParameter("planId", row.PlanId),
+                new ControlParameter("displayName", row.DisplayName),
+                new ControlParameter("operatorNote", row.OperatorNote),
+                new ControlParameter("version", row.Version),
+                new ControlParameter("createdUtc", now),
+                new ControlParameter("updatedUtc", now),
+                new ControlParameter("selectionId", row.SelectionId),
+                new ControlParameter("sourceConnectionId", row.SourceConnectionId),
+                new ControlParameter("targetConnectionId", row.TargetConnectionId)
+            );
             transaction.Commit();
             return Task.FromResult(ToRecord(row));
         }
@@ -53,14 +59,14 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
             throw new PlanVersionMismatchException();
         var affected = db.Execute(
             "UPDATE Plans SET DisplayName = @displayName, OperatorNote = @operatorNote, SelectionId = @selectionId, SourceConnectionId = @sourceConnectionId, TargetConnectionId = @targetConnectionId, Version = Version + 1, CanonicalHash = NULL, UpdatedUtc = @updatedUtc WHERE PlanId = @planId AND Version = @version",
-            new DataParameter("displayName", displayName),
-            new DataParameter("operatorNote", operatorNote),
-            new DataParameter("selectionId", selectionId?.ToString()),
-            new DataParameter("sourceConnectionId", sourceConnectionId?.ToString()),
-            new DataParameter("targetConnectionId", targetConnectionId?.ToString()),
-            new DataParameter("updatedUtc", now),
-            new DataParameter("planId", planId.ToString()),
-            new DataParameter("version", existing.Version)
+            new ControlParameter("displayName", displayName),
+            new ControlParameter("operatorNote", operatorNote),
+            new ControlParameter("selectionId", selectionId?.ToString()),
+            new ControlParameter("sourceConnectionId", sourceConnectionId?.ToString()),
+            new ControlParameter("targetConnectionId", targetConnectionId?.ToString()),
+            new ControlParameter("updatedUtc", now),
+            new ControlParameter("planId", planId.ToString()),
+            new ControlParameter("version", existing.Version)
         );
         if (affected != 1)
             throw new PlanVersionMismatchException();
@@ -83,23 +89,23 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
     public Task<PlanRecord?> FindAsync(Guid planId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
-        var row = db.GetTable<PlanRow>().SingleOrDefault(row => row.PlanId == planId.ToString());
+        using var db = database.OpenNative();
+        var row = Find(db, planId);
         return Task.FromResult(row is null ? null : ToRecord(row));
     }
 
     public Task SealAsync(Guid planId, TransferPlanContent content, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         var now = Stamp(clock.UtcNow);
         var affected = db.Execute(
             "UPDATE Plans SET ContentJson = @contentJson, SealedUtc = @sealedUtc, CanonicalHash = @canonicalHash, UpdatedUtc = @updatedUtc WHERE PlanId = @planId",
-            new DataParameter("contentJson", JsonSerializer.Serialize(content)),
-            new DataParameter("sealedUtc", now),
-            new DataParameter("canonicalHash", CanonicalPlanHasher.Hash(content)),
-            new DataParameter("updatedUtc", now),
-            new DataParameter("planId", planId.ToString())
+            new ControlParameter("contentJson", JsonSerializer.Serialize(content)),
+            new ControlParameter("sealedUtc", now),
+            new ControlParameter("canonicalHash", CanonicalPlanHasher.Hash(content)),
+            new ControlParameter("updatedUtc", now),
+            new ControlParameter("planId", planId.ToString())
         );
         if (affected != 1)
             throw new InvalidOperationException("Plan was not found.");
@@ -109,14 +115,33 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
     public Task<TransferPlanContent?> LoadContentAsync(Guid planId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
-        var contentJson = db.GetTable<PlanRow>().SingleOrDefault(row => row.PlanId == planId.ToString())?.ContentJson;
+        using var db = database.OpenNative();
+        var contentJson = db.Scalar<string>(
+            "SELECT ContentJson FROM Plans WHERE PlanId = @planId",
+            new ControlParameter("planId", planId.ToString())
+        );
         return Task.FromResult(
             contentJson is null ? null : JsonSerializer.Deserialize<TransferPlanContent>(contentJson)
         );
     }
 
-    private static PlanRecord ToRecord(PlanRow row) =>
+    private static Row? Find(ControlConnection db, Guid planId) =>
+        db.Single(SelectColumns + " WHERE PlanId = @planId", Map, new ControlParameter("planId", planId.ToString()));
+
+    private static Row Map(SqliteDataReader reader) =>
+        new(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.GetInt64(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetString(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8)
+        );
+
+    private static PlanRecord ToRecord(Row row) =>
         new(
             Guid.Parse(row.PlanId),
             row.DisplayName,
@@ -136,4 +161,16 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
             : throw new PlanVersionMismatchException();
 
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
+
+    private sealed record Row(
+        string PlanId,
+        string DisplayName,
+        string? OperatorNote,
+        long Version,
+        string? CanonicalHash,
+        string UpdatedUtc,
+        string? SelectionId,
+        string? SourceConnectionId,
+        string? TargetConnectionId
+    );
 }
