@@ -11,6 +11,9 @@ namespace DataPitcher.Providers.PostgreSql;
 
 public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
 {
+    /// <summary>Generous enough for a large catalog on a small tier; probes stay read-only.</summary>
+    private const int ProbeTimeoutSeconds = 30;
+
     public async Task<ConnectionProbeEvidence> ProbeAsync(
         ConnectionProbeRequest request,
         CancellationToken cancellationToken
@@ -18,12 +21,12 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
     {
         var builder = new NpgsqlConnectionStringBuilder(request.ResolvedConnectionString)
         {
-            Timeout = 5,
-            CommandTimeout = 5,
+            Timeout = ProbeTimeoutSeconds,
+            CommandTimeout = ProbeTimeoutSeconds,
         };
         await using var connection = new NpgsqlConnection(builder.ConnectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var scalar = new NpgsqlCommand("SELECT 1;", connection) { CommandTimeout = 5 };
+        await using var scalar = new NpgsqlCommand("SELECT 1;", connection) { CommandTimeout = ProbeTimeoutSeconds };
         _ = await scalar.ExecuteScalarAsync(cancellationToken);
         return await ReadEvidenceAsync(connection, request, cancellationToken);
     }
@@ -72,7 +75,7 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
     {
         await using var command = new NpgsqlCommand("SELECT current_database(), version();", connection)
         {
-            CommandTimeout = 5,
+            CommandTimeout = ProbeTimeoutSeconds,
         };
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
@@ -109,7 +112,7 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
             + ", EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = @businessSchema)"
             + ", (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND has_schema_privilege(n.oid, 'USAGE') AND has_table_privilege(c.oid, 'SELECT') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%')"
             + ", (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND n.nspname = @businessSchema);";
-        await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = 5 };
+        await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = ProbeTimeoutSeconds };
         command.Parameters.AddWithValue("businessSchema", profile.BusinessSchema);
         command.Parameters.AddWithValue("stagingSchema", profile.StagingSchema);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -143,11 +146,11 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
         try
         {
             await using var command = new NpgsqlCommand(
-                "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_attribute a ON a.attrelid = c.oid WHERE c.relkind IN ('r', 'p');",
+                "SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_attribute a ON a.attrelid = c.oid WHERE c.relkind IN ('r', 'p') LIMIT 1;",
                 connection
             )
             {
-                CommandTimeout = 5,
+                CommandTimeout = ProbeTimeoutSeconds,
             };
             _ = await command.ExecuteScalarAsync(cancellationToken);
             return true;
@@ -229,7 +232,7 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
     {
         var sql =
             "SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=@schema AND c.relname=@table AND c.relkind IN ('r','p'));";
-        await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = 5 };
+        await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = ProbeTimeoutSeconds };
         command.Parameters.AddWithValue("schema", schema);
         command.Parameters.AddWithValue("table", table);
         return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
@@ -237,7 +240,7 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
 
     private static async Task ExecuteAsync(NpgsqlConnection connection, string sql, CancellationToken cancellationToken)
     {
-        await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = 5 };
+        await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = ProbeTimeoutSeconds };
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

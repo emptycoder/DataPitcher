@@ -11,6 +11,9 @@ namespace DataPitcher.Providers.SqlServer;
 
 public sealed class SqlServerConnectionProbe : ICapabilityDetector
 {
+    /// <summary>Generous enough for a large catalog on a small or serverless tier; probes stay read-only.</summary>
+    private const int ProbeTimeoutSeconds = 30;
+
     static SqlServerConnectionProbe() => SqlServerEntraAuthentication.EnsureRegistered();
 
     public async Task<ConnectionProbeEvidence> ProbeAsync(
@@ -18,10 +21,13 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
         CancellationToken cancellationToken
     )
     {
-        var builder = new SqlConnectionStringBuilder(request.ResolvedConnectionString) { ConnectTimeout = 5 };
+        var builder = new SqlConnectionStringBuilder(request.ResolvedConnectionString)
+        {
+            ConnectTimeout = ProbeTimeoutSeconds,
+        };
         await using var connection = new SqlConnection(builder.ConnectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var scalar = new SqlCommand("SELECT 1;", connection) { CommandTimeout = 5 };
+        await using var scalar = new SqlCommand("SELECT 1;", connection) { CommandTimeout = ProbeTimeoutSeconds };
         _ = await scalar.ExecuteScalarAsync(cancellationToken);
         return await ReadEvidenceAsync(connection, request, cancellationToken);
     }
@@ -73,7 +79,7 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
             connection
         )
         {
-            CommandTimeout = 5,
+            CommandTimeout = ProbeTimeoutSeconds,
         };
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
@@ -117,7 +123,7 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
             + "ISNULL(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'SELECT'), 0), "
             + "(SELECT COUNT(*) FROM sys.tables t WHERE HAS_PERMS_BY_NAME(QUOTENAME(SCHEMA_NAME(t.schema_id)) + '.' + QUOTENAME(t.name), 'OBJECT', 'SELECT') = 1), "
             + "(SELECT COUNT(*) FROM sys.tables t WHERE t.schema_id = SCHEMA_ID(@businessSchema));";
-        await using var command = new SqlCommand(sql, connection) { CommandTimeout = 5 };
+        await using var command = new SqlCommand(sql, connection) { CommandTimeout = ProbeTimeoutSeconds };
         command.Parameters.AddWithValue("@businessSchema", profile.BusinessSchema);
         command.Parameters.AddWithValue("@stagingSchema", profile.StagingSchema);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -175,11 +181,11 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
         try
         {
             await using var command = new SqlCommand(
-                "SELECT COUNT(*) FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id JOIN sys.columns c ON c.object_id = t.object_id;",
+                "SELECT TOP (1) t.object_id FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id JOIN sys.columns c ON c.object_id = t.object_id;",
                 connection
             )
             {
-                CommandTimeout = 5,
+                CommandTimeout = ProbeTimeoutSeconds,
             };
             _ = await command.ExecuteScalarAsync(cancellationToken);
             return true;
@@ -259,7 +265,7 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
     {
         var sql =
             "SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id WHERE s.name=@schema AND t.name=@table) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END;";
-        await using var command = new SqlCommand(sql, connection) { CommandTimeout = 5 };
+        await using var command = new SqlCommand(sql, connection) { CommandTimeout = ProbeTimeoutSeconds };
         command.Parameters.AddWithValue("@schema", schema);
         command.Parameters.AddWithValue("@table", table);
         return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
@@ -267,7 +273,7 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
 
     private static async Task ExecuteAsync(SqlConnection connection, string sql, CancellationToken cancellationToken)
     {
-        await using var command = new SqlCommand(sql, connection) { CommandTimeout = 5 };
+        await using var command = new SqlCommand(sql, connection) { CommandTimeout = ProbeTimeoutSeconds };
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }
