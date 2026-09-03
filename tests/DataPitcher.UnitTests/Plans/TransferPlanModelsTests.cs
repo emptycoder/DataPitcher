@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DataPitcher.Core.Plans;
 using Xunit;
 namespace DataPitcher.UnitTests.Plans;
@@ -24,6 +25,13 @@ public sealed class TransferPlanModelsTests
         Assert.Throws<NotSupportedException>(() => ((IList<ColumnMapping>)table.Mapping.Columns)[0] = new("Id", "Changed"));
         Assert.Throws<NotSupportedException>(() => ((IList<TableAddress>)table.TopologicalGroup.Tables)[0] = PlanTestData.Orders);
         Assert.Throws<NotSupportedException>(() => ((IList<SelectionReference>)content.Selections)[0] = content.Selections[0]);
+    }
+    [Fact]
+    public void TransferPlanContent_WhenSerialized_RoundTrips()
+    {
+        var expected = JsonSerializer.Serialize(PlanTestData.Baseline());
+        var actual = JsonSerializer.Deserialize<TransferPlanContent>(expected);
+        Assert.Equal(expected, JsonSerializer.Serialize(actual));
     }
     [Theory]
     [InlineData(PlanTableState.Root)] [InlineData(PlanTableState.RequiredDependency)]

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text.Json;
+using DataPitcher.Core.Plans;
 using DataPitcher.Infrastructure.Persistence;
 using DataPitcher.Infrastructure.Storage;
 using DataPitcher.Infrastructure.Time;
@@ -46,6 +48,24 @@ public sealed class PlanStore(ControlDatabase database, IClock clock)
         using var db = database.Open();
         var row = db.GetTable<PlanRow>().SingleOrDefault(row => row.PlanId == planId.ToString());
         return Task.FromResult(row is null ? null : ToRecord(row));
+    }
+
+    public Task SealAsync(Guid planId, TransferPlanContent content, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        var now = Stamp(clock.UtcNow);
+        var affected = db.Execute("UPDATE Plans SET ContentJson = @contentJson, SealedUtc = @sealedUtc, CanonicalHash = @canonicalHash, UpdatedUtc = @updatedUtc WHERE PlanId = @planId", new DataParameter("contentJson", JsonSerializer.Serialize(content)), new DataParameter("sealedUtc", now), new DataParameter("canonicalHash", CanonicalPlanHasher.Hash(content)), new DataParameter("updatedUtc", now), new DataParameter("planId", planId.ToString()));
+        if (affected != 1) throw new InvalidOperationException("Plan was not found.");
+        return Task.CompletedTask;
+    }
+
+    public Task<TransferPlanContent?> LoadContentAsync(Guid planId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        var contentJson = db.GetTable<PlanRow>().SingleOrDefault(row => row.PlanId == planId.ToString())?.ContentJson;
+        return Task.FromResult(contentJson is null ? null : JsonSerializer.Deserialize<TransferPlanContent>(contentJson));
     }
 
     private static PlanRecord ToRecord(PlanRow row) =>

@@ -15,9 +15,13 @@ protected override async Task ExecuteAsync(CancellationToken stoppingToken)
 {
     while (!stoppingToken.IsCancellationRequested)
     {
-        var claim = await jobs.TryClaimNextAsync(ownerId, leaseTtl, stoppingToken);
-        if (claim is null) { await delay.UntilAsync(clock.UtcNow.Add(pollInterval), stoppingToken); continue; }
-        await RunClaimAsync(claim, stoppingToken);
+        try
+        {
+            var claim = await jobs.TryClaimNextAsync(ownerId, leaseTtl, stoppingToken);
+            if (claim is null) { await delay.UntilAsync(clock.UtcNow.Add(pollInterval), stoppingToken); continue; }
+            await RunClaimAsync(claim, stoppingToken);
+        }
+        catch (Exception) when (!stoppingToken.IsCancellationRequested) { }
     }
 }
 
@@ -62,6 +66,10 @@ private async Task RunClaimAsync(JobClaim claim, CancellationToken stoppingToken
         }
         await jobs.MarkVerifyingAsync(claim.Lease, leaseLost.Token);
         await events.AppendAsync(new JobEventAppend(claim.Job.JobId, "state", new JobEventPayload("verifying", checkpoint.RowCount, checkpoint.BytesTransferred)), leaseLost.Token);
+    }
+    catch (Exception) when (!stoppingToken.IsCancellationRequested)
+    {
+        await jobs.MarkFailedAsync(claim.Lease, "internal_error", stoppingToken);
     }
     finally { renewalStop.Cancel(); await renewal; }
 }
