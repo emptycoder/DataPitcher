@@ -7,37 +7,53 @@ using DataPitcher.Core.Schema;
 using DataPitcher.Core.Selection;
 using DataPitcher.Core.Time;
 using DataPitcher.Core.Transfer;
-using LinqToDB;
-using LinqToDB.Data;
+using Microsoft.Data.Sqlite;
 
 namespace DataPitcher.ControlStore;
 
 public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) : ISchemaSnapshotRepository
 {
+    private const string ScanSelect =
+        "SELECT ScanId, ConnectionId, IdempotencyKey, State, SnapshotId, SnapshotHash, FailureCode, CreatedUtc, UpdatedUtc FROM SchemaScans";
+
+    private const string SnapshotSelect =
+        "SELECT SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc FROM SchemaSnapshots";
+
     public Task<SchemaScan> QueueAsync(Guid connectionId, string idempotencyKey, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
-        using var db = database.Open();
+        using var db = database.OpenNative();
         using var transaction = db.BeginTransaction();
-        var row = new SchemaScanRow
-        {
-            ScanId = Guid.NewGuid().ToString(),
-            ConnectionId = connectionId.ToString(),
-            IdempotencyKey = idempotencyKey,
-            State = SchemaScanState.Queued.ToString(),
-            CreatedUtc = Stamp(clock.UtcNow),
-            UpdatedUtc = Stamp(clock.UtcNow),
-        };
+        var row = new ScanRecord(
+            Guid.NewGuid().ToString(),
+            connectionId.ToString(),
+            idempotencyKey,
+            SchemaScanState.Queued.ToString(),
+            null,
+            null,
+            null,
+            Stamp(clock.UtcNow),
+            Stamp(clock.UtcNow)
+        );
         var inserted = db.Execute(
             "INSERT OR IGNORE INTO SchemaScans (ScanId, ConnectionId, IdempotencyKey, State, CreatedUtc, UpdatedUtc) VALUES (@scanId, @connectionId, @idempotencyKey, @state, @createdUtc, @updatedUtc)",
-            Parameters(row)
+            new ControlParameter("scanId", row.ScanId),
+            new ControlParameter("connectionId", row.ConnectionId),
+            new ControlParameter("idempotencyKey", row.IdempotencyKey),
+            new ControlParameter("state", row.State),
+            new ControlParameter("createdUtc", row.CreatedUtc),
+            new ControlParameter("updatedUtc", row.UpdatedUtc)
         );
         if (inserted == 0)
             return Task.FromResult(
                 ToScan(
-                    db.GetTable<SchemaScanRow>()
-                        .Single(scan => scan.ConnectionId == row.ConnectionId && scan.IdempotencyKey == idempotencyKey)
+                    db.Single(
+                        ScanSelect + " WHERE ConnectionId = @connectionId AND IdempotencyKey = @idempotencyKey",
+                        ReadScan,
+                        new ControlParameter("connectionId", row.ConnectionId),
+                        new ControlParameter("idempotencyKey", idempotencyKey)
+                    ) ?? throw new InvalidOperationException("Sequence contains no elements")
                 )
             );
         transaction.Commit();
@@ -47,14 +63,15 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<SchemaScan> GetScanAsync(Guid connectionId, Guid scanId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         return Task.FromResult(
             ToScan(
-                db.GetTable<SchemaScanRow>()
-                    .SingleOrDefault(scan =>
-                        scan.ConnectionId == connectionId.ToString() && scan.ScanId == scanId.ToString()
-                    )
-                    ?? throw new InvalidOperationException("Schema scan was not found.")
+                db.Single(
+                    ScanSelect + " WHERE ConnectionId = @connectionId AND ScanId = @scanId",
+                    ReadScan,
+                    new ControlParameter("connectionId", connectionId.ToString()),
+                    new ControlParameter("scanId", scanId.ToString())
+                ) ?? throw new InvalidOperationException("Schema scan was not found.")
             )
         );
     }
@@ -62,13 +79,12 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<IReadOnlyList<StoredSchemaSnapshot>> ListAsync(Guid connectionId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
-        var connectionKey = connectionId.ToString();
-        IReadOnlyList<StoredSchemaSnapshot> snapshots = db.GetTable<SchemaSnapshotRow>()
-            .ToArray()
-            .Where(snapshot => string.Equals(snapshot.ConnectionId, connectionKey, StringComparison.Ordinal))
-            .OrderByDescending(snapshot => snapshot.CreatedUtc, StringComparer.Ordinal)
-            .ThenBy(snapshot => snapshot.SnapshotId, StringComparer.Ordinal)
+        using var db = database.OpenNative();
+        IReadOnlyList<StoredSchemaSnapshot> snapshots = db.Query(
+                SnapshotSelect + " WHERE ConnectionId = @connectionId ORDER BY CreatedUtc DESC, SnapshotId ASC",
+                ReadSnapshot,
+                new ControlParameter("connectionId", connectionId.ToString())
+            )
             .Select(ToSnapshot)
             .ToArray();
         return Task.FromResult(snapshots);
@@ -77,21 +93,26 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<SchemaScan?> FindScanAsync(Guid scanId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
-        var scan = db.GetTable<SchemaScanRow>().SingleOrDefault(row => row.ScanId == scanId.ToString());
+        using var db = database.OpenNative();
+        var scan = db.Single(
+            ScanSelect + " WHERE ScanId = @scanId",
+            ReadScan,
+            new ControlParameter("scanId", scanId.ToString())
+        );
         return Task.FromResult(scan is null ? null : ToScan(scan));
     }
 
     public Task<StoredSchemaSnapshot> GetAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         var row =
-            db.GetTable<SchemaSnapshotRow>()
-                .SingleOrDefault(snapshot =>
-                    snapshot.ConnectionId == connectionId.ToString() && snapshot.SnapshotId == snapshotId.ToString()
-                )
-            ?? throw new InvalidOperationException("Schema snapshot was not found.");
+            db.Single(
+                SnapshotSelect + " WHERE ConnectionId = @connectionId AND SnapshotId = @snapshotId",
+                ReadSnapshot,
+                new ControlParameter("connectionId", connectionId.ToString()),
+                new ControlParameter("snapshotId", snapshotId.ToString())
+            ) ?? throw new InvalidOperationException("Schema snapshot was not found.");
         return Task.FromResult(ToSnapshot(row));
     }
 
@@ -102,15 +123,13 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
-        var connectionKey = connectionId.ToString();
-        var snapshotKey = snapshotId.ToString();
-        var row = db.GetTable<SchemaSnapshotRow>()
-            .ToArray()
-            .SingleOrDefault(snapshot =>
-                string.Equals(snapshot.ConnectionId, connectionKey, StringComparison.Ordinal)
-                && string.Equals(snapshot.SnapshotId, snapshotKey, StringComparison.Ordinal)
-            );
+        using var db = database.OpenNative();
+        var row = db.Single(
+            SnapshotSelect + " WHERE ConnectionId = @connectionId AND SnapshotId = @snapshotId",
+            ReadSnapshot,
+            new ControlParameter("connectionId", connectionId.ToString()),
+            new ControlParameter("snapshotId", snapshotId.ToString())
+        );
         return Task.FromResult(row is null ? null : ToSnapshot(row));
     }
 
@@ -121,16 +140,14 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
-        var connectionKey = connectionId.ToString();
-        var row = db.GetTable<SchemaSnapshotRow>()
-            .ToArray()
-            .Where(snapshot =>
-                string.Equals(snapshot.ConnectionId, connectionKey, StringComparison.Ordinal)
-                && string.Equals(snapshot.SnapshotHash, hash, StringComparison.Ordinal)
+        using var db = database.OpenNative();
+        var row = db.Query(
+                SnapshotSelect
+                    + " WHERE ConnectionId = @connectionId AND SnapshotHash = @snapshotHash ORDER BY CreatedUtc ASC, SnapshotId ASC LIMIT 1",
+                ReadSnapshot,
+                new ControlParameter("connectionId", connectionId.ToString()),
+                new ControlParameter("snapshotHash", hash)
             )
-            .OrderBy(snapshot => snapshot.CreatedUtc, StringComparer.Ordinal)
-            .ThenBy(snapshot => snapshot.SnapshotId, StringComparer.Ordinal)
             .FirstOrDefault();
         return Task.FromResult(row is null ? null : ToSnapshot(row));
     }
@@ -220,10 +237,8 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<StoredSchemaSnapshot?> GetLatestAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
-        var row = db.GetTable<SchemaSnapshotRow>()
-            .ToArray()
-            .OrderByDescending(snapshot => snapshot.CreatedUtc, StringComparer.Ordinal)
+        using var db = database.OpenNative();
+        var row = db.Query(SnapshotSelect + " ORDER BY CreatedUtc DESC, rowid ASC LIMIT 1", ReadSnapshot)
             .FirstOrDefault();
         if (row is null)
             return Task.FromResult<StoredSchemaSnapshot?>(null);
@@ -233,67 +248,57 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<SchemaScan?> ClaimNextAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         using var transaction = db.BeginTransaction();
-        var row = db.GetTable<SchemaScanRow>()
-            .Where(scan => scan.State == SchemaScanState.Queued.ToString())
-            .OrderBy(scan => scan.CreatedUtc)
-            .ThenBy(scan => scan.ScanId)
+        var row = db.Query(
+                ScanSelect + " WHERE State = @queued ORDER BY CreatedUtc ASC, ScanId ASC LIMIT 1",
+                ReadScan,
+                new ControlParameter("queued", SchemaScanState.Queued.ToString())
+            )
             .FirstOrDefault();
         if (row is null)
             return Task.FromResult<SchemaScan?>(null);
         var affected = db.Execute(
             "UPDATE SchemaScans SET State = @state, UpdatedUtc = @updatedUtc WHERE ScanId = @scanId AND State = @queued",
-            new DataParameter[]
-            {
-                new("state", SchemaScanState.Running.ToString()),
-                new("updatedUtc", Stamp(clock.UtcNow)),
-                new("scanId", row.ScanId),
-                new("queued", SchemaScanState.Queued.ToString()),
-            }
+            new ControlParameter("state", SchemaScanState.Running.ToString()),
+            new ControlParameter("updatedUtc", Stamp(clock.UtcNow)),
+            new ControlParameter("scanId", row.ScanId),
+            new ControlParameter("queued", SchemaScanState.Queued.ToString())
         );
         if (affected != 1)
             return Task.FromResult<SchemaScan?>(null);
         transaction.Commit();
-        row.State = SchemaScanState.Running.ToString();
-        return Task.FromResult<SchemaScan?>(ToScan(row));
+        return Task.FromResult<SchemaScan?>(ToScan(row with { State = SchemaScanState.Running.ToString() }));
     }
 
     public Task CompleteAsync(SchemaScan scan, SchemaSnapshotContent content, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         using var transaction = db.BeginTransaction();
-        var snapshot = new SchemaSnapshotRow
-        {
-            SnapshotId = Guid.NewGuid().ToString(),
-            ConnectionId = scan.ConnectionId.ToString(),
-            SnapshotHash = CanonicalSchemaSnapshotHasher.Hash(content),
-            ContentJson = JsonSerializer.Serialize(ToRow(content)),
-            CreatedUtc = Stamp(clock.UtcNow),
-        };
+        var snapshot = new SnapshotRecord(
+            Guid.NewGuid().ToString(),
+            scan.ConnectionId.ToString(),
+            CanonicalSchemaSnapshotHasher.Hash(content),
+            JsonSerializer.Serialize(ToRow(content)),
+            Stamp(clock.UtcNow)
+        );
         db.Execute(
             "INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)",
-            new DataParameter[]
-            {
-                new("snapshotId", snapshot.SnapshotId),
-                new("connectionId", snapshot.ConnectionId),
-                new("snapshotHash", snapshot.SnapshotHash),
-                new("contentJson", snapshot.ContentJson),
-                new("createdUtc", snapshot.CreatedUtc),
-            }
+            new ControlParameter("snapshotId", snapshot.SnapshotId),
+            new ControlParameter("connectionId", snapshot.ConnectionId),
+            new ControlParameter("snapshotHash", snapshot.SnapshotHash),
+            new ControlParameter("contentJson", snapshot.ContentJson),
+            new ControlParameter("createdUtc", snapshot.CreatedUtc)
         );
         db.Execute(
             "UPDATE SchemaScans SET State = @state, SnapshotId = @snapshotId, SnapshotHash = @snapshotHash, FailureCode = NULL, UpdatedUtc = @updatedUtc WHERE ScanId = @scanId AND State = @running",
-            new DataParameter[]
-            {
-                new("state", SchemaScanState.Completed.ToString()),
-                new("snapshotId", snapshot.SnapshotId),
-                new("snapshotHash", snapshot.SnapshotHash),
-                new("updatedUtc", Stamp(clock.UtcNow)),
-                new("scanId", scan.ScanId.ToString()),
-                new("running", SchemaScanState.Running.ToString()),
-            }
+            new ControlParameter("state", SchemaScanState.Completed.ToString()),
+            new ControlParameter("snapshotId", snapshot.SnapshotId),
+            new ControlParameter("snapshotHash", snapshot.SnapshotHash),
+            new ControlParameter("updatedUtc", Stamp(clock.UtcNow)),
+            new ControlParameter("scanId", scan.ScanId.ToString()),
+            new ControlParameter("running", SchemaScanState.Running.ToString())
         );
         transaction.Commit();
         return Task.CompletedTask;
@@ -302,22 +307,35 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task FailAsync(Guid scanId, string failureCode, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.Open();
+        using var db = database.OpenNative();
         db.Execute(
             "UPDATE SchemaScans SET State = @state, FailureCode = @failureCode, UpdatedUtc = @updatedUtc WHERE ScanId = @scanId AND State = @running",
-            new DataParameter[]
-            {
-                new("state", SchemaScanState.Failed.ToString()),
-                new("failureCode", failureCode),
-                new("updatedUtc", Stamp(clock.UtcNow)),
-                new("scanId", scanId.ToString()),
-                new("running", SchemaScanState.Running.ToString()),
-            }
+            new ControlParameter("state", SchemaScanState.Failed.ToString()),
+            new ControlParameter("failureCode", failureCode),
+            new ControlParameter("updatedUtc", Stamp(clock.UtcNow)),
+            new ControlParameter("scanId", scanId.ToString()),
+            new ControlParameter("running", SchemaScanState.Running.ToString())
         );
         return Task.CompletedTask;
     }
 
-    private static StoredSchemaSnapshot ToSnapshot(SchemaSnapshotRow row)
+    private static ScanRecord ReadScan(SqliteDataReader reader) =>
+        new(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.IsDBNull(5) ? null : reader.GetString(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            reader.GetString(7),
+            reader.GetString(8)
+        );
+
+    private static SnapshotRecord ReadSnapshot(SqliteDataReader reader) =>
+        new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4));
+
+    private static StoredSchemaSnapshot ToSnapshot(SnapshotRecord row)
     {
         var content =
             JsonSerializer.Deserialize<SnapshotRow>(row.ContentJson)
@@ -331,7 +349,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
         );
     }
 
-    private static SchemaScan ToScan(SchemaScanRow row) =>
+    private static SchemaScan ToScan(ScanRecord row) =>
         new(
             Guid.Parse(row.ScanId),
             Guid.Parse(row.ConnectionId),
@@ -340,17 +358,6 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
             row.SnapshotHash,
             row.FailureCode
         );
-
-    private static DataParameter[] Parameters(SchemaScanRow row) =>
-        new DataParameter[]
-        {
-            new("scanId", row.ScanId),
-            new("connectionId", row.ConnectionId),
-            new("idempotencyKey", row.IdempotencyKey),
-            new("state", row.State),
-            new("createdUtc", row.CreatedUtc),
-            new("updatedUtc", row.UpdatedUtc),
-        };
 
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
 
@@ -436,6 +443,26 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     private static AddressRow ToRow(SchemaTableAddress address) => new(address.Schema, address.Name);
 
     private static SchemaTableAddress FromRow(AddressRow row) => new(row.Schema, row.Name);
+
+    private sealed record ScanRecord(
+        string ScanId,
+        string ConnectionId,
+        string IdempotencyKey,
+        string State,
+        string? SnapshotId,
+        string? SnapshotHash,
+        string? FailureCode,
+        string CreatedUtc,
+        string UpdatedUtc
+    );
+
+    private sealed record SnapshotRecord(
+        string SnapshotId,
+        string ConnectionId,
+        string SnapshotHash,
+        string ContentJson,
+        string CreatedUtc
+    );
 
     private sealed record SnapshotRow(
         TableRow[] Tables,
