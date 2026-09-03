@@ -5,7 +5,6 @@ using DataPitcher.Core.Schema;
 using DataPitcher.Core.Selection;
 using DataPitcher.Core.Time;
 using DataPitcher.Core.Transfer;
-using LinqToDB.Data;
 
 namespace DataPitcher.ControlStore;
 
@@ -37,7 +36,7 @@ public sealed class ControlDatabaseMigrator(ControlDatabase database, IClock clo
 
     public void Apply()
     {
-        using var db = database.Open();
+        using var db = database.OpenNative();
         db.Execute(
             "CREATE TABLE IF NOT EXISTS SchemaVersion (Version INTEGER NOT NULL PRIMARY KEY, AppliedUtc TEXT NOT NULL);"
         );
@@ -48,8 +47,8 @@ public sealed class ControlDatabaseMigrator(ControlDatabase database, IClock clo
             db.Execute(ReadScript(script.Resource));
             db.Execute(
                 "INSERT INTO SchemaVersion (Version, AppliedUtc) VALUES (@version, @appliedUtc)",
-                new DataParameter("version", script.Version),
-                new DataParameter("appliedUtc", clock.UtcNow.ToString("O"))
+                new ControlParameter("version", script.Version),
+                new ControlParameter("appliedUtc", clock.UtcNow.ToString("O"))
             );
             transaction.Commit();
         }
