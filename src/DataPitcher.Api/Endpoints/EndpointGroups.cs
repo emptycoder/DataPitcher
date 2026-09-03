@@ -20,7 +20,8 @@ public static class EndpointGroups
         WithStandardProblems(connections.MapPost("", CreateConnectionAsync).RequireAuthorization(ApiPolicyNames.ConnectionsWrite));
         WithStandardProblems(connections.MapPost("/{connectionId:guid}/checks", QueueConnectionCheckAsync).RequireAuthorization(ApiPolicyNames.ConnectionsWrite));
         WithStandardProblems(connections.MapPost("/{connectionId:guid}/schema-scans", QueueSchemaScanAsync).RequireAuthorization(ApiPolicyNames.SchemaWrite));
-        WithStandardProblems(connections.MapGet("/{connectionId:guid}/snapshots/{snapshotId:guid}", GetSnapshotAsync).RequireAuthorization(ApiPolicyNames.SchemaRead));
+        WithStandardProblems(connections.MapGet("/{connectionId:guid}/snapshots", ListSnapshotsAsync).RequireAuthorization(ApiPolicyNames.SchemaRead));
+        WithStandardProblems(connections.MapGet("/{connectionId:guid}/snapshots/{snapshotId:guid}", GetSnapshotAsync).RequireAuthorization(ApiPolicyNames.SchemaRead)).ProducesProblem(StatusCodes.Status404NotFound);
 
         var selections = app.MapGroup("/api/selections");
         WithStandardProblems(selections.MapPut("/{selectionId:guid}", SaveSelectionAsync).RequireAuthorization(ApiPolicyNames.SelectionsWrite));
@@ -83,11 +84,19 @@ public static class EndpointGroups
         return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
     }
 
+    private static async Task<Results<Ok<IReadOnlyList<SchemaSnapshotSummaryResponse>>, ProblemHttpResult>> ListSnapshotsAsync(
+        Guid connectionId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
+    {
+        if (await AuthorizeResourceAsync(context, authorizationService, user, new ConnectionResource(connectionId), Permissions.SchemaRead) is { } problem) return problem;
+        return TypedResults.Ok(await application.ListSnapshotsAsync(connectionId, cancellationToken));
+    }
+
     private static async Task<Results<Ok<SchemaSnapshotResponse>, ProblemHttpResult>> GetSnapshotAsync(
         Guid connectionId, Guid snapshotId, HttpContext context, ClaimsPrincipal user, IAuthorizationService authorizationService, IDataPitcherApplication application, CancellationToken cancellationToken)
     {
         if (await AuthorizeResourceAsync(context, authorizationService, user, new ConnectionResource(connectionId), Permissions.SchemaRead) is { } problem) return problem;
-        return TypedResults.Ok(await application.GetSnapshotAsync(connectionId, snapshotId, cancellationToken));
+        var snapshot = await application.FindSnapshotAsync(connectionId, snapshotId, cancellationToken);
+        return snapshot is null ? TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: "Schema snapshot not found.") : TypedResults.Ok(snapshot);
     }
 
     private static async Task<Results<Ok<SelectionResponse>, ProblemHttpResult>> SaveSelectionAsync(
