@@ -293,7 +293,15 @@ public enum JobCommand
     Cancel,
 }
 
-public sealed record JobResponse(Guid JobId, Guid PlanId, string State, long RowsTransferred, long BytesTransferred);
+public sealed record JobResponse(
+    Guid JobId,
+    Guid PlanId,
+    string State,
+    long RowsTransferred,
+    long BytesTransferred,
+    string? FailureCode = null,
+    string? FailureDetail = null
+);
 
 public sealed record JobSummaryResponse(
     Guid JobId,
@@ -302,5 +310,7 @@ public sealed record JobSummaryResponse(
     DateTimeOffset CreatedUtc,
     DateTimeOffset UpdatedUtc,
     long RowsTransferred,
-    long BytesTransferred
+    long BytesTransferred,
+    string? FailureCode = null,
+    string? FailureDetail = null
 );

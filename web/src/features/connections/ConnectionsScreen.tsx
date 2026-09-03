@@ -156,25 +156,18 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                 .getQueryData<readonly Connection[]>(queryKeys.connections)
                 ?.find((item) => item.connectionId === connection.connectionId);
             const health = refreshed?.health ?? 'Unknown';
-            if (health === 'Healthy') {
-                setCheckDetail(null);
-                toast.success(`${connection.displayName} is healthy`);
-            } else if (health === 'Degraded') {
-                // Every required capability is present; only optional ones (snapshot isolation) are missing.
+            if (health === 'Healthy' || health === 'Degraded') {
+                // Healthy. Optional capabilities that are unavailable are shown as a note, never as a failure.
                 try {
-                    setCheckDetail(
-                        await connectionsApi.test(
-                            { providerId: connection.providerId, connectionId: connection.connectionId },
-                            authentication,
-                        ),
+                    const detail = await connectionsApi.test(
+                        { providerId: connection.providerId, connectionId: connection.connectionId },
+                        authentication,
                     );
+                    setCheckDetail(detail.missingOptional?.length ? detail : null);
                 } catch {
                     setCheckDetail(null);
                 }
-                toast.success(
-                    `${connection.displayName} is usable`,
-                    'Degraded: an optional capability is unavailable. Transfers can still run.',
-                );
+                toast.success(`${connection.displayName} is healthy`);
             } else {
                 try {
                     setCheckDetail(
@@ -396,8 +389,8 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
             </div>
 
             {checkDetail?.succeeded && checkDetail.missingOptional?.length ? (
-                <Alert tone="warning">
-                    <div className="font-medium">Usable with limitations</div>
+                <Alert tone="info">
+                    <div className="font-medium">Healthy, with a note</div>
                     <div className="mt-0.5 text-xs opacity-80">Optional: {checkDetail.missingOptional.join(', ')}</div>
                     <ProbeNotes notes={checkDetail.notes} />
                 </Alert>
@@ -1018,14 +1011,7 @@ function ConnectionDialog({
 
                 {testResult ? (
                     testResult.succeeded ? (
-                        <Alert
-                            title={
-                                testResult.missingOptional?.length
-                                    ? 'Connection succeeded with limitations'
-                                    : 'Connection succeeded'
-                            }
-                            tone={testResult.missingOptional?.length ? 'warning' : 'success'}
-                        >
+                        <Alert title="Connection succeeded" tone="success">
                             {testResult.databaseIdentity ? (
                                 <span className="font-mono">{testResult.databaseIdentity}</span>
                             ) : null}

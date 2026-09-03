@@ -1,6 +1,15 @@
+using System.Text.Json.Serialization;
+
 namespace DataPitcher.Core.Jobs;
 
-public sealed record JobEventPayload(string State, long RowsTransferred, long BytesTransferred);
+/// <summary>Progress or state change of a job. <paramref name="Detail"/> carries the reason for a failure.</summary>
+/// <summary>Progress or state change of a job. <paramref name="Detail"/> carries the reason for a failure.</summary>
+public sealed record JobEventPayload(
+    string State,
+    long RowsTransferred,
+    long BytesTransferred,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Detail = null
+);
 
 public sealed record JobEvent(
     Guid JobId,

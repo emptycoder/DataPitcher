@@ -38,6 +38,8 @@ export const JobSchema = z.object({
   state: z.string(),
   rowsTransferred: z.number(),
   bytesTransferred: z.number(),
+  failureCode: z.string().nullable().optional(),
+  failureDetail: z.string().nullable().optional(),
 });
 export type Job = z.infer<typeof JobSchema>;
 
@@ -86,9 +88,10 @@ export const JobEventPayloadSchema = z.object({
   State: z.string(),
   RowsTransferred: z.number().int().nonnegative(),
   BytesTransferred: z.number().int().nonnegative(),
+  Detail: z.string().nullable().optional(),
 });
 
-export type JobStreamEvent = Readonly<{ id: number; type: string; state: JobState | 'unknown'; rowsTransferred: number; bytesTransferred: number; receivedAt: number }>;
+export type JobStreamEvent = Readonly<{ id: number; type: string; state: JobState | 'unknown'; rowsTransferred: number; bytesTransferred: number; receivedAt: number; detail?: string | null }>;
 export type JobStreamStatus = 'connecting' | 'live' | 'reconnecting' | 'ended' | 'forbidden' | 'unauthorized' | 'cursor-expired';
 
 export type JobStreamHandlers = Readonly<{
@@ -203,6 +206,7 @@ export function streamJobEvents(jobId: string, auth: AuthenticationAdapter, hand
             rowsTransferred: parsed.data.RowsTransferred,
             bytesTransferred: parsed.data.BytesTransferred,
             receivedAt: Date.now(),
+            detail: parsed.data.Detail ?? null,
           };
           handlers.onEvent(event);
           if (isTerminal(event.state)) {

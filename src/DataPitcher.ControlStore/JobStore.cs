@@ -8,7 +8,7 @@ namespace DataPitcher.ControlStore;
 public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepository
 {
     private const string SelectJob =
-        "SELECT JobId, RunId, PlanId, IdempotencyKey, State, CreatedUtc, UpdatedUtc, FailureCode FROM Jobs";
+        "SELECT JobId, RunId, PlanId, IdempotencyKey, State, CreatedUtc, UpdatedUtc, FailureCode, FailureDetail FROM Jobs";
 
     private const string NoElements = "Sequence contains no elements";
 
@@ -132,6 +132,13 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
     public Task MarkFailedAsync(LeaseGrant lease, string failureCode, CancellationToken cancellationToken) =>
         TransitionWorkerAsync(lease, JobState.Failed, failureCode, true, cancellationToken);
 
+    public Task MarkFailedAsync(
+        LeaseGrant lease,
+        string failureCode,
+        string? failureDetail,
+        CancellationToken cancellationToken
+    ) => TransitionWorkerAsync(lease, JobState.Failed, failureCode, true, cancellationToken, failureDetail);
+
     public JobTransitionResult TryTransition(LeaseGrant lease, JobState to)
     {
         using var db = database.Open();
@@ -212,7 +219,8 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
         JobState to,
         string? failureCode,
         bool releaseLease,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        string? failureDetail = null
     )
     {
         using var db = database.Open();
@@ -221,13 +229,14 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
         var from = job.State;
         JobStateMachine.EnsureTransition(from, to);
         var now = Stamp(clock.UtcNow);
-        var failure = failureCode is null ? "" : ", FailureCode = @failureCode";
+        var failure = failureCode is null ? "" : ", FailureCode = @failureCode, FailureDetail = @failureDetail";
         var affected = await db.ExecuteAsync(
             $"UPDATE Jobs SET State = @toState, UpdatedUtc = @nowUtc{failure} WHERE JobId = @jobId AND State = @fromState AND EXISTS (SELECT 1 FROM JobLeases WHERE JobId = @jobId AND OwnerId = @ownerId AND FenceToken = @fenceToken AND ExpiresUtc > @nowUtc)",
             cancellationToken,
             new ControlParameter("toState", to.ToString()),
             new ControlParameter("nowUtc", now),
             new ControlParameter("failureCode", failureCode),
+            new ControlParameter("failureDetail", failureDetail),
             new ControlParameter("jobId", lease.JobId.ToString()),
             new ControlParameter("fromState", from.ToString()),
             new ControlParameter("ownerId", lease.OwnerId),
@@ -310,7 +319,8 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
             Enum.Parse<JobState>(reader.GetString(4)),
             reader.IsDBNull(7) ? null : reader.GetString(7),
             ParseStamp(reader.GetString(5)),
-            ParseStamp(reader.GetString(6))
+            ParseStamp(reader.GetString(6)),
+            reader.IsDBNull(8) ? null : reader.GetString(8)
         );
 
     private static DateTimeOffset ParseStamp(string value) =>

@@ -209,7 +209,12 @@ public sealed class JobStoreRecoveryTests
         var failedClaim = (await store.TryClaimNextAsync("worker-a", ttl, CancellationToken.None))!;
         await store.PrepareAsync(failedClaim, CancellationToken.None);
         await store.MarkRunningAsync(failedClaim.Lease, CancellationToken.None);
-        await store.MarkFailedAsync(failedClaim.Lease, "NonResumableInterrupted", CancellationToken.None);
+        await store.MarkFailedAsync(
+            failedClaim.Lease,
+            "NonResumableInterrupted",
+            "Login failed for user 'app'.",
+            CancellationToken.None
+        );
         var verifying = store.Start(new(Guid.NewGuid(), "start-verifying")).Job;
         var verifyingClaim = (await store.TryClaimNextAsync("worker-b", ttl, CancellationToken.None))!;
         await store.PrepareAsync(verifyingClaim, CancellationToken.None);
@@ -217,6 +222,7 @@ public sealed class JobStoreRecoveryTests
         await store.MarkVerifyingAsync(verifyingClaim.Lease, CancellationToken.None);
 
         using var db = fixture.Database.Open();
+        Assert.Equal("Login failed for user 'app'.", store.Get(failed.JobId).FailureDetail);
         Assert.Equal(
             "NonResumableInterrupted",
             db.Query<string>(

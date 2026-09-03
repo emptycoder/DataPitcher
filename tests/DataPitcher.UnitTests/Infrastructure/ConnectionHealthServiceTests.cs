@@ -148,7 +148,7 @@ public sealed class ConnectionHealthServiceTests
     }
 
     [Fact]
-    public async Task RevalidateAsync_WhenAConnectionIsOnlyDegraded_StillAllowsTheTransfer()
+    public async Task RevalidateAsync_WhenOnlyOptionalCapabilitiesAreMissing_ReportsHealthyAndAllowsTheTransfer()
     {
         using var fixture = new ControlDatabaseFixture();
         fixture.Migrator.Apply();
@@ -180,7 +180,7 @@ public sealed class ConnectionHealthServiceTests
         await service.RevalidateAsync(run, CancellationToken.None);
 
         Assert.Equal(
-            ConnectionHealthState.Degraded,
+            ConnectionHealthState.Healthy,
             (await store.GetSummaryAsync(source.ConnectionId, CancellationToken.None)).Health
         );
         Assert.True(ConnectionHealthService.IsUsable(ConnectionHealthState.Degraded));

@@ -140,8 +140,27 @@ internal sealed class SingleClaimJobControl(JobClaim claim, List<string> calls) 
     public Task MarkCancelledAsync(LeaseGrant lease, CancellationToken cancellationToken) =>
         Task.FromException(new NotSupportedException());
 
+    private readonly TaskCompletionSource<bool> _failed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public Task Failed => _failed.Task;
+    public string? FailureCode { get; private set; }
+    public string? FailureDetail { get; private set; }
+
     public Task MarkFailedAsync(LeaseGrant lease, string failureCode, CancellationToken cancellationToken) =>
-        Task.FromException(new NotSupportedException());
+        MarkFailedAsync(lease, failureCode, null, cancellationToken);
+
+    public Task MarkFailedAsync(
+        LeaseGrant lease,
+        string failureCode,
+        string? failureDetail,
+        CancellationToken cancellationToken
+    )
+    {
+        calls.Add("MarkFailed");
+        FailureCode = failureCode;
+        FailureDetail = failureDetail;
+        _failed.TrySetResult(true);
+        return Task.CompletedTask;
+    }
 
     private async Task<JobClaim?> WaitForStopAsync(CancellationToken cancellationToken)
     {
@@ -323,8 +342,25 @@ internal sealed class BoundaryJobControl(JobClaim claim) : IJobControl
 
     public Task MarkSucceededAsync(LeaseGrant lease, CancellationToken cancellationToken) => Task.CompletedTask;
 
+    public string? FailureCode { get; private set; }
+    public string? FailureDetail { get; private set; }
+
     public Task MarkFailedAsync(LeaseGrant lease, string failureCode, CancellationToken cancellationToken) =>
-        Task.FromException(new NotSupportedException());
+        MarkFailedAsync(lease, failureCode, null, cancellationToken);
+
+    public Task MarkFailedAsync(
+        LeaseGrant lease,
+        string failureCode,
+        string? failureDetail,
+        CancellationToken cancellationToken
+    )
+    {
+        State = JobState.Failed;
+        FailureCode = failureCode;
+        FailureDetail = failureDetail;
+        _terminalState.TrySetResult(State);
+        return Task.CompletedTask;
+    }
 
     public Task RequestPauseAsync(Guid jobId, CancellationToken cancellationToken) =>
         Task.FromException(new NotSupportedException());

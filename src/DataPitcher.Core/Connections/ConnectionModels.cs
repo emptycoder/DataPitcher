@@ -193,10 +193,12 @@ public static class ConnectionHealthClassifier
         var missingOptional = requirements
             .Optional.Where(capability => !evidence.Available.Contains(capability))
             .ToHashSet();
+        // Only required capabilities decide health. Missing optional ones (snapshot isolation, durable resume) are
+        // reported alongside a Healthy verdict so operators see the limitation without the connection being flagged.
         var state =
-            evidence.CleanupFailureCode is not null || missingRequired.Count != 0 ? ConnectionHealthState.Unhealthy
-            : missingOptional.Count != 0 ? ConnectionHealthState.Degraded
-            : ConnectionHealthState.Healthy;
+            evidence.CleanupFailureCode is not null || missingRequired.Count != 0
+                ? ConnectionHealthState.Unhealthy
+                : ConnectionHealthState.Healthy;
         return new ConnectionAssessment(
             state,
             evidence.DatabaseIdentity,

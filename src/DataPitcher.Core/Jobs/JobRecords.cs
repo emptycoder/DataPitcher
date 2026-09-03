@@ -8,7 +8,8 @@ public sealed record TransferJob(
     JobState State,
     string? FailureCode = null,
     DateTimeOffset CreatedUtc = default,
-    DateTimeOffset UpdatedUtc = default
+    DateTimeOffset UpdatedUtc = default,
+    string? FailureDetail = null
 );
 
 public sealed record StartJobRequest(Guid PlanId, string IdempotencyKey);
@@ -33,6 +34,14 @@ public interface IJobControl
     Task MarkVerifyingAsync(LeaseGrant lease, CancellationToken cancellationToken);
     Task MarkSucceededAsync(LeaseGrant lease, CancellationToken cancellationToken);
     Task MarkFailedAsync(LeaseGrant lease, string failureCode, CancellationToken cancellationToken);
+
+    /// <summary>Marks the job failed with a fixed code and an operator-readable reason (secrets removed).</summary>
+    Task MarkFailedAsync(
+        LeaseGrant lease,
+        string failureCode,
+        string? failureDetail,
+        CancellationToken cancellationToken
+    ) => MarkFailedAsync(lease, failureCode, cancellationToken);
 }
 
 /// <summary>Job persistence beyond worker control: starting, listing and inspecting jobs.</summary>

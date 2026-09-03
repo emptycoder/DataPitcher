@@ -133,7 +133,7 @@ public sealed class ConnectionModelsTests
     }
 
     [Fact]
-    public void ConnectionHealthClassifier_WhenOnlyOptionalCapabilityIsMissing_IsDegraded()
+    public void ConnectionHealthClassifier_WhenOnlyOptionalCapabilityIsMissing_StaysHealthyAndReportsTheGap()
     {
         var requirements = new ConnectionRequirements(
             new HashSet<ConnectionCapability> { ConnectionCapability.CanConnect, ConnectionCapability.CanReadSchema },
@@ -153,7 +153,7 @@ public sealed class ConnectionModelsTests
             )
         );
 
-        Assert.Equal(ConnectionHealthState.Degraded, assessment.State);
+        Assert.Equal(ConnectionHealthState.Healthy, assessment.State);
         Assert.Single(
             assessment.MissingOptional,
             capability => capability == ConnectionCapability.SupportsDurableResume

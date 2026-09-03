@@ -14,7 +14,7 @@ import { Icons } from '../../ui/icons';
 import { useToast } from '../../ui/toast';
 import { useJob, useJobs, usePlanReview } from '../shared/queries';
 
-type Live = Readonly<{ state: JobState | 'unknown'; rows: number; bytes: number; at: number; source: 'stream' | 'poll' }>;
+type Live = Readonly<{ state: JobState | 'unknown'; rows: number; bytes: number; at: number; source: 'stream' | 'poll'; detail?: string | null }>;
 
 const pipeline: readonly JobState[] = ['queued', 'preparing', 'running', 'verifying', 'succeeded'];
 
@@ -55,10 +55,10 @@ export function TransferDetailScreen({ jobId }: Readonly<{ jobId: string }>) {
 
   // Live event stream.
   useEffect(() => {
-    if (!job.data || isTerminal(job.data.state)) return;
+    if (!job.data || isTerminal(job.data.state) || terminal) return;
     const stop = streamJobEvents(jobId, authentication, {
       onEvent: (event) => {
-        setLive({ state: event.state, rows: event.rowsTransferred, bytes: event.bytesTransferred, at: event.receivedAt, source: 'stream' });
+        setLive({ state: event.state, rows: event.rowsTransferred, bytes: event.bytesTransferred, at: event.receivedAt, source: 'stream', detail: event.detail });
         setEvents((current) => [...current.slice(-199), event]);
         if (isTerminal(event.state)) {
           void queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) });
@@ -70,12 +70,16 @@ export function TransferDetailScreen({ jobId }: Readonly<{ jobId: string }>) {
     return stop;
     // Reconnect only when the job identity changes or it first loads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId, authentication, job.data?.jobId]);
+  }, [jobId, authentication, job.data?.jobId, terminal]);
 
-  // Fall back to polling while the stream is not live (e.g. between events after a reconnect).
+  // Always poll the job record while it is not finished: quickly when the stream is down, slowly as a safety net
+  // while it is live, so a state change that never reached the stream still shows up.
   useEffect(() => {
-    if (terminal || streamStatus === 'live') return;
-    const handle = window.setInterval(() => void queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) }), 2500);
+    if (terminal) return;
+    const handle = window.setInterval(
+      () => void queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) }),
+      streamStatus === 'live' ? 10_000 : 2500,
+    );
     return () => window.clearInterval(handle);
   }, [terminal, streamStatus, queryClient, jobId]);
 
@@ -201,7 +205,14 @@ export function TransferDetailScreen({ jobId }: Readonly<{ jobId: string }>) {
           <Stepper steps={pipeline.map((step, index) => ({ key: step, label: humanizeState(step), status: stepStatuses(state)[index]! }))} />
         </div>
         {state === 'paused' ? <Alert className="mt-4" tone="warning">Paused at the last committed checkpoint. Resume to continue exactly where it stopped.</Alert> : null}
-        {state === 'failed' ? <Alert className="mt-4" tone="danger">The transfer failed. Committed batches remain in the target; nothing partial was left uncommitted.</Alert> : null}
+        {state === 'failed' ? (
+          <Alert className="mt-4" title="The transfer failed" tone="danger">
+            <div className="break-words">{job.data?.failureDetail ?? live?.detail ?? 'No reason was recorded.'}</div>
+            <div className="mt-1 text-xs opacity-80">
+              {job.data?.failureCode ? `${job.data.failureCode} · ` : ''}Committed batches remain in the target; nothing partial was left uncommitted.
+            </div>
+          </Alert>
+        ) : null}
         {state === 'verificationfailed' ? <Alert className="mt-4" tone="danger">Rows were written, but post-transfer verification did not pass.</Alert> : null}
         {state === 'cancelled' ? <Alert className="mt-4" tone="neutral">Cancelled by request. Committed batches remain in the target.</Alert> : null}
         {state === 'succeeded' ? <Alert className="mt-4" tone="success">Transfer complete and verified.</Alert> : null}

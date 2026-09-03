@@ -1,3 +1,4 @@
+using DataPitcher.Application.Connections;
 using DataPitcher.Application.Events;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Jobs;
@@ -51,6 +52,8 @@ public sealed class JobWorker(
         using var leaseLost = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         using var renewalStop = new CancellationTokenSource();
         var renewal = renewer.RunAsync(claim.Lease, leaseTtl, leaseLost, renewalStop.Token);
+        long rows = 0;
+        long bytes = 0;
         try
         {
             await jobs.PrepareAsync(claim, leaseLost.Token);
@@ -62,6 +65,7 @@ public sealed class JobWorker(
             await revalidator.RevalidateAsync(run, leaseLost.Token);
             await using var target = await targets.OpenAsync(run, leaseLost.Token);
             var checkpoint = await recovery.RecoverAsync(claim, run, target, leaseLost.Token);
+            (rows, bytes) = (checkpoint.RowCount, checkpoint.BytesTransferred);
             await jobs.MarkRunningAsync(claim.Lease, leaseLost.Token);
             await events.AppendAsync(
                 new JobEventAppend(
@@ -81,6 +85,7 @@ public sealed class JobWorker(
             {
                 await faults.HitAsync(TransferFaultPoint.BeforeTargetCommit, leaseLost.Token);
                 checkpoint = await target.ApplyAsync(run, claim.Lease, unit, leaseLost.Token);
+                (rows, bytes) = (checkpoint.RowCount, checkpoint.BytesTransferred);
                 await events.AppendAsync(
                     new JobEventAppend(
                         claim.Job.JobId,
@@ -98,12 +103,14 @@ public sealed class JobWorker(
                     await source.DiscardUncommittedAsync(cleanup.Token);
                     await target.DiscardUncommittedAsync(cleanup.Token);
                     await jobs.MarkCancelledAsync(claim.Lease, cleanup.Token);
+                    await AnnounceAsync(claim.Job.JobId, "cancelled", rows, bytes, null, cleanup.Token);
                     return;
                 }
                 if (state is JobState.Pausing)
                 {
                     await source.DiscardUncommittedAsync(leaseLost.Token);
                     await jobs.MarkPausedAsync(claim.Lease, leaseLost.Token);
+                    await AnnounceAsync(claim.Job.JobId, "paused", rows, bytes, null, leaseLost.Token);
                     return;
                 }
             }
@@ -117,15 +124,55 @@ public sealed class JobWorker(
                 leaseLost.Token
             );
             await jobs.MarkSucceededAsync(claim.Lease, leaseLost.Token);
+            await AnnounceAsync(claim.Job.JobId, "succeeded", rows, bytes, null, leaseLost.Token);
         }
-        catch (Exception) when (!stoppingToken.IsCancellationRequested)
+        catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
         {
-            await jobs.MarkFailedAsync(claim.Lease, "internal_error", stoppingToken);
+            var (code, detail) = Describe(exception);
+            await jobs.MarkFailedAsync(claim.Lease, code, detail, stoppingToken);
+            await AnnounceAsync(claim.Job.JobId, "failed", rows, bytes, detail, stoppingToken);
         }
         finally
         {
             renewalStop.Cancel();
             await renewal;
         }
+    }
+
+    /// <summary>Publishes a state change so live pages learn about it without polling; never fails the job.</summary>
+    private async Task AnnounceAsync(
+        Guid jobId,
+        string state,
+        long rows,
+        long bytes,
+        string? detail,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await events.AppendAsync(
+                new JobEventAppend(jobId, "state", new JobEventPayload(state, rows, bytes, detail)),
+                cancellationToken
+            );
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The job record already carries the state; the page falls back to polling it.
+        }
+    }
+
+    /// <summary>A fixed failure code plus the reason an operator can act on. Driver messages carry no secrets.</summary>
+    internal static (string Code, string Detail) Describe(Exception exception)
+    {
+        var root = exception.GetBaseException();
+        var message = root.Message.Length > 2000 ? root.Message[..2000] : root.Message;
+        var code = exception switch
+        {
+            ConnectionNotHealthyException => "connection_unhealthy",
+            NotSupportedException => "not_supported",
+            _ => "transfer_failed",
+        };
+        return (code, message);
     }
 }

@@ -711,7 +711,9 @@ public sealed class DataPitcherApplication(
                     job.CreatedUtc,
                     job.UpdatedUtc,
                     current.RowsTransferred,
-                    current.BytesTransferred
+                    current.BytesTransferred,
+                    job.FailureCode,
+                    job.FailureDetail
                 );
             })
         );
@@ -727,7 +729,9 @@ public sealed class DataPitcherApplication(
             job.PlanId,
             job.State.ToString(),
             latest?.Payload.RowsTransferred ?? 0,
-            latest?.Payload.BytesTransferred ?? 0
+            latest?.Payload.BytesTransferred ?? 0,
+            job.FailureCode,
+            job.FailureDetail
         );
     }
 

@@ -575,7 +575,7 @@ public sealed class JobWorkerTests
         var progress = Assert.Single(events.Appends, item => item.EventType == "progress");
         Assert.Equal(100, progress.Payload.BytesTransferred);
         Assert.Equal(
-            ["preparing", "running", "verifying"],
+            ["preparing", "running", "verifying", "succeeded"],
             events.Appends.Where(item => item.EventType == "state").Select(item => item.Payload.State)
         );
     }
@@ -603,6 +603,7 @@ public sealed class JobWorkerTests
         var targets = new CountingTargetFactory();
         var sources = new CountingSourceFactory();
         var mirror = new RecordingCheckpointMirror(calls);
+        var events = new RecordingJobEventWriter();
         var worker = new JobWorker(
             jobs,
             new TestJobRunCatalog(run),
@@ -612,7 +613,7 @@ public sealed class JobWorkerTests
             new RecoveryCoordinator(mirror),
             new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()),
             mirror,
-            new RecordingJobEventWriter(),
+            events,
             new NoWorkerFaults(),
             new BlockingWorkerDelay(),
             fixture.Clock,
@@ -623,6 +624,9 @@ public sealed class JobWorkerTests
 
         await worker.StartAsync(CancellationToken.None);
         await revalidator.Called;
+        await jobs.Failed;
+        for (var attempt = 0; attempt < 100 && !events.Appends.Any(item => item.Payload.State == "failed"); attempt++)
+            await Task.Delay(20);
         await worker.StopAsync(CancellationToken.None);
 
         Assert.Equal(1, revalidator.Calls);
@@ -630,6 +634,11 @@ public sealed class JobWorkerTests
         Assert.Equal(run.TargetConnectionId, revalidator.Run.TargetConnectionId);
         Assert.Equal(0, targets.OpenCalls);
         Assert.Equal(0, sources.OpenCalls);
+        Assert.Equal("connection_unhealthy", jobs.FailureCode);
+        Assert.Equal("Connection health revalidation failed.", jobs.FailureDetail);
+        var failed = Assert.Single(events.Appends, item => item.Payload.State == "failed");
+        Assert.Equal("state", failed.EventType);
+        Assert.Equal("Connection health revalidation failed.", failed.Payload.Detail);
     }
 
     private sealed class RecordingJobEventWriter : IJobEventWriter
