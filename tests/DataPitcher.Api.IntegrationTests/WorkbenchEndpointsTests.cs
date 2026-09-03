@@ -26,6 +26,10 @@ public sealed class WorkbenchEndpointsTests(ApiWebApplicationFactory factory) : 
             schemaRevision = "schema-revision",
             connectionId,
             snapshotId,
+            rootSchema = "app",
+            rootTable = "Orders",
+            stableKeyConstraintName = "PK_Orders",
+            stableKeyColumns = new[] { "Id" },
         };
 
         using var response = await _client.PostAsJsonAsync("/api/selections/save", request, CancellationToken.None);
@@ -73,6 +77,10 @@ public sealed class WorkbenchEndpointsTests(ApiWebApplicationFactory factory) : 
             rawSql = "SELECT 1",
             parameters = Array.Empty<object>(),
             schemaRevision = "schema-revision",
+            rootSchema = "app",
+            rootTable = "Orders",
+            stableKeyConstraintName = "PK_Orders",
+            stableKeyColumns = new[] { "Id" },
         };
 
         using var response = await _client.PostAsJsonAsync("/api/selections/save", request, CancellationToken.None);

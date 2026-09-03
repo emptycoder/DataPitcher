@@ -14,6 +14,7 @@ using DataPitcher.Infrastructure.Schema;
 using DataPitcher.Infrastructure.Selections;
 using DataPitcher.Infrastructure.Storage;
 using DataPitcher.Infrastructure.Time;
+using DataPitcher.Infrastructure.Worker;
 using DataPitcher.Providers.PostgreSql;
 using DataPitcher.Providers.SqlServer;
 using LinqToDB.Data;
@@ -41,7 +42,15 @@ public sealed class ProductionCompositionTests
             Assert.IsType<DataPitcherApplication>(provider.GetRequiredService<IDataPitcherApplication>());
             Assert.IsType<SystemClock>(provider.GetRequiredService<IClock>());
             Assert.IsType<SecretReferenceResolver>(provider.GetRequiredService<ISecretReferenceResolver>());
-            Assert.IsType<SchemaScanWorker>(Assert.Single(provider.GetServices<IHostedService>()));
+            var hostedServices = provider.GetServices<IHostedService>();
+            Assert.Contains(
+                hostedServices,
+                service => string.Equals(service.GetType().Name, nameof(SchemaScanWorker), StringComparison.Ordinal)
+            );
+            Assert.Contains(
+                hostedServices,
+                service => string.Equals(service.GetType().Name, nameof(JobWorker), StringComparison.Ordinal)
+            );
             var registry = provider.GetRequiredService<IConnectionProviderRegistry>();
             Assert.IsType<PostgreSqlConnectionProvider>(registry.Get("postgresql"));
             Assert.IsType<SqlServerConnectionProvider>(registry.Get("sqlserver"));
@@ -224,7 +233,7 @@ public sealed class ProductionCompositionTests
         );
 
         Assert.Equal(selectionId, saved.SelectionId);
-        Assert.Equal("queued", receipt.State);
+        Assert.Equal("unknown", receipt.State);
         Assert.Equal("Selection was not found.", missing.Message);
     }
 
@@ -464,8 +473,15 @@ public sealed class ProductionCompositionTests
     )
     {
         using var fixture = new ProductionApplicationFixture();
+        var planId = Guid.NewGuid();
+        _ = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest("Plan", null, "ignored-on-create"),
+            CancellationToken.None
+        );
+        await fixture.Plans.SealAsync(planId, SealedContent(), CancellationToken.None);
         var receipt = await fixture.Application.StartJobAsync(
-            Guid.NewGuid(),
+            planId,
             "status-job-" + state,
             CancellationToken.None
         );
@@ -525,7 +541,14 @@ public sealed class ProductionCompositionTests
     public async Task DataPitcherApplication_ListsStartedJobs()
     {
         using var fixture = new ProductionApplicationFixture();
-        var started = await fixture.Application.StartJobAsync(Guid.NewGuid(), "list-job", CancellationToken.None);
+        var planId = Guid.NewGuid();
+        _ = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest("Plan", null, "ignored-on-create"),
+            CancellationToken.None
+        );
+        await fixture.Plans.SealAsync(planId, SealedContent(), CancellationToken.None);
+        var started = await fixture.Application.StartJobAsync(planId, "list-job", CancellationToken.None);
 
         var jobs = await fixture.Application.ListJobsAsync(CancellationToken.None);
 
