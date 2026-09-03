@@ -528,7 +528,7 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     public async Task SaveSelection_WhenIfMatchIsPresent_UsesSelectionIdentifier()
     {
         var selectionId = Guid.NewGuid();
-        var request = new SaveSelectionRequest("My selection", "{}", "etag-0");
+        var request = new SaveSelectionRequest("etag-0", "My selection");
         using var response = await _client.PutAsJsonAsync(
             $"/api/selections/{selectionId}",
             request,
@@ -537,6 +537,61 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var selection = await response.Content.ReadFromJsonAsync<SelectionResponse>();
         Assert.Equal(selectionId, selection!.SelectionId);
+    }
+
+    [Fact]
+    public async Task GetSelectionDetails_ReturnsTheStoredQuery()
+    {
+        var selectionId = Guid.NewGuid();
+
+        using var response = await _client.GetAsync($"/api/selections/{selectionId}", CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var details = await response.Content.ReadFromJsonAsync<SelectionDetailsResponse>();
+        Assert.Equal(selectionId, details!.SelectionId);
+        Assert.Equal("Orders", details.DisplayName);
+        Assert.Equal("app", details.Query.RootSchema);
+        Assert.Contains("GetSelectionDetailsAsync", _factory.Application.Invocations);
+    }
+
+    [Fact]
+    public async Task SaveSelection_WithOnlyADisplayName_IsAccepted()
+    {
+        var request = new SaveSelectionRequest("\"1\"", "Renamed");
+
+        using var response = await _client.PutAsJsonAsync(
+            $"/api/selections/{Guid.NewGuid()}",
+            request,
+            CancellationToken.None
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetPlanDetails_ReturnsTheEditableRecord()
+    {
+        var planId = Guid.NewGuid();
+
+        using var response = await _client.GetAsync($"/api/plans/{planId}", CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var details = await response.Content.ReadFromJsonAsync<PlanDetailsResponse>();
+        Assert.Equal(planId, details!.PlanId);
+        Assert.Equal("My plan", details.DisplayName);
+        Assert.Equal("note", details.OperatorNote);
+        Assert.Contains("GetPlanDetailsAsync", _factory.Application.Invocations);
+    }
+
+    [Fact]
+    public async Task GetPlanDetails_RequiresPlansRead()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/plans/{Guid.NewGuid()}");
+        request.Headers.Add("X-Test-Permissions", Permissions.ConnectionsRead.Value);
+
+        using var response = await _client.SendAsync(request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
@@ -562,7 +617,7 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     [Fact]
     public async Task SaveSelection_WhenIfMatchIsMissing_ReturnsValidationProblemDetails()
     {
-        var request = new SaveSelectionRequest("My selection", "{}", "");
+        var request = new SaveSelectionRequest("", "My selection");
         using var response = await _client.PutAsJsonAsync(
             $"/api/selections/{Guid.NewGuid()}",
             request,

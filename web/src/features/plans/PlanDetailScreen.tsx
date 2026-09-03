@@ -34,7 +34,7 @@ import { useToast } from '../../ui/toast';
 import { ProviderMark } from '../connections/ConnectionsScreen';
 import type { SchemaGraphProjection, SchemaTableAddress } from '../graph/graphLayout';
 import { SchemaGraph, tableKey, type NodeTone } from '../schema/SchemaGraph';
-import { usePlanReview } from '../shared/queries';
+import { usePlan, usePlanReview } from '../shared/queries';
 
 type Tab = 'tables' | 'graph' | 'checks' | 'trace';
 
@@ -45,6 +45,7 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
   const toast = useToast();
   const entry = usePlanEntry(planId);
   const selectionNames = useSelectionRegistry();
+  const stored = usePlan(planId);
   const review = usePlanReview(planId);
   const [tab, setTab] = useState<Tab>('tables');
   const [confirming, setConfirming] = useState(false);
@@ -65,6 +66,10 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
       plannedWrites: isSealed(review.data) ? review.data.totals.plannedWrites : null,
     });
   }, [planId, review.data]);
+  useEffect(() => {
+    if (!stored.data) return;
+    registryActions.upsertPlan({ planId, name: stored.data.displayName, note: stored.data.operatorNote });
+  }, [planId, stored.data]);
 
   const seal = useMutation({
     mutationFn: () => plansApi.seal(planId, authentication),
@@ -98,7 +103,8 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
     onError: (error) => toast.error('Unable to start the transfer', describeError(error)),
   });
 
-  const title = entry?.name || `Plan ${shortId(planId)}`;
+  const title = stored.data?.displayName || entry?.name || `Plan ${shortId(planId)}`;
+  const note = stored.data ? stored.data.operatorNote : entry?.note;
 
   if (review.isPending) {
     return (
@@ -151,7 +157,7 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
             )}
           </>
         }
-        description={entry?.note ?? undefined}
+        description={note ?? undefined}
         eyebrow="Transfer plan"
         title={
           <span className="flex flex-wrap items-center gap-3">

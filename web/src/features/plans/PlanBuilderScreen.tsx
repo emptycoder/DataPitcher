@@ -1,6 +1,7 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState, type FormEvent } from 'react';
 import { providerLabels } from '../../api/connections';
+import { queryKeys } from '../../api/keys';
 import { plansApi } from '../../api/plans';
 import { describeError } from '../../api/problem';
 import { useAuth } from '../../auth/AuthContext';
@@ -25,38 +26,53 @@ import {
 import { Icons } from '../../ui/icons';
 import { useToast } from '../../ui/toast';
 import { ProviderMark } from '../connections/ConnectionsScreen';
-import { useConnections, usePlanReview, useSelections } from '../shared/queries';
+import { useConnections, usePlan, usePlanReview, useSelections } from '../shared/queries';
 
 export function PlanBuilderScreen({ planId }: Readonly<{ planId: string | null }>) {
     const search = useLocationSearch();
     const { authentication } = useAuth();
     const { hasPermission } = usePermissions();
     const toast = useToast();
+    const queryClient = useQueryClient();
     const connections = useConnections();
     const selections = useSelections();
     const selectionNames = useSelectionRegistry();
     const existing = usePlanEntry(planId);
+    // The API record is the source of truth when editing; the browser registry only fills gaps.
+    const plan = usePlan(planId);
+    const stored = plan.data ?? null;
     const review = usePlanReview(planId);
     const sessionSource = useSourceConnectionId();
     const sessionTarget = useTargetConnectionId();
 
-    const [name, setName] = useState(existing?.name ?? '');
-    const [note, setNote] = useState(existing?.note ?? '');
-    // Null means "not touched yet": the value then falls back to the registry, the server review, or the session pair.
+    // Null means "not touched yet": the value then falls back to the stored plan, the registry, the server review, or
+    // the session pair. Only touched values are sent; the API keeps the rest.
+    const [nameChoice, setName] = useState<string | null>(null);
+    const [noteChoice, setNote] = useState<string | null>(null);
     const [selectionChoice, setSelectionId] = useState<string | null>(search.get('selection'));
     const [sourceChoice, setSourceId] = useState<string | null>(null);
     const [targetChoice, setTargetId] = useState<string | null>(null);
-    const selectionId = selectionChoice ?? existing?.selectionId ?? review.data?.selection?.selectionId ?? '';
+    const name = nameChoice ?? stored?.displayName ?? existing?.name ?? '';
+    const note = noteChoice ?? stored?.operatorNote ?? existing?.note ?? '';
+    const selectionId =
+        selectionChoice ?? stored?.selectionId ?? existing?.selectionId ?? review.data?.selection?.selectionId ?? '';
     const selectionEntry = selectionNames[selectionId] ?? null;
     const sourceId =
         sourceChoice ??
+        stored?.sourceConnectionId ??
         existing?.sourceConnectionId ??
         review.data?.source?.connectionId ??
         selectionEntry?.connectionId ??
         sessionSource ??
         '';
     const targetId =
-        targetChoice ?? existing?.targetConnectionId ?? review.data?.target?.connectionId ?? sessionTarget ?? '';
+        targetChoice ??
+        stored?.targetConnectionId ??
+        existing?.targetConnectionId ??
+        review.data?.target?.connectionId ??
+        sessionTarget ??
+        '';
+    const sealed = stored?.sealed ?? existing?.sealed ?? false;
 
     const source = connections.data?.find((item) => item.connectionId === sourceId) ?? null;
     const target = connections.data?.find((item) => item.connectionId === targetId) ?? null;
@@ -75,30 +91,32 @@ export function PlanBuilderScreen({ planId }: Readonly<{ planId: string | null }
             list.push(
                 'Cross-provider transfers are blocked: source and target must use the same database provider (SQL Server to SQL Server, or PostgreSQL to PostgreSQL).',
             );
-        if (planId && existing?.sealed)
+        if (planId && sealed)
             list.push('Saving changes to a sealed plan invalidates its seal. You will need to seal it again.');
         return list;
-    }, [sourceId, targetId, selectionEntry, source, target, planId, existing]);
+    }, [sourceId, targetId, selectionEntry, source, target, planId, sealed]);
 
     const save = useMutation({
         mutationFn: async () => {
             const id = planId ?? crypto.randomUUID();
-            const version = planId ? (review.data?.version ?? null) : null;
+            const trimmedNote = note.trim();
+            // Editing sends only fields that differ from the stored record; null means "keep".
+            const changed = <T,>(next: T, current: T | undefined) => (stored && next === current ? null : next);
             const response = await plansApi.save(
                 id,
                 {
-                    displayName: name.trim(),
-                    operatorNote: note.trim() || null,
-                    ifMatch: version === null ? '*' : `"${version}"`,
-                    selectionId: selectionId || null,
-                    sourceConnectionId: sourceId || null,
-                    targetConnectionId: targetId || null,
+                    displayName: changed(name.trim(), stored?.displayName),
+                    operatorNote: stored ? changed(trimmedNote, stored.operatorNote ?? '') : trimmedNote || null,
+                    ifMatch: stored?.eTag ?? (planId && review.data ? `"${review.data.version}"` : '*'),
+                    selectionId: changed(selectionId || null, stored?.selectionId),
+                    sourceConnectionId: changed(sourceId || null, stored?.sourceConnectionId),
+                    targetConnectionId: changed(targetId || null, stored?.targetConnectionId),
                 },
                 authentication,
             );
             return { id, response };
         },
-        onSuccess: ({ id }) => {
+        onSuccess: async ({ id, response }) => {
             registryActions.upsertPlan({
                 planId: id,
                 name: name.trim(),
@@ -106,16 +124,23 @@ export function PlanBuilderScreen({ planId }: Readonly<{ planId: string | null }
                 selectionId: selectionId || null,
                 sourceConnectionId: sourceId || null,
                 targetConnectionId: targetId || null,
-                sealed: false,
-                plannedWrites: null,
+                sealed: response.canonicalHash !== null,
+                plannedWrites: response.canonicalHash !== null ? (existing?.plannedWrites ?? null) : null,
             });
-            toast.success(planId ? 'Plan updated' : 'Plan created', 'Seal it to compute the transfer set.');
+            await queryClient.invalidateQueries({ queryKey: queryKeys.plan(id) });
+            await queryClient.invalidateQueries({ queryKey: queryKeys.planReview(id) });
+            const untouched = stored !== null && response.version === stored.version;
+            toast.success(
+                planId ? (untouched ? 'Plan unchanged' : 'Plan updated') : 'Plan created',
+                untouched ? 'Nothing differed from what is stored.' : 'Seal it to compute the transfer set.',
+            );
             navigate(`/plans/${id}`);
         },
         onError: (error) => toast.error('Unable to save the plan', describeError(error)),
     });
 
     const complete = Boolean(name.trim() && selectionId && sourceId && targetId);
+    const loadingStored = Boolean(planId) && plan.isPending;
 
     function submit(event: FormEvent) {
         event.preventDefault();
@@ -202,6 +227,12 @@ export function PlanBuilderScreen({ planId }: Readonly<{ planId: string | null }
                         </div>
                     </Card>
 
+                    {planId && plan.isError ? (
+                        <Alert title="Stored plan could not be read" tone="warning">
+                            {describeError(plan.error)} The form shows what this browser remembers; saving sends every
+                            field.
+                        </Alert>
+                    ) : null}
                     {warnings.length > 0 ? (
                         <Alert title="Before you continue" tone="warning">
                             <ul className="list-disc pl-4">
@@ -229,9 +260,9 @@ export function PlanBuilderScreen({ planId }: Readonly<{ planId: string | null }
                         <Button
                             block
                             className="mt-5"
-                            disabled={!complete || !hasPermission('Plans.Write')}
+                            disabled={!complete || loadingStored || !hasPermission('Plans.Write')}
                             icon={<Icons.Check size={16} />}
-                            loading={save.isPending}
+                            loading={save.isPending || loadingStored}
                             type="submit"
                             variant="primary"
                         >

@@ -317,6 +317,41 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
     public Task DeleteSelectionAsync(Guid selectionId, string ifMatch, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(DeleteSelectionAsync), cancellationToken, () => selectionId);
 
+    public Task<SelectionDetailsResponse> GetSelectionDetailsAsync(
+        Guid selectionId,
+        CancellationToken cancellationToken
+    ) =>
+        ObserveAsync(
+            nameof(GetSelectionDetailsAsync),
+            cancellationToken,
+            () =>
+                new SelectionDetailsResponse(
+                    selectionId,
+                    "Orders",
+                    2,
+                    "\"2\"",
+                    "raw",
+                    new SelectionRequestBody(
+                        "raw",
+                        null,
+                        "SELECT Id AS __datapitcher_key_0 FROM app.Orders",
+                        [],
+                        "rev",
+                        RootSchema: "app",
+                        RootTable: "Orders",
+                        StableKeyConstraintName: "PK_Orders",
+                        StableKeyColumns: ["Id"]
+                    ),
+                    null,
+                    null,
+                    "app",
+                    "Orders",
+                    "PK_Orders",
+                    ["Id"],
+                    DateTimeOffset.UnixEpoch
+                )
+        );
+
     public Task<OperationReceiptResponse> QueueSelectionEvaluationAsync(
         Guid selectionId,
         CancellationToken cancellationToken
@@ -331,6 +366,26 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
             () => new PlanResponse(planId, 1, null, "etag-1")
         );
     }
+
+    public Task<PlanDetailsResponse> GetPlanDetailsAsync(Guid planId, CancellationToken cancellationToken) =>
+        ObserveAsync(
+            nameof(GetPlanDetailsAsync),
+            cancellationToken,
+            () =>
+                new PlanDetailsResponse(
+                    planId,
+                    "My plan",
+                    "note",
+                    4,
+                    "\"4\"",
+                    null,
+                    false,
+                    null,
+                    null,
+                    null,
+                    DateTimeOffset.UnixEpoch
+                )
+        );
 
     public Task<OperationReceiptResponse> QueuePlanSealAsync(Guid planId, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(QueuePlanSealAsync), cancellationToken, () => Receipt(planId: planId));

@@ -144,17 +144,63 @@ public sealed record SchemaSnapshotResponse(
     public IReadOnlyList<SchemaSnapshotForeignKeyResponse> ForeignKeys { get; init; } = [];
 }
 
-public sealed record SaveSelectionRequest(string DisplayName, string QueryJson, string IfMatch);
+/// <summary>
+/// Creates or partially updates a saved selection. Null members keep the stored values: send only the display name to
+/// rename, only the query to change what is selected. A query is required when the selection does not exist yet; the
+/// root table and stable key are derived from it. Saving identical values leaves the version untouched.
+/// </summary>
+public sealed record SaveSelectionRequest(
+    string IfMatch,
+    string? DisplayName = null,
+    SelectionRequestBody? Query = null
+);
+
+/// <summary>A saved selection read back for editing: the query as it was submitted plus the derived root binding.</summary>
+public sealed record SelectionDetailsResponse(
+    Guid SelectionId,
+    string DisplayName,
+    long Version,
+    string ETag,
+    string Mode,
+    SelectionRequestBody Query,
+    Guid? ConnectionId,
+    Guid? SnapshotId,
+    string? RootSchema,
+    string? RootTable,
+    string? StableKeyConstraintName,
+    IReadOnlyList<string>? StableKeyColumns,
+    DateTimeOffset UpdatedUtc
+);
 
 public sealed record SelectionResponse(Guid SelectionId, long Version, string ETag);
 
+/// <summary>
+/// Creates or partially updates a plan. Null members keep the stored values; an empty operator note clears it. A
+/// display name is required when the plan does not exist yet. Saving identical values leaves the version and seal
+/// untouched; any real change invalidates the seal.
+/// </summary>
 public sealed record SavePlanRequest(
-    string DisplayName,
+    string? DisplayName,
     string? OperatorNote,
     string IfMatch,
     Guid? SelectionId = null,
     Guid? SourceConnectionId = null,
     Guid? TargetConnectionId = null
+);
+
+/// <summary>The editable record of a plan, read back so a form can be prefilled without a local copy.</summary>
+public sealed record PlanDetailsResponse(
+    Guid PlanId,
+    string DisplayName,
+    string? OperatorNote,
+    int Version,
+    string ETag,
+    string? CanonicalHash,
+    bool Sealed,
+    Guid? SelectionId,
+    Guid? SourceConnectionId,
+    Guid? TargetConnectionId,
+    DateTimeOffset UpdatedUtc
 );
 
 public sealed record PlanResponse(Guid PlanId, int Version, string? CanonicalHash, string ETag);

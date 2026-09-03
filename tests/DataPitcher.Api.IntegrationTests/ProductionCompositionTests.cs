@@ -403,7 +403,7 @@ public sealed class ProductionCompositionTests
 
         var saved = await fixture.Application.SaveSelectionAsync(
             selectionId,
-            new SaveSelectionRequest("Selection", "{}", "ignored-on-create"),
+            new SaveSelectionRequest("ignored-on-create", "Selection", OrdersQuery()),
             CancellationToken.None
         );
         var receipt = await fixture.Application.QueueSelectionEvaluationAsync(selectionId, CancellationToken.None);
@@ -414,6 +414,148 @@ public sealed class ProductionCompositionTests
         Assert.Equal(selectionId, saved.SelectionId);
         Assert.Equal("unknown", receipt.State);
         Assert.Equal("Selection was not found.", missing.Message);
+    }
+
+    private static SelectionRequestBody OrdersQuery(string sql = "SELECT Id AS __datapitcher_key_0 FROM app.Orders") =>
+        new(
+            "raw",
+            null,
+            sql,
+            [],
+            "rev-1",
+            RootSchema: "app",
+            RootTable: "Orders",
+            StableKeyConstraintName: "PK_Orders",
+            StableKeyColumns: ["Id"]
+        );
+
+    [Fact]
+    public async Task DataPitcherApplication_SaveSelection_PartialUpdatesKeepWhatWasNotSent()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var selectionId = Guid.NewGuid();
+        var created = await fixture.Application.SaveSelectionAsync(
+            selectionId,
+            new SaveSelectionRequest("*", "Orders", OrdersQuery()),
+            CancellationToken.None
+        );
+
+        var renamed = await fixture.Application.SaveSelectionAsync(
+            selectionId,
+            new SaveSelectionRequest(created.ETag, "Orders for review"),
+            CancellationToken.None
+        );
+        var afterRename = await fixture.Application.GetSelectionDetailsAsync(selectionId, CancellationToken.None);
+        var unchanged = await fixture.Application.SaveSelectionAsync(
+            selectionId,
+            new SaveSelectionRequest(renamed.ETag, "Orders for review"),
+            CancellationToken.None
+        );
+        var requeried = await fixture.Application.SaveSelectionAsync(
+            selectionId,
+            new SaveSelectionRequest(
+                unchanged.ETag,
+                Query: OrdersQuery("SELECT Id AS __datapitcher_key_0 FROM app.Orders WHERE Id > 10")
+            ),
+            CancellationToken.None
+        );
+        var afterQuery = await fixture.Application.GetSelectionDetailsAsync(selectionId, CancellationToken.None);
+
+        Assert.Equal(2, renamed.Version);
+        Assert.Equal("Orders for review", afterRename.DisplayName);
+        Assert.Equal("app", afterRename.RootSchema);
+        Assert.Equal("Orders", afterRename.RootTable);
+        Assert.Equal(["Id"], afterRename.StableKeyColumns);
+        Assert.Equal("SELECT Id AS __datapitcher_key_0 FROM app.Orders", afterRename.Query.RawSql);
+        Assert.Equal(2, unchanged.Version);
+        Assert.Equal(3, requeried.Version);
+        Assert.Equal("Orders for review", afterQuery.DisplayName);
+        Assert.Contains("WHERE Id > 10", afterQuery.Query.RawSql);
+        Assert.Equal("raw", afterQuery.Mode);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_SaveSelection_RequiresAQueryToCreate()
+    {
+        using var fixture = new ProductionApplicationFixture();
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Application.SaveSelectionAsync(
+                Guid.NewGuid(),
+                new SaveSelectionRequest("*", "Name only"),
+                CancellationToken.None
+            )
+        );
+        await Assert.ThrowsAsync<SelectionNotFoundException>(() =>
+            fixture.Application.GetSelectionDetailsAsync(Guid.NewGuid(), CancellationToken.None)
+        );
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_SavePlan_PartialUpdatesKeepWhatWasNotSentAndNoOpsKeepTheSeal()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var planId = Guid.NewGuid();
+        var selectionId = Guid.NewGuid();
+        _ = await fixture.Application.SaveSelectionAsync(
+            selectionId,
+            new SaveSelectionRequest("*", "Orders", OrdersQuery()),
+            CancellationToken.None
+        );
+        var source = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "*", "Host=one;Database=app"),
+            CancellationToken.None
+        );
+        var created = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest("Plan", "first note", "*", selectionId, source.ConnectionId, source.ConnectionId),
+            CancellationToken.None
+        );
+        fixture.SetPlanHash(planId, "plan-hash");
+
+        var noop = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest(null, null, created.ETag),
+            CancellationToken.None
+        );
+        var afterNoop = await fixture.Application.GetPlanDetailsAsync(planId, CancellationToken.None);
+        var noteOnly = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest(null, "second note", noop.ETag),
+            CancellationToken.None
+        );
+        var afterNote = await fixture.Application.GetPlanDetailsAsync(planId, CancellationToken.None);
+        var cleared = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest("Renamed", "", noteOnly.ETag),
+            CancellationToken.None
+        );
+        var afterClear = await fixture.Application.GetPlanDetailsAsync(planId, CancellationToken.None);
+
+        Assert.Equal(created.Version, noop.Version);
+        Assert.Equal("plan-hash", noop.CanonicalHash);
+        Assert.True(afterNoop.Sealed);
+        Assert.Equal("first note", afterNoop.OperatorNote);
+        Assert.Equal(created.Version + 1, noteOnly.Version);
+        Assert.False(afterNote.Sealed);
+        Assert.Equal("Plan", afterNote.DisplayName);
+        Assert.Equal("second note", afterNote.OperatorNote);
+        Assert.Equal(selectionId, afterNote.SelectionId);
+        Assert.Equal(source.ConnectionId, afterNote.SourceConnectionId);
+        Assert.Equal(source.ConnectionId, afterNote.TargetConnectionId);
+        Assert.Equal("Renamed", afterClear.DisplayName);
+        Assert.Null(afterClear.OperatorNote);
+        Assert.Equal(cleared.Version, afterClear.Version);
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Application.SavePlanAsync(
+                Guid.NewGuid(),
+                new SavePlanRequest(null, "note without a name", "*"),
+                CancellationToken.None
+            )
+        );
+        await Assert.ThrowsAsync<PlanNotFoundException>(() =>
+            fixture.Application.GetPlanDetailsAsync(Guid.NewGuid(), CancellationToken.None)
+        );
     }
 
     [Fact]

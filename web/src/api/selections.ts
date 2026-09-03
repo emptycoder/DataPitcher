@@ -31,6 +31,64 @@ export const SavedSelectionSchema = z.object({
 });
 export type SavedSelection = z.infer<typeof SavedSelectionSchema>;
 
+const ParameterValueSchema = z.object({
+    name: z.string(),
+    kind: z.string(),
+    value: z.union([z.string(), z.number(), z.boolean()]),
+});
+export const StoredQuerySchema = z.object({
+    mode: z.string().nullable(),
+    visual: z.unknown().nullable().optional(),
+    rawSql: z.string().nullable(),
+    parameters: z.array(ParameterValueSchema).nullable(),
+    schemaRevision: z.string().nullable(),
+    connectionId: z.string().nullable().optional(),
+    snapshotId: z.string().nullable().optional(),
+    rootSchema: z.string().nullable().optional(),
+    rootTable: z.string().nullable().optional(),
+    stableKeyConstraintName: z.string().nullable().optional(),
+    stableKeyColumns: z.array(z.string()).nullable().optional(),
+});
+export type StoredQuery = z.infer<typeof StoredQuerySchema>;
+
+/** A saved selection read back for editing. */
+export const SelectionDetailsSchema = z.object({
+    selectionId: z.string(),
+    displayName: z.string(),
+    version: z.number(),
+    eTag: z.string(),
+    mode: z.string(),
+    query: StoredQuerySchema,
+    connectionId: z.string().nullable(),
+    snapshotId: z.string().nullable(),
+    rootSchema: z.string().nullable(),
+    rootTable: z.string().nullable(),
+    stableKeyConstraintName: z.string().nullable(),
+    stableKeyColumns: z.array(z.string()).nullable(),
+    updatedUtc: z.string(),
+});
+export type SelectionDetails = z.infer<typeof SelectionDetailsSchema>;
+
+/** Partial update: omitted members keep the stored values. */
+export type UpdateSelectionInput = Readonly<{ displayName?: string; query?: SelectionRequestBody }>;
+
+/** True when two queries would select the same rows the same way; used to skip sending an unchanged query. */
+export function sameQuery(left: SelectionRequestBody | StoredQuery, right: SelectionRequestBody | StoredQuery) {
+    const normalize = (query: SelectionRequestBody | StoredQuery) =>
+        JSON.stringify({
+            mode: query.mode ?? 'raw',
+            rawSql: query.rawSql ?? '',
+            parameters: (query.parameters ?? []).map((parameter) => [parameter.name, parameter.kind, parameter.value]),
+            connectionId: query.connectionId ?? null,
+            snapshotId: query.snapshotId ?? null,
+            rootSchema: query.rootSchema ?? null,
+            rootTable: query.rootTable ?? null,
+            stableKeyConstraintName: query.stableKeyConstraintName ?? null,
+            stableKeyColumns: query.stableKeyColumns ?? null,
+        });
+    return normalize(left) === normalize(right);
+}
+
 export const CompilationSchema = z.object({
     sqlSnapshot: z.string(),
     parameters: z.array(z.object({ name: z.string(), kind: z.string() })),
@@ -89,6 +147,15 @@ export const selectionsApi = {
         requestJson<unknown>('/api/selections/save', auth, { method: 'POST', body }).then((data) =>
             SavedSelectionSchema.parse(data),
         ),
+    get: (selectionId: string, auth: AuthenticationAdapter, signal?: AbortSignal) =>
+        requestJson<unknown>(`/api/selections/${selectionId}`, auth, { signal }).then((data) =>
+            SelectionDetailsSchema.parse(data),
+        ),
+    update: (selectionId: string, input: UpdateSelectionInput, eTag: string, auth: AuthenticationAdapter) =>
+        requestJson<unknown>(`/api/selections/${selectionId}`, auth, {
+            method: 'PUT',
+            body: { ifMatch: eTag, displayName: input.displayName ?? null, query: input.query ?? null },
+        }).then((data) => SavedSelectionSchema.pick({ selectionId: true, version: true, eTag: true }).parse(data)),
 };
 
 /** Finds `@name` parameter references in raw SQL, in first-seen order. */

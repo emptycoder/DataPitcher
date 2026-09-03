@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { queryKeys } from '../../api/keys';
 import { selectionsApi, type SavedSelection } from '../../api/selections';
 import { useAuth } from '../../auth/AuthContext';
@@ -16,10 +16,12 @@ import {
     Card,
     DataTable,
     EmptyState,
+    Field,
     IconButton,
     Modal,
     PageHeader,
     Skeleton,
+    TextInput,
     shortId,
 } from '../../ui';
 import { Icons } from '../../ui/icons';
@@ -36,6 +38,30 @@ export function SelectionsScreen() {
     const plans = usePlanRegistry();
     const canWrite = hasPermission('Selections.Write');
     const [removing, setRemoving] = useState<SavedSelection | null>(null);
+    const [renaming, setRenaming] = useState<SavedSelection | null>(null);
+    const [newName, setNewName] = useState('');
+    const nameOf = (selection: SavedSelection) => selection.displayName || registry[selection.selectionId]?.name || '';
+    // Renaming sends only the display name; the query and root binding stay exactly as stored.
+    const rename = useMutation({
+        mutationFn: (selection: SavedSelection) =>
+            selectionsApi.update(
+                selection.selectionId,
+                { displayName: newName.trim() },
+                selection.eTag,
+                authentication,
+            ),
+        onSuccess: async (_, selection) => {
+            registryActions.upsertSelection({ selectionId: selection.selectionId, name: newName.trim() });
+            setRenaming(null);
+            await queryClient.invalidateQueries({ queryKey: queryKeys.selections });
+            toast.success('Selection renamed');
+        },
+        onError: (error) => toast.error('Unable to rename the selection', describeError(error)),
+    });
+    function submitRename(event: FormEvent) {
+        event.preventDefault();
+        if (renaming && newName.trim()) rename.mutate(renaming);
+    }
     const remove = useMutation({
         mutationFn: (selection: SavedSelection) =>
             selectionsApi.remove(selection.selectionId, selection.eTag, authentication),
@@ -120,7 +146,7 @@ export function SelectionsScreen() {
                                     <tr className="hover:bg-surface-2" key={selection.selectionId}>
                                         <td>
                                             <div className="font-semibold text-fg">
-                                                {entry?.name || selection.displayName || 'Untitled selection'}
+                                                {nameOf(selection) || 'Untitled selection'}
                                             </div>
                                             <div className="font-mono text-[11px] text-fg-faint">
                                                 {shortId(selection.selectionId)}
@@ -146,13 +172,34 @@ export function SelectionsScreen() {
                                                     Plan a transfer <Icons.ArrowRight size={14} />
                                                 </Link>
                                                 {canWrite ? (
-                                                    <IconButton
-                                                        label="Remove selection"
-                                                        onClick={() => setRemoving(selection)}
-                                                        size="sm"
-                                                    >
-                                                        <Icons.X size={14} />
-                                                    </IconButton>
+                                                    <>
+                                                        <IconButton
+                                                            label="Edit selection"
+                                                            onClick={() =>
+                                                                navigate(`/selections/${selection.selectionId}/edit`)
+                                                            }
+                                                            size="sm"
+                                                        >
+                                                            <Icons.Clipboard size={14} />
+                                                        </IconButton>
+                                                        <IconButton
+                                                            label="Rename selection"
+                                                            onClick={() => {
+                                                                setNewName(nameOf(selection));
+                                                                setRenaming(selection);
+                                                            }}
+                                                            size="sm"
+                                                        >
+                                                            <Icons.Code size={14} />
+                                                        </IconButton>
+                                                        <IconButton
+                                                            label="Remove selection"
+                                                            onClick={() => setRemoving(selection)}
+                                                            size="sm"
+                                                        >
+                                                            <Icons.X size={14} />
+                                                        </IconButton>
+                                                    </>
                                                 ) : null}
                                             </div>
                                         </td>
@@ -182,7 +229,7 @@ export function SelectionsScreen() {
                 }
                 onClose={() => setRemoving(null)}
                 open={removing !== null}
-                title={`Remove ${removing ? registry[removing.selectionId]?.name || removing.displayName || 'this selection' : ''}?`}
+                title={`Remove ${removing ? nameOf(removing) || 'this selection' : ''}?`}
                 tone="danger"
             >
                 {removing && plansUsing(removing.selectionId).length > 0 ? (
@@ -200,9 +247,37 @@ export function SelectionsScreen() {
                     </p>
                 )}
             </Modal>
+            <Modal
+                description="Only the name changes. The query, root table and stable key stay exactly as saved."
+                footer={
+                    <>
+                        <Button disabled={rename.isPending} onClick={() => setRenaming(null)}>
+                            Cancel
+                        </Button>
+                        <Button
+                            disabled={!newName.trim()}
+                            form="rename-selection"
+                            loading={rename.isPending}
+                            type="submit"
+                            variant="primary"
+                        >
+                            Rename
+                        </Button>
+                    </>
+                }
+                onClose={() => setRenaming(null)}
+                open={renaming !== null}
+                title="Rename selection"
+            >
+                <form id="rename-selection" onSubmit={submitRename}>
+                    <Field label="Name" required>
+                        <TextInput onChange={(event) => setNewName(event.target.value)} value={newName} />
+                    </Field>
+                </form>
+            </Modal>
             <p className="mt-4 text-xs text-fg-faint">
-                Names and root tables are remembered in this browser. The API stores the query, root table and stable
-                key, but does not expose a display name yet.
+                Names, queries, root tables and stable keys are stored on the API. Selections saved before names were
+                stored there keep the name remembered in this browser until they are renamed.
             </p>
         </>
     );

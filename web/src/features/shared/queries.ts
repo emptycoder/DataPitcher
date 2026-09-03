@@ -52,6 +52,28 @@ export function useSelections() {
   return useQuery({ queryKey: queryKeys.selections, queryFn: ({ signal }) => selectionsApi.list(authentication, signal) });
 }
 
+/** A saved selection read back for editing. */
+export function useSelection(selectionId: string | null) {
+  const { authentication } = useAuth();
+  return useQuery({
+    queryKey: queryKeys.selection(selectionId ?? ''),
+    queryFn: ({ signal }) => selectionsApi.get(selectionId!, authentication, signal),
+    enabled: Boolean(selectionId),
+    retry: false,
+  });
+}
+
+/** The editable plan record (name, note, associations) straight from the API. */
+export function usePlan(planId: string | null) {
+  const { authentication } = useAuth();
+  return useQuery({
+    queryKey: queryKeys.plan(planId ?? ''),
+    queryFn: ({ signal }) => plansApi.get(planId!, authentication, signal),
+    enabled: Boolean(planId),
+    retry: false,
+  });
+}
+
 export function usePlanReview(planId: string | null, options: Readonly<{ enabled?: boolean; refetchIntervalMs?: number }> = {}) {
   const { authentication } = useAuth();
   return useQuery({

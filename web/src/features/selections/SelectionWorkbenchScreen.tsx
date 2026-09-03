@@ -1,11 +1,13 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { SnapshotTable } from '../../api/connections';
 import { formatNumber } from '../../api/format';
+import { queryKeys } from '../../api/keys';
 import { describeError, isNotWired } from '../../api/problem';
 import {
     coerceParameterValue,
     parameterNamesIn,
+    sameQuery,
     selectionsApi,
     validateParameterValue,
     valueKinds,
@@ -31,13 +33,14 @@ import {
     PageHeader,
     ProgressBar,
     Select,
+    Skeleton,
     TextInput,
     cx,
 } from '../../ui';
 import { Icons } from '../../ui/icons';
 import { useToast } from '../../ui/toast';
 import { tableKey } from '../schema/SchemaGraph';
-import { useConnections, useSnapshot, useSnapshots } from '../shared/queries';
+import { useConnections, useSelection, useSnapshot, useSnapshots } from '../shared/queries';
 
 type ParameterDraft = Readonly<{ name: string; kind: ValueKind; raw: string }>;
 
@@ -61,20 +64,27 @@ export function missingStableKeyAliases(sql: string, keyColumns: readonly string
     return keyColumns.map((_, index) => stableKeyAlias(index)).filter((alias) => !sql.includes(alias));
 }
 
-export function SelectionWorkbenchScreen() {
+/** Builds a new selection, or edits the one at `selectionId` with every field prefilled from the API. */
+export function SelectionWorkbenchScreen({ selectionId = null }: Readonly<{ selectionId?: string | null }> = {}) {
     const search = useLocationSearch();
     const { authentication } = useAuth();
     const { hasPermission, isVerified } = usePermissions();
     const toast = useToast();
+    const queryClient = useQueryClient();
     const connections = useConnections();
     const sessionSource = useSourceConnectionId();
+    const existing = useSelection(selectionId);
+    const loaded = existing.data ?? null;
+    const loadedRootKey = loaded?.rootSchema && loaded.rootTable ? `${loaded.rootSchema}.${loaded.rootTable}` : null;
+    const loadedSql = loaded?.query.rawSql ?? '';
 
-    // Null means "not chosen yet": defaults come from the URL, the session's source connection, and the latest snapshot.
+    // Null means "not touched yet": values then come from the selection being edited, the URL, the session's source
+    // connection, and the latest snapshot, in that order.
     const [connectionChoice, setConnectionId] = useState<string | null>(search.get('connection'));
     const [snapshotChoice, setSnapshotId] = useState<string | null>(search.get('snapshot'));
-    const [rootKey, setRootKey] = useState(search.get('table') ?? '');
-    const [name, setName] = useState('');
-    const [sql, setSql] = useState('');
+    const [rootChoice, setRootKey] = useState<string | null>(search.get('table'));
+    const [nameChoice, setName] = useState<string | null>(null);
+    const [sqlChoice, setSql] = useState<string | null>(null);
     const [parameterSettings, setParameterSettings] = useState<
         Readonly<Record<string, Readonly<{ kind: ValueKind; raw: string }>>>
     >({});
@@ -82,9 +92,13 @@ export function SelectionWorkbenchScreen() {
     const [compiledFor, setCompiledFor] = useState<string | null>(null);
     const [liveNote, setLiveNote] = useState<string | null>(null);
 
-    const connectionId = connectionChoice ?? sessionSource ?? connections.data?.[0]?.connectionId ?? '';
+    const connectionId =
+        connectionChoice ?? loaded?.connectionId ?? sessionSource ?? connections.data?.[0]?.connectionId ?? '';
     const snapshots = useSnapshots(connectionId || null);
-    const snapshotId = snapshotChoice ?? snapshots.data?.[0]?.snapshotId ?? '';
+    const snapshotId = snapshotChoice ?? loaded?.snapshotId ?? snapshots.data?.[0]?.snapshotId ?? '';
+    const rootKey = rootChoice ?? loadedRootKey ?? '';
+    const name = nameChoice ?? loaded?.displayName ?? '';
+    const sql = sqlChoice ?? loadedSql;
     const snapshot = useSnapshot(connectionId || null, snapshotId || null);
 
     const rootTable = useMemo(
@@ -108,19 +122,40 @@ export function SelectionWorkbenchScreen() {
         setCompiledFor(null);
     }
 
+    // Parameter kinds and values stored with the selection being edited, keyed by name.
+    const loadedSettings = useMemo<Readonly<Record<string, Readonly<{ kind: ValueKind; raw: string }>>>>(
+        () =>
+            Object.fromEntries(
+                (loaded?.query.parameters ?? []).map((parameter) => [
+                    parameter.name,
+                    {
+                        kind: (valueKinds as readonly string[]).includes(parameter.kind)
+                            ? (parameter.kind as ValueKind)
+                            : 'string',
+                        raw: String(parameter.value),
+                    },
+                ]),
+            ),
+        [loaded],
+    );
     // The parameter list follows the @names used in the SQL; kinds and values are remembered per name.
     const parameters = useMemo<readonly ParameterDraft[]>(
         () =>
             parameterNamesIn(sql).map((parameterName) => ({
                 name: parameterName,
-                ...(parameterSettings[parameterName] ?? { kind: 'int', raw: '' }),
+                ...(parameterSettings[parameterName] ?? loadedSettings[parameterName] ?? { kind: 'int', raw: '' }),
             })),
-        [sql, parameterSettings],
+        [sql, parameterSettings, loadedSettings],
     );
     function updateParameter(parameterName: string, patch: Partial<Readonly<{ kind: ValueKind; raw: string }>>) {
         setParameterSettings((current) => ({
             ...current,
-            [parameterName]: { kind: 'int', raw: '', ...current[parameterName], ...patch },
+            [parameterName]: {
+                kind: 'int',
+                raw: '',
+                ...(current[parameterName] ?? loadedSettings[parameterName]),
+                ...patch,
+            },
         }));
     }
 
@@ -182,17 +217,50 @@ export function SelectionWorkbenchScreen() {
         onSuccess: () => setLiveNote(null),
     });
     const save = useMutation({
-        mutationFn: () => selectionsApi.save(body(), authentication),
-        onSuccess: (saved) => {
+        mutationFn: async () => {
+            const next = body();
+            const displayName = name.trim() || `${rootTable?.name ?? 'Untitled'} selection`;
+            if (selectionId && loaded) {
+                // Send only what changed; the API keeps everything else as stored.
+                const changes = {
+                    ...(displayName !== loaded.displayName ? { displayName } : {}),
+                    ...(sameQuery(next, loaded.query) ? {} : { query: next }),
+                };
+                const changed = Object.keys(changes).length > 0;
+                if (changed) await selectionsApi.update(selectionId, changes, loaded.eTag, authentication);
+                return { id: selectionId, displayName, changed };
+            }
+            const saved = await selectionsApi.save(next, authentication);
+            try {
+                await selectionsApi.update(saved.selectionId, { displayName }, saved.eTag, authentication);
+            } catch {
+                /* The selection is saved; only the name failed to stick. The registry still remembers it. */
+            }
+            return { id: saved.selectionId, displayName, changed: true };
+        },
+        onSuccess: async ({ id, displayName, changed }) => {
             registryActions.upsertSelection({
-                selectionId: saved.selectionId,
-                name: name.trim() || `${rootTable?.name ?? 'Untitled'} selection`,
+                selectionId: id,
+                name: displayName,
                 connectionId,
                 snapshotId,
                 rootTable: rootTable ? tableKey(rootTable) : null,
             });
-            toast.success('Selection saved', 'Next, pair it with a target in a transfer plan.');
-            navigate(`/plans/new?selection=${saved.selectionId}`);
+            await queryClient.invalidateQueries({ queryKey: queryKeys.selections });
+            await queryClient.invalidateQueries({ queryKey: queryKeys.selection(id) });
+            if (selectionId) {
+                if (changed) toast.success('Selection updated', 'Plans that use it must be sealed again.');
+                else
+                    toast.push({
+                        tone: 'info',
+                        title: 'Nothing to save',
+                        description: 'The selection already matches what is shown.',
+                    });
+                navigate('/selections');
+            } else {
+                toast.success('Selection saved', 'Next, pair it with a target in a transfer plan.');
+                navigate(`/plans/new?selection=${id}`);
+            }
         },
         onError: (error) => toast.error('Unable to save the selection', describeError(error)),
     });
@@ -200,7 +268,10 @@ export function SelectionWorkbenchScreen() {
     const checklist = [
         { label: 'Source connection and snapshot', done: Boolean(connectionId && snapshotId) },
         { label: 'Root table with a primary key', done: rootTable !== null },
-        { label: 'SQL validated', done: compilation !== null && !sqlDirty },
+        {
+            label: 'SQL validated',
+            done: (compilation !== null && !sqlDirty) || (loaded !== null && sql === loadedSql),
+        },
         {
             label: 'Key columns aliased as __datapitcher_key_N',
             done: rootTable !== null && missingAliases.length === 0,
@@ -225,24 +296,53 @@ export function SelectionWorkbenchScreen() {
         if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && sql.trim()) compile.mutate();
     }
     const lineCount = Math.max(1, sql.split('\n').length);
+    const saveLabel = selectionId ? 'Save changes' : 'Save selection';
+
+    if (selectionId && existing.isPending)
+        return (
+            <>
+                <PageHeader eyebrow="Edit selection" title="Loading selection…" />
+                <Skeleton className="h-64" />
+            </>
+        );
+    if (selectionId && existing.isError)
+        return (
+            <>
+                <PageHeader eyebrow="Edit selection" title="Selection" />
+                <Alert title="Unable to load this selection" tone="danger">
+                    {describeError(existing.error)} It may have been removed from the API.
+                </Alert>
+            </>
+        );
 
     return (
         <>
             <PageHeader
                 actions={
-                    <Button
-                        disabled={!canSave}
-                        icon={<Icons.Check size={16} />}
-                        loading={save.isPending}
-                        onClick={() => save.mutate()}
-                        variant="primary"
-                    >
-                        Save selection
-                    </Button>
+                    <>
+                        {selectionId ? (
+                            <Button onClick={() => navigate('/selections')} variant="ghost">
+                                Cancel
+                            </Button>
+                        ) : null}
+                        <Button
+                            disabled={!canSave}
+                            icon={<Icons.Check size={16} />}
+                            loading={save.isPending}
+                            onClick={() => save.mutate()}
+                            variant="primary"
+                        >
+                            {saveLabel}
+                        </Button>
+                    </>
                 }
-                description="Write a SELECT that returns the root table's stable key columns. Only those rows and their required parents move."
-                eyebrow="Selection workbench"
-                title={name || 'New selection'}
+                description={
+                    selectionId
+                        ? 'Every field below is prefilled from the saved selection. Only what you change is sent back.'
+                        : "Write a SELECT that returns the root table's stable key columns. Only those rows and their required parents move."
+                }
+                eyebrow={selectionId ? 'Edit selection' : 'Selection workbench'}
+                title={name || (selectionId ? 'Edit selection' : 'New selection')}
             />
 
             <div className="grid gap-5 xl:grid-cols-[320px_1fr_300px]">
@@ -592,7 +692,7 @@ export function SelectionWorkbenchScreen() {
                             onClick={() => save.mutate()}
                             variant="primary"
                         >
-                            Save selection
+                            {saveLabel}
                         </Button>
                     </Card>
                     <Card className="text-[13px] text-fg-muted">

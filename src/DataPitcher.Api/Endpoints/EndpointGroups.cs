@@ -76,6 +76,11 @@ public static class EndpointGroups
         var selections = app.MapGroup("/api/selections");
         WithStandardProblems(
             selections
+                .MapGet("/{selectionId:guid}", GetSelectionDetailsAsync)
+                .RequireAuthorization(ApiPolicyNames.SelectionsRead)
+        );
+        WithStandardProblems(
+            selections
                 .MapPut("/{selectionId:guid}", SaveSelectionAsync)
                 .RequireAuthorization(ApiPolicyNames.SelectionsWrite)
         );
@@ -91,6 +96,9 @@ public static class EndpointGroups
         );
 
         var plans = app.MapGroup("/api/plans");
+        WithStandardProblems(
+            plans.MapGet("/{planId:guid}", GetPlanDetailsAsync).RequireAuthorization(ApiPolicyNames.PlansRead)
+        );
         WithStandardProblems(
             plans.MapPut("/{planId:guid}", SavePlanAsync).RequireAuthorization(ApiPolicyNames.PlansWrite)
         );
@@ -425,6 +433,22 @@ public static class EndpointGroups
         return TypedResults.Ok(status);
     }
 
+    private static async Task<Results<Ok<SelectionDetailsResponse>, ProblemHttpResult>> GetSelectionDetailsAsync(
+        Guid selectionId,
+        IDataPitcherApplication application,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            return TypedResults.Ok(await application.GetSelectionDetailsAsync(selectionId, cancellationToken));
+        }
+        catch (SelectionNotFoundException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: exception.Message);
+        }
+    }
+
     private static async Task<Results<Ok<SelectionResponse>, ProblemHttpResult>> SaveSelectionAsync(
         Guid selectionId,
         SaveSelectionRequest request,
@@ -465,6 +489,36 @@ public static class EndpointGroups
     {
         var receipt = await application.QueueSelectionEvaluationAsync(selectionId, cancellationToken);
         return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
+    }
+
+    private static async Task<Results<Ok<PlanDetailsResponse>, ProblemHttpResult>> GetPlanDetailsAsync(
+        Guid planId,
+        HttpContext context,
+        ClaimsPrincipal user,
+        IAuthorizationService authorizationService,
+        IDataPitcherApplication application,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            await AuthorizeResourceAsync(
+                context,
+                authorizationService,
+                user,
+                new PlanResource(planId),
+                Permissions.PlansRead
+            ) is
+            { } problem
+        )
+            return problem;
+        try
+        {
+            return TypedResults.Ok(await application.GetPlanDetailsAsync(planId, cancellationToken));
+        }
+        catch (PlanNotFoundException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: exception.Message);
+        }
     }
 
     private static async Task<Results<Ok<PlanResponse>, ProblemHttpResult>> SavePlanAsync(

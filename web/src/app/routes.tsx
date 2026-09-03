@@ -24,6 +24,7 @@ export const routes = [
   },
   { path: '/selections', nav: { label: 'Selections', icon: 'Filter' }, render: () => <SelectionsScreen /> },
   { path: '/selections/new', render: () => <SelectionWorkbenchScreen /> },
+  { path: '/selections/:selectionId/edit', render: (params) => <SelectionWorkbenchScreen selectionId={params.selectionId!} /> },
   { path: '/plans', nav: { label: 'Plans', icon: 'Clipboard' }, render: () => <PlansScreen /> },
   { path: '/plans/new', render: () => <PlanBuilderScreen planId={null} /> },
   { path: '/plans/:planId/edit', render: (params) => <PlanBuilderScreen planId={params.planId!} /> },

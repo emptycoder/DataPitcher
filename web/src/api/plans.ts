@@ -60,8 +60,9 @@ export const PlanGraphSchema = z.object({
 });
 export type PlanGraph = z.infer<typeof PlanGraphSchema>;
 
+/** Partial save: null members keep the stored values; an empty operator note clears it. */
 export type SavePlanInput = Readonly<{
-  displayName: string;
+  displayName: string | null;
   operatorNote: string | null;
   ifMatch: string;
   selectionId: string | null;
@@ -69,7 +70,25 @@ export type SavePlanInput = Readonly<{
   targetConnectionId: string | null;
 }>;
 
+/** The editable plan record, read back so forms prefill from the API rather than from this browser's registry. */
+export const PlanDetailsSchema = z.object({
+  planId: z.string(),
+  displayName: z.string(),
+  operatorNote: z.string().nullable(),
+  version: z.number(),
+  eTag: z.string(),
+  canonicalHash: z.string().nullable(),
+  sealed: z.boolean(),
+  selectionId: z.string().nullable(),
+  sourceConnectionId: z.string().nullable(),
+  targetConnectionId: z.string().nullable(),
+  updatedUtc: z.string(),
+});
+export type PlanDetails = z.infer<typeof PlanDetailsSchema>;
+
 export const plansApi = {
+  get: (planId: string, auth: AuthenticationAdapter, signal?: AbortSignal) =>
+    requestJson<unknown>(`/api/plans/${planId}`, auth, { signal }).then((data) => PlanDetailsSchema.parse(data)),
   save: (planId: string, input: SavePlanInput, auth: AuthenticationAdapter) =>
     requestJson<unknown>(`/api/plans/${planId}`, auth, { method: 'PUT', body: input }).then((data) => PlanResponseSchema.parse(data)),
   seal: (planId: string, auth: AuthenticationAdapter) =>

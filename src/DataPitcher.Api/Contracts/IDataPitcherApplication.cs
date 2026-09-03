@@ -49,8 +49,10 @@ public interface IDataPitcherApplication
         CancellationToken cancellationToken
     );
     Task DeleteSelectionAsync(Guid selectionId, string ifMatch, CancellationToken cancellationToken);
+    Task<SelectionDetailsResponse> GetSelectionDetailsAsync(Guid selectionId, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueSelectionEvaluationAsync(Guid selectionId, CancellationToken cancellationToken);
     Task<PlanResponse> SavePlanAsync(Guid planId, SavePlanRequest request, CancellationToken cancellationToken);
+    Task<PlanDetailsResponse> GetPlanDetailsAsync(Guid planId, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueuePlanSealAsync(Guid planId, CancellationToken cancellationToken);
     Task<PlanReviewResponse> GetPlanReviewAsync(Guid planId, CancellationToken cancellationToken);
     Task<InclusionPathResponse> GetPlanInclusionPathAsync(

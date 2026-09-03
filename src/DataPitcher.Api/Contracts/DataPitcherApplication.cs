@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DataPitcher.Application.Connections;
 using DataPitcher.Application.Events;
 using DataPitcher.Application.Plans;
@@ -16,6 +17,8 @@ namespace DataPitcher.Api.Contracts;
 public sealed class PlanNotFoundException() : InvalidOperationException("Plan was not found.");
 
 public sealed class PlanNotSealedException() : InvalidOperationException("Plan must be sealed before starting a job.");
+
+public sealed class SelectionNotFoundException() : InvalidOperationException("Selection was not found.");
 
 /// <summary>
 /// Production <see cref="IDataPitcherApplication"/> delegating to the real control-database stores and connection
@@ -348,20 +351,98 @@ public sealed class DataPitcherApplication(
         return snapshot is null ? null : ToSnapshotResponse(snapshot);
     }
 
+    private static readonly JsonSerializerOptions StoredQueryOptions = new(JsonSerializerDefaults.Web);
+
     public async Task<SelectionResponse> SaveSelectionAsync(
         Guid selectionId,
         SaveSelectionRequest request,
         CancellationToken cancellationToken
     )
     {
-        var record = await selections.SaveAsync(
-            selectionId,
-            request.DisplayName,
-            request.QueryJson,
-            request.IfMatch,
-            cancellationToken
-        );
+        var existing = await selections.FindAsync(selectionId, cancellationToken);
+        if (existing is null && request.Query is null)
+            throw new ArgumentException("A query is required to create a selection.", nameof(request));
+        if (request.Query is { } query)
+            ValidateSelectionQuery(query);
+        var displayName = request.DisplayName ?? existing?.DisplayName ?? "";
+        if (existing is not null && request.Query is null && displayName == existing.DisplayName)
+            return new SelectionResponse(existing.SelectionId, existing.Version, ETag(existing.Version));
+        var record = request.Query is { } changed
+            ? await selections.SaveAsync(
+                selectionId,
+                displayName,
+                JsonSerializer.Serialize(changed),
+                request.IfMatch,
+                cancellationToken,
+                changed.ConnectionId,
+                changed.SnapshotId,
+                changed.RootSchema,
+                changed.RootTable,
+                changed.StableKeyConstraintName,
+                changed.StableKeyColumns
+            )
+            : await selections.SaveAsync(
+                selectionId,
+                displayName,
+                existing!.QueryJson,
+                request.IfMatch,
+                cancellationToken,
+                existing.ConnectionId,
+                existing.SnapshotId,
+                existing.RootSchema,
+                existing.RootTable,
+                existing.StableKeyConstraintName,
+                existing.StableKeyColumns
+            );
         return new SelectionResponse(record.SelectionId, record.Version, ETag(record.Version));
+    }
+
+    /// <summary>Mirrors the workbench save rule: a selection is only usable with a root table and stable key.</summary>
+    private static void ValidateSelectionQuery(SelectionRequestBody query)
+    {
+        if (
+            string.IsNullOrWhiteSpace(query.RootSchema)
+            || string.IsNullOrWhiteSpace(query.RootTable)
+            || string.IsNullOrWhiteSpace(query.StableKeyConstraintName)
+            || query.StableKeyColumns is not { Count: > 0 }
+            || query.StableKeyColumns.Any(string.IsNullOrWhiteSpace)
+        )
+            throw new ArgumentException("Selection root table and stable key must be specified.", nameof(query));
+    }
+
+    public async Task<SelectionDetailsResponse> GetSelectionDetailsAsync(
+        Guid selectionId,
+        CancellationToken cancellationToken
+    )
+    {
+        var record =
+            await selections.FindAsync(selectionId, cancellationToken) ?? throw new SelectionNotFoundException();
+        SelectionRequestBody query;
+        try
+        {
+            query =
+                JsonSerializer.Deserialize<SelectionRequestBody>(record.QueryJson, StoredQueryOptions)
+                ?? throw new JsonException("Stored query is empty.");
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException("The stored selection query could not be read.", exception);
+        }
+        return new SelectionDetailsResponse(
+            record.SelectionId,
+            record.DisplayName,
+            record.Version,
+            ETag(record.Version),
+            string.IsNullOrWhiteSpace(query.Mode) ? "raw" : query.Mode,
+            query,
+            record.ConnectionId,
+            record.SnapshotId,
+            record.RootSchema,
+            record.RootTable,
+            record.StableKeyConstraintName,
+            record.StableKeyColumns,
+            record.UpdatedUtc
+        );
     }
 
     public Task DeleteSelectionAsync(Guid selectionId, string ifMatch, CancellationToken cancellationToken) =>
@@ -393,21 +474,58 @@ public sealed class DataPitcherApplication(
             _ = await connections.GetSummaryAsync(sourceConnectionId, cancellationToken);
         if (request.TargetConnectionId is Guid targetConnectionId)
             _ = await connections.GetSummaryAsync(targetConnectionId, cancellationToken);
+        var existing = await plans.FindAsync(planId, cancellationToken);
+        var displayName = request.DisplayName ?? existing?.DisplayName;
+        if (string.IsNullOrWhiteSpace(displayName))
+            throw new ArgumentException("A display name is required.", nameof(request));
+        var operatorNote =
+            request.OperatorNote is null ? existing?.OperatorNote
+            : string.IsNullOrWhiteSpace(request.OperatorNote) ? null
+            : request.OperatorNote;
+        var merged = new PlanRecord(
+            planId,
+            displayName,
+            operatorNote,
+            existing?.Version ?? 0,
+            existing?.CanonicalHash,
+            existing?.UpdatedUtc ?? default,
+            request.SelectionId ?? existing?.SelectionId,
+            request.SourceConnectionId ?? existing?.SourceConnectionId,
+            request.TargetConnectionId ?? existing?.TargetConnectionId
+        );
+        if (existing is not null && merged == existing)
+            return ToPlanResponse(existing);
         var record = await plans.SaveAsync(
             planId,
-            request.DisplayName,
-            request.OperatorNote,
+            merged.DisplayName,
+            merged.OperatorNote,
             request.IfMatch,
             cancellationToken,
-            request.SelectionId,
-            request.SourceConnectionId,
-            request.TargetConnectionId
+            merged.SelectionId,
+            merged.SourceConnectionId,
+            merged.TargetConnectionId
         );
-        return new PlanResponse(
+        return ToPlanResponse(record);
+    }
+
+    private static PlanResponse ToPlanResponse(PlanRecord record) =>
+        new(record.PlanId, checked((int)record.Version), record.CanonicalHash, ETag(record.Version));
+
+    public async Task<PlanDetailsResponse> GetPlanDetailsAsync(Guid planId, CancellationToken cancellationToken)
+    {
+        var record = await plans.FindAsync(planId, cancellationToken) ?? throw new PlanNotFoundException();
+        return new PlanDetailsResponse(
             record.PlanId,
+            record.DisplayName,
+            record.OperatorNote,
             checked((int)record.Version),
+            ETag(record.Version),
             record.CanonicalHash,
-            ETag(record.Version)
+            record.CanonicalHash is not null,
+            record.SelectionId,
+            record.SourceConnectionId,
+            record.TargetConnectionId,
+            record.UpdatedUtc
         );
     }
 
