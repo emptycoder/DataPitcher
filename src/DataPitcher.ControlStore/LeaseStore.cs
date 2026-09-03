@@ -1,19 +1,16 @@
 using System.Globalization;
-using DataPitcher.Core.Connections;
 using DataPitcher.Core.Jobs;
-using DataPitcher.Core.Plans;
-using DataPitcher.Core.Schema;
-using DataPitcher.Core.Selection;
 using DataPitcher.Core.Time;
-using DataPitcher.Core.Transfer;
-using LinqToDB;
-using LinqToDB.Async;
-using LinqToDB.Data;
 
 namespace DataPitcher.ControlStore;
 
 public sealed class LeaseStore(ControlDatabase database, IClock clock) : ILeaseStore
 {
+    private const string AcquireSql =
+        "UPDATE JobLeases SET OwnerId = @ownerId, ExpiresUtc = @expiresUtc, FenceToken = FenceToken + 1 WHERE JobId = @jobId AND (OwnerId IS NULL OR ExpiresUtc <= @nowUtc)";
+
+    private const string FenceTokenSql = "SELECT FenceToken FROM JobLeases WHERE JobId = @jobId";
+
     internal async Task<LeaseGrant?> AcquireAsync(
         Guid jobId,
         string ownerId,
@@ -24,18 +21,21 @@ public sealed class LeaseStore(ControlDatabase database, IClock clock) : ILeaseS
         var now = clock.UtcNow;
         var expires = now.Add(ttl);
         Validate(ownerId, ttl);
-        using var db = database.Open();
+        using var db = database.OpenNative();
         var affected = await db.ExecuteAsync(
-            "UPDATE JobLeases SET OwnerId = @ownerId, ExpiresUtc = @expiresUtc, FenceToken = FenceToken + 1 WHERE JobId = @jobId AND (OwnerId IS NULL OR ExpiresUtc <= @nowUtc)",
+            AcquireSql,
             cancellationToken,
             Parameters(jobId, ownerId, null, now, expires)
         );
         if (affected != 1)
             return null;
-        var row = await db.GetTable<JobLeaseRow>()
-            .Where(row => row.JobId == jobId.ToString())
-            .SingleAsync(cancellationToken);
-        return new(jobId, ownerId, row.FenceToken, expires, RenewAfter(now, ttl));
+        var fenceTokens = await db.QueryAsync(
+            FenceTokenSql,
+            reader => reader.GetInt64(0),
+            cancellationToken,
+            new ControlParameter("jobId", jobId.ToString())
+        );
+        return new(jobId, ownerId, fenceTokens.Single(), expires, RenewAfter(now, ttl));
     }
 
     public LeaseGrant? Acquire(Guid jobId, string ownerId, TimeSpan ttl)
@@ -43,11 +43,8 @@ public sealed class LeaseStore(ControlDatabase database, IClock clock) : ILeaseS
         var now = clock.UtcNow;
         var expires = now.Add(ttl);
         Validate(ownerId, ttl);
-        using var db = database.Open();
-        var affected = db.Execute(
-            "UPDATE JobLeases SET OwnerId = @ownerId, ExpiresUtc = @expiresUtc, FenceToken = FenceToken + 1 WHERE JobId = @jobId AND (OwnerId IS NULL OR ExpiresUtc <= @nowUtc)",
-            Parameters(jobId, ownerId, null, now, expires)
-        );
+        using var db = database.OpenNative();
+        var affected = db.Execute(AcquireSql, Parameters(jobId, ownerId, null, now, expires));
         return affected == 1 ? ReadGrant(db, jobId, ownerId, ttl, now) : null;
     }
 
@@ -57,7 +54,7 @@ public sealed class LeaseStore(ControlDatabase database, IClock clock) : ILeaseS
         var now = clock.UtcNow;
         if (now < lease.RenewAfterUtc)
             return lease;
-        using var db = database.Open();
+        using var db = database.OpenNative();
         var expires = now.Add(ttl);
         var affected = db.Execute(
             "UPDATE JobLeases SET ExpiresUtc = @expiresUtc WHERE JobId = @jobId AND OwnerId = @ownerId AND FenceToken = @fenceToken AND ExpiresUtc > @nowUtc",
@@ -68,7 +65,7 @@ public sealed class LeaseStore(ControlDatabase database, IClock clock) : ILeaseS
             : null;
     }
 
-    private static DataParameter[] Parameters(
+    private static ControlParameter[] Parameters(
         Guid jobId,
         string ownerId,
         long? fenceToken,
@@ -83,13 +80,15 @@ public sealed class LeaseStore(ControlDatabase database, IClock clock) : ILeaseS
             new("expiresUtc", Stamp(expires)),
         ];
 
-    private static LeaseGrant ReadGrant(DataConnection db, Guid jobId, string ownerId, TimeSpan ttl, DateTimeOffset now)
+    private static LeaseGrant ReadGrant(
+        ControlConnection db,
+        Guid jobId,
+        string ownerId,
+        TimeSpan ttl,
+        DateTimeOffset now
+    )
     {
-        var fenceToken = db.Query<long>(
-                "SELECT FenceToken FROM JobLeases WHERE JobId = @jobId",
-                new DataParameter("jobId", jobId.ToString())
-            )
-            .Single();
+        var fenceToken = db.Query<long>(FenceTokenSql, new ControlParameter("jobId", jobId.ToString())).Single();
         return new(jobId, ownerId, fenceToken, now.Add(ttl), RenewAfter(now, ttl));
     }
 

@@ -1,57 +1,69 @@
 using System.Globalization;
-using DataPitcher.Core.Connections;
 using DataPitcher.Core.Jobs;
-using DataPitcher.Core.Plans;
-using DataPitcher.Core.Schema;
-using DataPitcher.Core.Selection;
 using DataPitcher.Core.Time;
-using DataPitcher.Core.Transfer;
-using LinqToDB;
-using LinqToDB.Async;
-using LinqToDB.Data;
+using Microsoft.Data.Sqlite;
 
 namespace DataPitcher.ControlStore;
 
 public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepository
 {
+    private const string SelectJob =
+        "SELECT JobId, RunId, PlanId, IdempotencyKey, State, CreatedUtc, UpdatedUtc, FailureCode FROM Jobs";
+
+    private const string NoElements = "Sequence contains no elements";
+
     private readonly LeaseStore _leases = new(database, clock);
 
     public StartJobResult Start(StartJobRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
             throw new ArgumentException("Idempotency key is required.", nameof(request));
-        using var db = database.Open();
+        using var db = database.OpenNative();
         using var transaction = db.BeginTransaction();
         var now = Stamp(clock.UtcNow);
-        var row = new JobRow
-        {
-            JobId = Guid.NewGuid().ToString(),
-            RunId = Guid.NewGuid().ToString(),
-            PlanId = request.PlanId.ToString(),
-            IdempotencyKey = request.IdempotencyKey,
-            State = JobState.Queued.ToString(),
-            CreatedUtc = now,
-            UpdatedUtc = now,
-        };
+        var jobId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
         var inserted = db.Execute(
             "INSERT OR IGNORE INTO Jobs (JobId, RunId, PlanId, IdempotencyKey, State, CreatedUtc, UpdatedUtc) VALUES (@jobId, @runId, @planId, @idempotencyKey, @state, @createdUtc, @updatedUtc)",
-            new DataParameter("jobId", row.JobId),
-            new DataParameter("runId", row.RunId),
-            new DataParameter("planId", row.PlanId),
-            new DataParameter("idempotencyKey", row.IdempotencyKey),
-            new DataParameter("state", row.State),
-            new DataParameter("createdUtc", row.CreatedUtc),
-            new DataParameter("updatedUtc", row.UpdatedUtc)
+            new ControlParameter("jobId", jobId.ToString()),
+            new ControlParameter("runId", runId.ToString()),
+            new ControlParameter("planId", request.PlanId.ToString()),
+            new ControlParameter("idempotencyKey", request.IdempotencyKey),
+            new ControlParameter("state", JobState.Queued.ToString()),
+            new ControlParameter("createdUtc", now),
+            new ControlParameter("updatedUtc", now)
         );
         if (inserted == 0)
             return new(
-                ToJob(db.GetTable<JobRow>().Single(existing => existing.IdempotencyKey == request.IdempotencyKey)),
+                Require(
+                    db.Single(
+                        SelectJob + " WHERE IdempotencyKey = @idempotencyKey",
+                        ReadJob,
+                        new ControlParameter("idempotencyKey", request.IdempotencyKey)
+                    )
+                ),
                 false
             );
-        PersistHistory(db, Guid.Parse(row.JobId), JobState.Draft, JobState.Queued, now);
-        db.Insert(new JobLeaseRow { JobId = row.JobId, FenceToken = 0 });
+        PersistHistory(db, jobId, JobState.Draft, JobState.Queued, now);
+        db.Execute(
+            "INSERT INTO JobLeases (JobId, OwnerId, ExpiresUtc, FenceToken) VALUES (@jobId, NULL, NULL, 0)",
+            new ControlParameter("jobId", jobId.ToString())
+        );
         transaction.Commit();
-        return new(ToJob(row), true);
+        var created = ParseStamp(now);
+        return new(
+            new TransferJob(
+                jobId,
+                runId,
+                request.PlanId,
+                request.IdempotencyKey,
+                JobState.Queued,
+                null,
+                created,
+                created
+            ),
+            true
+        );
     }
 
     public async Task<JobClaim?> TryClaimNextAsync(
@@ -60,32 +72,30 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
         CancellationToken cancellationToken
     )
     {
-        using var db = database.Open();
-        var candidates = await db.GetTable<JobRow>()
-            .Where(row =>
-                row.State == JobState.Queued.ToString()
-                || row.State == JobState.Preparing.ToString()
-                || row.State == JobState.Running.ToString()
-                || row.State == JobState.Pausing.ToString()
-            )
-            .OrderBy(row => row.UpdatedUtc)
-            .ToArrayAsync(cancellationToken);
+        using var db = database.OpenNative();
+        var candidates = await db.QueryAsync(
+            SelectJob + " WHERE State IN (@queued, @preparing, @running, @pausing) ORDER BY UpdatedUtc",
+            ReadJob,
+            cancellationToken,
+            new ControlParameter("queued", JobState.Queued.ToString()),
+            new ControlParameter("preparing", JobState.Preparing.ToString()),
+            new ControlParameter("running", JobState.Running.ToString()),
+            new ControlParameter("pausing", JobState.Pausing.ToString())
+        );
         foreach (var candidate in candidates)
         {
-            var lease = await _leases.AcquireAsync(Guid.Parse(candidate.JobId), ownerId, leaseTtl, cancellationToken);
+            var lease = await _leases.AcquireAsync(candidate.JobId, ownerId, leaseTtl, cancellationToken);
             if (lease is not null)
-                return new(ToJob(candidate), lease, candidate.State != JobState.Queued.ToString());
+                return new(candidate, lease, candidate.State != JobState.Queued);
         }
         return null;
     }
 
     public async Task<JobState> GetStateAsync(Guid jobId, CancellationToken cancellationToken)
     {
-        using var db = database.Open();
-        var row = await db.GetTable<JobRow>()
-            .Where(row => row.JobId == jobId.ToString())
-            .SingleAsync(cancellationToken);
-        return Enum.Parse<JobState>(row.State);
+        using var db = database.OpenNative();
+        var job = await FindAsync(db, jobId, cancellationToken);
+        return Require(job).State;
     }
 
     public Task RequestPauseAsync(Guid jobId, CancellationToken cancellationToken) =>
@@ -124,88 +134,77 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
 
     public JobTransitionResult TryTransition(LeaseGrant lease, JobState to)
     {
-        using var db = database.Open();
+        using var db = database.OpenNative();
         using var transaction = db.BeginTransaction();
-        var row = db.GetTable<JobRow>().Single(row => row.JobId == lease.JobId.ToString());
-        var from = Enum.Parse<JobState>(row.State);
+        var job = Require(Find(db, lease.JobId));
+        var from = job.State;
         JobStateMachine.EnsureTransition(from, to);
         var now = Stamp(clock.UtcNow);
         var affected = db.Execute(
             "UPDATE Jobs SET State = @toState, UpdatedUtc = @nowUtc WHERE JobId = @jobId AND State = @fromState AND EXISTS (SELECT 1 FROM JobLeases WHERE JobId = @jobId AND OwnerId = @ownerId AND FenceToken = @fenceToken AND ExpiresUtc > @nowUtc)",
-            new DataParameter("toState", to.ToString()),
-            new DataParameter("nowUtc", now),
-            new DataParameter("jobId", lease.JobId.ToString()),
-            new DataParameter("fromState", from.ToString()),
-            new DataParameter("ownerId", lease.OwnerId),
-            new DataParameter("fenceToken", lease.FenceToken)
+            new ControlParameter("toState", to.ToString()),
+            new ControlParameter("nowUtc", now),
+            new ControlParameter("jobId", lease.JobId.ToString()),
+            new ControlParameter("fromState", from.ToString()),
+            new ControlParameter("ownerId", lease.OwnerId),
+            new ControlParameter("fenceToken", lease.FenceToken)
         );
         if (affected == 0)
             return new(null, 0);
         PersistHistory(db, lease.JobId, from, to, now);
-        row.State = to.ToString();
-        row.UpdatedUtc = now;
         transaction.Commit();
-        return new(ToJob(row), 1);
+        return new(job with { State = to, UpdatedUtc = ParseStamp(now) }, 1);
     }
 
-    public TransferJob Get(Guid jobId) =>
-        ToJob(database.Open().GetTable<JobRow>().Single(row => row.JobId == jobId.ToString()));
+    public TransferJob Get(Guid jobId)
+    {
+        using var db = database.OpenNative();
+        return Require(Find(db, jobId));
+    }
 
     public TransferJob? Find(Guid jobId)
     {
-        var row = database.Open().GetTable<JobRow>().SingleOrDefault(item => item.JobId == jobId.ToString());
-        return row is null ? null : ToJob(row);
+        using var db = database.OpenNative();
+        return Find(db, jobId);
     }
 
     public IReadOnlyList<TransferJob> List(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return database
-            .Open()
-            .GetTable<JobRow>()
-            .ToArray()
-            .OrderByDescending(row => row.CreatedUtc, StringComparer.Ordinal)
-            .ThenBy(row => row.JobId, StringComparer.Ordinal)
-            .Select(ToJob)
-            .ToArray();
+        using var db = database.OpenNative();
+        return db.Query(SelectJob + " ORDER BY CreatedUtc DESC, JobId ASC", ReadJob);
     }
 
-    public IReadOnlyList<(JobState From, JobState To)> GetHistory(Guid jobId) =>
-        database
-            .Open()
-            .GetTable<JobStateTransitionRow>()
-            .Where(row => row.JobId == jobId.ToString())
-            .OrderBy(row => row.OccurredUtc)
-            .Select(row => new { row.FromState, row.ToState })
-            .AsEnumerable()
-            .Select(row => (Enum.Parse<JobState>(row.FromState), Enum.Parse<JobState>(row.ToState)))
-            .ToArray();
+    public IReadOnlyList<(JobState From, JobState To)> GetHistory(Guid jobId)
+    {
+        using var db = database.OpenNative();
+        return db.Query(
+            "SELECT FromState, ToState FROM JobStateTransitions WHERE JobId = @jobId ORDER BY OccurredUtc",
+            reader => (Enum.Parse<JobState>(reader.GetString(0)), Enum.Parse<JobState>(reader.GetString(1))),
+            new ControlParameter("jobId", jobId.ToString())
+        );
+    }
 
     private async Task TransitionOperatorIntentAsync(Guid jobId, JobState to, CancellationToken cancellationToken)
     {
-        using var db = database.Open();
-        using var transaction = await db.BeginTransactionAsync(cancellationToken);
-        var row = await db.GetTable<JobRow>()
-            .Where(row => row.JobId == jobId.ToString())
-            .SingleAsync(cancellationToken);
-        var from = Enum.Parse<JobState>(row.State);
+        using var db = database.OpenNative();
+        using var transaction = db.BeginTransaction();
+        var job = Require(await FindAsync(db, jobId, cancellationToken));
+        var from = job.State;
         JobStateMachine.EnsureTransition(from, to);
         var now = Stamp(clock.UtcNow);
         var affected = await db.ExecuteAsync(
             "UPDATE Jobs SET State = @toState, UpdatedUtc = @nowUtc WHERE JobId = @jobId AND State = @fromState",
             cancellationToken,
-            new DataParameter[]
-            {
-                new("toState", to.ToString()),
-                new("nowUtc", now),
-                new("jobId", jobId.ToString()),
-                new("fromState", from.ToString()),
-            }
+            new ControlParameter("toState", to.ToString()),
+            new ControlParameter("nowUtc", now),
+            new ControlParameter("jobId", jobId.ToString()),
+            new ControlParameter("fromState", from.ToString())
         );
         if (affected != 1)
             throw new InvalidOperationException("Job control intent was superseded.");
         await PersistHistoryAsync(db, jobId, from, to, now, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        transaction.Commit();
     }
 
     private async Task TransitionWorkerAsync(
@@ -216,28 +215,23 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
         CancellationToken cancellationToken
     )
     {
-        using var db = database.Open();
-        using var transaction = await db.BeginTransactionAsync(cancellationToken);
-        var row = await db.GetTable<JobRow>()
-            .Where(row => row.JobId == lease.JobId.ToString())
-            .SingleAsync(cancellationToken);
-        var from = Enum.Parse<JobState>(row.State);
+        using var db = database.OpenNative();
+        using var transaction = db.BeginTransaction();
+        var job = Require(await FindAsync(db, lease.JobId, cancellationToken));
+        var from = job.State;
         JobStateMachine.EnsureTransition(from, to);
         var now = Stamp(clock.UtcNow);
         var failure = failureCode is null ? "" : ", FailureCode = @failureCode";
         var affected = await db.ExecuteAsync(
             $"UPDATE Jobs SET State = @toState, UpdatedUtc = @nowUtc{failure} WHERE JobId = @jobId AND State = @fromState AND EXISTS (SELECT 1 FROM JobLeases WHERE JobId = @jobId AND OwnerId = @ownerId AND FenceToken = @fenceToken AND ExpiresUtc > @nowUtc)",
             cancellationToken,
-            new DataParameter[]
-            {
-                new("toState", to.ToString()),
-                new("nowUtc", now),
-                new("failureCode", failureCode),
-                new("jobId", lease.JobId.ToString()),
-                new("fromState", from.ToString()),
-                new("ownerId", lease.OwnerId),
-                new("fenceToken", lease.FenceToken),
-            }
+            new ControlParameter("toState", to.ToString()),
+            new ControlParameter("nowUtc", now),
+            new ControlParameter("failureCode", failureCode),
+            new ControlParameter("jobId", lease.JobId.ToString()),
+            new ControlParameter("fromState", from.ToString()),
+            new ControlParameter("ownerId", lease.OwnerId),
+            new ControlParameter("fenceToken", lease.FenceToken)
         );
         if (affected != 1)
             throw new InvalidOperationException("Worker no longer owns the job.");
@@ -246,35 +240,46 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
             var released = await db.ExecuteAsync(
                 "UPDATE JobLeases SET OwnerId = NULL, ExpiresUtc = NULL WHERE JobId = @jobId AND OwnerId = @ownerId AND FenceToken = @fenceToken AND ExpiresUtc > @nowUtc",
                 cancellationToken,
-                new DataParameter[]
-                {
-                    new("jobId", lease.JobId.ToString()),
-                    new("ownerId", lease.OwnerId),
-                    new("fenceToken", lease.FenceToken),
-                    new("nowUtc", now),
-                }
+                new ControlParameter("jobId", lease.JobId.ToString()),
+                new ControlParameter("ownerId", lease.OwnerId),
+                new ControlParameter("fenceToken", lease.FenceToken),
+                new ControlParameter("nowUtc", now)
             );
             if (released != 1)
                 throw new InvalidOperationException("Worker lease release was superseded.");
         }
         await PersistHistoryAsync(db, lease.JobId, from, to, now, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        transaction.Commit();
     }
 
-    private static void PersistHistory(DataConnection db, Guid jobId, JobState from, JobState to, string now) =>
-        db.Insert(
-            new JobStateTransitionRow
-            {
-                TransitionId = Guid.NewGuid().ToString(),
-                JobId = jobId.ToString(),
-                FromState = from.ToString(),
-                ToState = to.ToString(),
-                OccurredUtc = now,
-            }
+    private static TransferJob? Find(ControlConnection db, Guid jobId) =>
+        db.Single(SelectJob + " WHERE JobId = @jobId", ReadJob, new ControlParameter("jobId", jobId.ToString()));
+
+    private static async Task<TransferJob?> FindAsync(
+        ControlConnection db,
+        Guid jobId,
+        CancellationToken cancellationToken
+    )
+    {
+        var rows = await db.QueryAsync(
+            SelectJob + " WHERE JobId = @jobId",
+            ReadJob,
+            cancellationToken,
+            new ControlParameter("jobId", jobId.ToString())
+        );
+        return rows.Count == 0 ? null : rows[0];
+    }
+
+    private static TransferJob Require(TransferJob? job) => job ?? throw new InvalidOperationException(NoElements);
+
+    private static void PersistHistory(ControlConnection db, Guid jobId, JobState from, JobState to, string now) =>
+        db.Execute(
+            "INSERT INTO JobStateTransitions (TransitionId, JobId, FromState, ToState, OccurredUtc) VALUES (@transitionId, @jobId, @fromState, @toState, @occurredUtc)",
+            HistoryParameters(jobId, from, to, now)
         );
 
     private static Task<int> PersistHistoryAsync(
-        DataConnection db,
+        ControlConnection db,
         Guid jobId,
         JobState from,
         JobState to,
@@ -284,27 +289,32 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
         db.ExecuteAsync(
             "INSERT INTO JobStateTransitions (TransitionId, JobId, FromState, ToState, OccurredUtc) VALUES (@transitionId, @jobId, @fromState, @toState, @occurredUtc)",
             cancellationToken,
-            new DataParameter[]
-            {
-                new("transitionId", Guid.NewGuid().ToString()),
-                new("jobId", jobId.ToString()),
-                new("fromState", from.ToString()),
-                new("toState", to.ToString()),
-                new("occurredUtc", now),
-            }
+            HistoryParameters(jobId, from, to, now)
         );
 
-    private static TransferJob ToJob(JobRow row) =>
+    private static ControlParameter[] HistoryParameters(Guid jobId, JobState from, JobState to, string now) =>
+        [
+            new("transitionId", Guid.NewGuid().ToString()),
+            new("jobId", jobId.ToString()),
+            new("fromState", from.ToString()),
+            new("toState", to.ToString()),
+            new("occurredUtc", now),
+        ];
+
+    private static TransferJob ReadJob(SqliteDataReader reader) =>
         new(
-            Guid.Parse(row.JobId),
-            Guid.Parse(row.RunId),
-            Guid.Parse(row.PlanId),
-            row.IdempotencyKey,
-            Enum.Parse<JobState>(row.State),
-            row.FailureCode,
-            DateTimeOffset.Parse(row.CreatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-            DateTimeOffset.Parse(row.UpdatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            Guid.Parse(reader.GetString(0)),
+            Guid.Parse(reader.GetString(1)),
+            Guid.Parse(reader.GetString(2)),
+            reader.GetString(3),
+            Enum.Parse<JobState>(reader.GetString(4)),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            ParseStamp(reader.GetString(5)),
+            ParseStamp(reader.GetString(6))
         );
+
+    private static DateTimeOffset ParseStamp(string value) =>
+        DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
 
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
 }
