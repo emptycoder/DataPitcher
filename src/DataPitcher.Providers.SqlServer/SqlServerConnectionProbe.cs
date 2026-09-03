@@ -38,7 +38,8 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
             ConnectionCapability.CanUseTransactions,
         };
         var (databaseIdentity, providerVersion) = await ReadIdentityAsync(connection, cancellationToken);
-        var permissions = await ReadPermissionsAsync(connection, request.Profile, cancellationToken);
+        var notes = new List<string>();
+        var permissions = await ReadPermissionsAsync(connection, request.Profile, notes, cancellationToken);
         if (permissions.CanReadSchema)
             available.Add(ConnectionCapability.CanReadSchema);
         if (permissions.CanReadBusinessRows)
@@ -59,7 +60,7 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
             && available.Contains(ConnectionCapability.CanDropSourceStaging)
         )
             available.Add(ConnectionCapability.SupportsDurableResume);
-        return new ConnectionProbeEvidence(databaseIdentity, providerVersion, available, cleanupFailureCode);
+        return new ConnectionProbeEvidence(databaseIdentity, providerVersion, available, cleanupFailureCode, notes);
     }
 
     private static async Task<(string DatabaseIdentity, string ProviderVersion)> ReadIdentityAsync(
@@ -93,9 +94,14 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
         bool CanWriteBusinessRows,
         bool CanPreserveIdentity,
         bool CanUseSnapshotIsolation
-    )> ReadPermissionsAsync(SqlConnection connection, ConnectionProfile profile, CancellationToken cancellationToken)
+    )> ReadPermissionsAsync(
+        SqlConnection connection,
+        ConnectionProfile profile,
+        List<string> notes,
+        CancellationToken cancellationToken
+    )
     {
-        var canReadSchema = await CanReadCatalogAsync(connection, cancellationToken);
+        var canReadSchema = await CanReadCatalogAsync(connection, notes, cancellationToken);
         var sql =
             "SELECT "
             + AnyGrant("SELECT")
@@ -105,12 +111,33 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
             + ", "
             + AnyGrant("ALTER")
             + ", "
-            + "ISNULL((SELECT snapshot_isolation_state FROM sys.databases WHERE name = DB_NAME()), 0);";
+            + "ISNULL((SELECT snapshot_isolation_state FROM sys.databases WHERE name = DB_NAME()), 0), "
+            + "SUSER_SNAME(), "
+            + "CASE WHEN SCHEMA_ID(@businessSchema) IS NULL THEN 0 ELSE 1 END, "
+            + "ISNULL(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'SELECT'), 0), "
+            + "(SELECT COUNT(*) FROM sys.tables t WHERE HAS_PERMS_BY_NAME(QUOTENAME(SCHEMA_NAME(t.schema_id)) + '.' + QUOTENAME(t.name), 'OBJECT', 'SELECT') = 1), "
+            + "(SELECT COUNT(*) FROM sys.tables t WHERE t.schema_id = SCHEMA_ID(@businessSchema));";
         await using var command = new SqlCommand(sql, connection) { CommandTimeout = 5 };
         command.Parameters.AddWithValue("@businessSchema", profile.BusinessSchema);
         command.Parameters.AddWithValue("@stagingSchema", profile.StagingSchema);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
+        var login = reader.IsDBNull(5) ? "(unknown)" : reader.GetString(5);
+        var schemaExists = reader.GetInt32(6) != 0;
+        var databaseSelect = reader.GetInt32(7) != 0;
+        var readableTables = reader.GetInt32(8);
+        var schemaTables = reader.GetInt32(9);
+        notes.Add($"Connected as '{login}'.");
+        notes.Add(
+            schemaExists
+                ? $"Schema '{profile.BusinessSchema}' exists with {schemaTables} visible table(s)."
+                : $"Schema '{profile.BusinessSchema}' does not exist in this database; set the connection's schema to where the tables live."
+        );
+        notes.Add(
+            databaseSelect
+                ? "SELECT is granted at database level."
+                : $"SELECT is not granted at database level; {readableTables} user table(s) are readable."
+        );
         return (
             canReadSchema,
             reader.GetInt32(0) != 0,
@@ -134,7 +161,11 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
         + "') = 1)"
         + " THEN 1 ELSE 0 END";
 
-    private static async Task<bool> CanReadCatalogAsync(SqlConnection connection, CancellationToken cancellationToken)
+    private static async Task<bool> CanReadCatalogAsync(
+        SqlConnection connection,
+        List<string> notes,
+        CancellationToken cancellationToken
+    )
     {
         try
         {
@@ -148,8 +179,9 @@ public sealed class SqlServerConnectionProbe : ICapabilityDetector
             _ = await command.ExecuteScalarAsync(cancellationToken);
             return true;
         }
-        catch (SqlException)
+        catch (SqlException exception)
         {
+            notes.Add("Catalog views could not be read: " + exception.Message);
             return false;
         }
     }

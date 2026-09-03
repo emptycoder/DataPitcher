@@ -107,6 +107,7 @@ export const ConnectionTestSchema = z.object({
     capabilities: z.array(z.string()),
     missingRequired: z.array(z.string()),
     error: z.string().nullable(),
+    notes: z.array(z.string()).nullable().optional(),
 });
 export type ConnectionTest = z.infer<typeof ConnectionTestSchema>;
 export type ConnectionTestInput = Readonly<{

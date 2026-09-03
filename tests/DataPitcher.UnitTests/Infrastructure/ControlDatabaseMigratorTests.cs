@@ -68,4 +68,30 @@ public sealed class ControlDatabaseMigratorTests
             db.Query<string>("SELECT name FROM pragma_table_info('SchemaSnapshots') ORDER BY cid").ToList()
         );
     }
+
+    [Fact]
+    public void ControlDatabaseMigrator_ReplacesTheLegacyAppBusinessSchemaWithTheProviderDefault()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        using (var db = fixture.Database.Open())
+        {
+            foreach (var (id, provider) in new[] { ("1", "sqlserver"), ("2", "postgresql"), ("3", "sqlserver") })
+                db.Execute(
+                    "INSERT INTO ConnectionProfiles (ConnectionId, DisplayName, ProviderId, SecretReferenceKind, SecretReferenceLocator, BusinessSchema, StagingSchema, Version, HealthState, CreatedUtc, UpdatedUtc, IdempotencyKey) VALUES (@id, 'c', @provider, 'EnvironmentVariable', 'X', @schema, '__datapitcher', 1, 'Unknown', 't', 't', @id)",
+                    new ControlParameter("id", id),
+                    new ControlParameter("provider", provider),
+                    new ControlParameter("schema", id == "3" ? "sales" : "app")
+                );
+            db.Execute("DELETE FROM SchemaVersion WHERE Version = 10");
+        }
+
+        fixture.Migrator.Apply();
+
+        using var reopened = fixture.Database.Open();
+        Assert.Equal(
+            ["dbo", "public", "sales"],
+            reopened.Query<string>("SELECT BusinessSchema FROM ConnectionProfiles ORDER BY ConnectionId").ToList()
+        );
+    }
 }

@@ -359,6 +359,7 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                     {checkDetail.missingRequired.length ? (
                         <div className="mt-1 text-xs opacity-80">Missing: {checkDetail.missingRequired.join(', ')}</div>
                     ) : null}
+                    <ProbeNotes notes={checkDetail.notes} />
                 </Alert>
             ) : null}
             <div className="mt-auto flex flex-wrap gap-2">
@@ -414,6 +415,18 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                 </p>
             </Modal>
         </Card>
+    );
+}
+
+/** What the probe found on the server: login, schema presence, readable tables. Explains a capability verdict. */
+function ProbeNotes({ notes }: Readonly<{ notes: readonly string[] | null | undefined }>) {
+    if (!notes?.length) return null;
+    return (
+        <ul className="mt-1 grid gap-0.5 text-xs opacity-80">
+            {notes.map((note) => (
+                <li key={note}>{note}</li>
+            ))}
+        </ul>
     );
 }
 
@@ -702,7 +715,7 @@ function ConnectionDialog({
                             value={displayName}
                         />
                     </Field>
-                    <Field hint="Schema that holds the tables to transfer." label="Schema">
+                    <Field label="Schema">
                         <TextInput
                             onChange={(event) => setSchemaChoice(event.target.value)}
                             placeholder={defaultBusinessSchema(providerId)}
@@ -948,6 +961,7 @@ function ConnectionDialog({
                                     Missing capabilities: {testResult.missingRequired.join(', ')}
                                 </div>
                             ) : null}
+                            <ProbeNotes notes={testResult.notes} />
                         </Alert>
                     )
                 ) : null}

@@ -41,7 +41,8 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
             ConnectionCapability.CanUseSnapshotIsolation,
         };
         var (databaseIdentity, providerVersion) = await ReadIdentityAsync(connection, cancellationToken);
-        var permissions = await ReadPermissionsAsync(connection, request.Profile, cancellationToken);
+        var notes = new List<string>();
+        var permissions = await ReadPermissionsAsync(connection, request.Profile, notes, cancellationToken);
         if (permissions.CanReadSchema)
             available.Add(ConnectionCapability.CanReadSchema);
         if (permissions.CanReadBusinessRows)
@@ -61,7 +62,7 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
             && available.Contains(ConnectionCapability.CanDropSourceStaging)
         )
             available.Add(ConnectionCapability.SupportsDurableResume);
-        return new ConnectionProbeEvidence(databaseIdentity, providerVersion, available, cleanupFailureCode);
+        return new ConnectionProbeEvidence(databaseIdentity, providerVersion, available, cleanupFailureCode, notes);
     }
 
     private static async Task<(string DatabaseIdentity, string ProviderVersion)> ReadIdentityAsync(
@@ -90,21 +91,37 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
         bool CanReadBusinessRows,
         bool CanCreateStaging,
         bool CanWriteBusinessRows
-    )> ReadPermissionsAsync(NpgsqlConnection connection, ConnectionProfile profile, CancellationToken cancellationToken)
+    )> ReadPermissionsAsync(
+        NpgsqlConnection connection,
+        ConnectionProfile profile,
+        List<string> notes,
+        CancellationToken cancellationToken
+    )
     {
-        var canReadSchema = await CanReadCatalogAsync(connection, cancellationToken);
+        var canReadSchema = await CanReadCatalogAsync(connection, notes, cancellationToken);
         var sql =
             "SELECT "
             + AnyGrant("SELECT")
             + ", "
             + "COALESCE((SELECT has_schema_privilege(n.oid, 'CREATE') FROM pg_namespace n WHERE n.nspname = @stagingSchema), false), "
             + AnyGrant("INSERT")
-            + ";";
+            + ", current_user::text"
+            + ", EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = @businessSchema)"
+            + ", (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND has_schema_privilege(n.oid, 'USAGE') AND has_table_privilege(c.oid, 'SELECT') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%')"
+            + ", (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND n.nspname = @businessSchema);";
         await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = 5 };
         command.Parameters.AddWithValue("businessSchema", profile.BusinessSchema);
         command.Parameters.AddWithValue("stagingSchema", profile.StagingSchema);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
+        var schemaExists = reader.GetBoolean(4);
+        notes.Add($"Connected as '{reader.GetString(3)}'.");
+        notes.Add(
+            schemaExists
+                ? $"Schema '{profile.BusinessSchema}' exists with {reader.GetInt32(6)} table(s)."
+                : $"Schema '{profile.BusinessSchema}' does not exist in this database; set the connection's schema to where the tables live."
+        );
+        notes.Add($"{reader.GetInt32(5)} user table(s) are readable.");
         return (canReadSchema, reader.GetBoolean(0), reader.GetBoolean(1), reader.GetBoolean(2));
     }
 
@@ -119,6 +136,7 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
 
     private static async Task<bool> CanReadCatalogAsync(
         NpgsqlConnection connection,
+        List<string> notes,
         CancellationToken cancellationToken
     )
     {
@@ -134,8 +152,9 @@ public sealed class PostgreSqlConnectionProbe : ICapabilityDetector
             _ = await command.ExecuteScalarAsync(cancellationToken);
             return true;
         }
-        catch (PostgresException)
+        catch (PostgresException exception)
         {
+            notes.Add("Catalog could not be read: " + exception.MessageText);
             return false;
         }
     }

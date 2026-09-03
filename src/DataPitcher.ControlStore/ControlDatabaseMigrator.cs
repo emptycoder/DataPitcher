@@ -21,6 +21,7 @@ public sealed class ControlDatabaseMigrator(ControlDatabase database, IClock clo
         (7, "DataPitcher.ControlStore.Migrations.0007-selection-connection-and-snapshot.sql"),
         (8, "DataPitcher.ControlStore.Migrations.0008-plan-associations.sql"),
         (9, "DataPitcher.ControlStore.Migrations.0009-selection-root-identity.sql"),
+        (10, "DataPitcher.ControlStore.Migrations.0010-business-schema-default.sql"),
     ];
 
     static ControlDatabaseMigrator()

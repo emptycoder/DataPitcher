@@ -70,7 +70,8 @@ public sealed record ConnectionTestResponse(
     string? ProviderVersion,
     IReadOnlyList<string> Capabilities,
     IReadOnlyList<string> MissingRequired,
-    string? Error
+    string? Error,
+    IReadOnlyList<string>? Notes = null
 );
 
 public sealed record ConnectionResponse(

@@ -133,19 +133,24 @@ public sealed class ConnectionProbeEvidence
         string databaseIdentity,
         string providerVersion,
         IEnumerable<ConnectionCapability> available,
-        string? cleanupFailureCode
+        string? cleanupFailureCode,
+        IEnumerable<string>? notes = null
     )
     {
         DatabaseIdentity = databaseIdentity;
         ProviderVersion = providerVersion;
         Available = available.ToFrozenSet();
         CleanupFailureCode = cleanupFailureCode;
+        Notes = notes?.ToArray() ?? [];
     }
 
     public string DatabaseIdentity { get; }
     public string ProviderVersion { get; }
     public IReadOnlySet<ConnectionCapability> Available { get; }
     public string? CleanupFailureCode { get; }
+
+    /// <summary>Human-readable findings that explain the capability verdict (login, schema, readable tables).</summary>
+    public IReadOnlyList<string> Notes { get; }
 }
 
 public sealed class ConnectionAssessment

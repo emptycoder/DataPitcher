@@ -239,7 +239,8 @@ public sealed class DataPitcherApplication(
                     .ToArray(),
                 assessment.State is ConnectionHealthState.Healthy
                     ? null
-                    : "The database was reached but required capabilities are missing."
+                    : $"The database was reached but required capabilities are missing (probed schema '{profile.BusinessSchema}').",
+                evidence.Notes
             );
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
