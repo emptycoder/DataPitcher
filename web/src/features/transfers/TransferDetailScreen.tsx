@@ -242,11 +242,12 @@ export function TransferDetailScreen({ jobId }: Readonly<{ jobId: string }>) {
                 .map((event) => (
                   <li className="grid grid-cols-[auto_auto_1fr_auto] items-center gap-3 px-4 py-2 text-[13px]" key={event.id}>
                     <span className="tnum font-mono text-[11px] text-fg-faint">#{event.id}</span>
-                    <Badge className="!h-5 !px-1.5 !text-[10px]" tone={event.type === 'state' ? 'accent' : 'neutral'}>
+                    <Badge className="!h-5 !px-1.5 !text-[10px]" tone={event.type === 'state' ? 'accent' : event.type === 'conflict' ? 'warning' : 'neutral'}>
                       {event.type}
                     </Badge>
                     <span className="text-fg">
                       {humanizeState(event.state)} · <span className="tnum">{formatNumber(event.rowsTransferred)}</span> rows · {formatBytes(event.bytesTransferred)}
+                      {event.detail ? <span className="ml-2 text-warning">{event.detail}</span> : null}
                     </span>
                     <span className="tnum text-xs text-fg-faint">{new Date(event.receivedAt).toLocaleTimeString()}</span>
                   </li>

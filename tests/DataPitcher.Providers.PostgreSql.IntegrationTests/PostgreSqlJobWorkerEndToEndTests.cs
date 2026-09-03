@@ -126,6 +126,9 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
                 CancellationToken.None
             );
             await application.QueuePlanSealAsync(planId, CancellationToken.None);
+            // The parent appears in the target after sealing (a re-run, or a concurrent writer): the transfer must
+            // skip it and report it rather than fail on the primary key.
+            await scope.ExecuteTargetAsync("INSERT INTO worker_parents VALUES (2);");
             var review = await application.GetPlanReviewAsync(planId, CancellationToken.None);
             Assert.Equal("sealed", review.Seal.Status);
             Assert.Equal(2, review.Totals.PlannedWrites);
@@ -161,6 +164,10 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
                     1L,
                     await scope.ScalarTargetAsync<long>("SELECT COUNT(*) FROM worker_parents WHERE id = 2")
                 );
+                // The parent already existed in the target: it is skipped and reported, never a failure.
+                var conflict = Assert.Single(events.Events, jobEvent => jobEvent.EventType == "conflict");
+                Assert.Contains("worker_parents", conflict.Payload.Detail, StringComparison.Ordinal);
+                Assert.Contains("1 row(s)", conflict.Payload.Detail, StringComparison.Ordinal);
             }
             finally
             {

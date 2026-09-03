@@ -54,6 +54,7 @@ public sealed class JobWorker(
         var renewal = renewer.RunAsync(claim.Lease, leaseTtl, leaseLost, renewalStop.Token);
         long rows = 0;
         long bytes = 0;
+        long skipped = 0;
         try
         {
             await jobs.PrepareAsync(claim, leaseLost.Token);
@@ -86,6 +87,20 @@ public sealed class JobWorker(
                 await faults.HitAsync(TransferFaultPoint.BeforeTargetCommit, leaseLost.Token);
                 checkpoint = await target.ApplyAsync(run, claim.Lease, unit, leaseLost.Token);
                 (rows, bytes) = (checkpoint.RowCount, checkpoint.BytesTransferred);
+                if (checkpoint.SkippedRows > skipped)
+                {
+                    var table = unit.Table is null ? "the target" : unit.Table.Schema + "." + unit.Table.Name;
+                    await AnnounceAsync(
+                        claim.Job.JobId,
+                        "conflict",
+                        "running",
+                        rows,
+                        bytes,
+                        $"{checkpoint.SkippedRows - skipped} row(s) in {table} already existed in the target and were skipped.",
+                        leaseLost.Token
+                    );
+                    skipped = checkpoint.SkippedRows;
+                }
                 await events.AppendAsync(
                     new JobEventAppend(
                         claim.Job.JobId,
@@ -140,8 +155,18 @@ public sealed class JobWorker(
     }
 
     /// <summary>Publishes a state change so live pages learn about it without polling; never fails the job.</summary>
+    private Task AnnounceAsync(
+        Guid jobId,
+        string state,
+        long rows,
+        long bytes,
+        string? detail,
+        CancellationToken cancellationToken
+    ) => AnnounceAsync(jobId, "state", state, rows, bytes, detail, cancellationToken);
+
     private async Task AnnounceAsync(
         Guid jobId,
+        string eventType,
         string state,
         long rows,
         long bytes,
@@ -152,7 +177,7 @@ public sealed class JobWorker(
         try
         {
             await events.AppendAsync(
-                new JobEventAppend(jobId, "state", new JobEventPayload(state, rows, bytes, detail)),
+                new JobEventAppend(jobId, eventType, new JobEventPayload(state, rows, bytes, detail)),
                 cancellationToken
             );
         }

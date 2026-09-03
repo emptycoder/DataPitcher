@@ -1,0 +1,1 @@
+ALTER TABLE JobEvents ADD COLUMN Detail TEXT NULL;

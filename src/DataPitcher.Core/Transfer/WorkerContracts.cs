@@ -29,7 +29,9 @@ public sealed record TargetCheckpoint(
     string ManifestSealHash,
     long FenceToken,
     long BytesTransferred = 0,
-    TableAddress? LastTable = null
+    TableAddress? LastTable = null,
+    /// <summary>Rows the target already had and that were therefore skipped, cumulative for the run.</summary>
+    long SkippedRows = 0
 );
 
 public enum TransferUnitKind

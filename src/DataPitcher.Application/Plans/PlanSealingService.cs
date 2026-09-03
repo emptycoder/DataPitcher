@@ -114,7 +114,7 @@ public sealed class PlanSealingService(
         {
             closure = await new DependencyClosure(store).ComputeAsync(
                 new ClosureRequest(
-                    [new ClosureRoot(root, seeds.Keys, RootConflictPolicy.FailOnConflict)],
+                    [new ClosureRoot(root, seeds.Keys, RootConflictPolicy.SkipExisting)],
                     relationships,
                     stableKeys
                 ),
@@ -218,7 +218,7 @@ public sealed class PlanSealingService(
                     true
                 ))
                 .ToArray(),
-            [new TableConflictPolicy(Address(root), RootConflictPolicy.FailOnConflict)],
+            [new TableConflictPolicy(Address(root), RootConflictPolicy.SkipExisting)],
             ConsistencyMode.FrozenKeys,
             TransferMode.ResumableStaged,
             TriggerStrategy.Fire,

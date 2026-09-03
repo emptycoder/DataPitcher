@@ -27,13 +27,14 @@ public sealed class JobEventStore(ControlDatabase database, IClock clock, IJobEv
             new ControlParameter("job", append.JobId.ToString())
         );
         db.Execute(
-            "INSERT INTO JobEvents (JobId, EventId, EventType, State, RowsTransferred, BytesTransferred, OccurredUtc) VALUES (@job, @event, @type, @state, @rows, @bytes, @occurred)",
+            "INSERT INTO JobEvents (JobId, EventId, EventType, State, RowsTransferred, BytesTransferred, OccurredUtc, Detail) VALUES (@job, @event, @type, @state, @rows, @bytes, @occurred, @detail)",
             new ControlParameter("job", append.JobId.ToString()),
             new ControlParameter("event", eventId),
             new ControlParameter("type", append.EventType),
             new ControlParameter("state", append.Payload.State),
             new ControlParameter("rows", append.Payload.RowsTransferred),
             new ControlParameter("bytes", append.Payload.BytesTransferred),
+            new ControlParameter("detail", append.Payload.Detail),
             new ControlParameter("occurred", occurredAtUtc.ToString("O", CultureInfo.InvariantCulture))
         );
         transaction.Commit();
@@ -57,12 +58,17 @@ public sealed class JobEventStore(ControlDatabase database, IClock clock, IJobEv
             throw new EventCursorExpiredException(oldestAvailableEventId);
         var cursor = lastEventId ?? 0;
         var events = await db.QueryAsync(
-            "SELECT JobId, EventId, EventType, State, RowsTransferred, BytesTransferred, OccurredUtc FROM JobEvents WHERE JobId = @job AND EventId > @cursor ORDER BY EventId",
+            "SELECT JobId, EventId, EventType, State, RowsTransferred, BytesTransferred, OccurredUtc, Detail FROM JobEvents WHERE JobId = @job AND EventId > @cursor ORDER BY EventId",
             reader => new JobEvent(
                 Guid.Parse(reader.GetString(0)),
                 reader.GetInt64(1),
                 reader.GetString(2),
-                new(reader.GetString(3), reader.GetInt64(4), reader.GetInt64(5)),
+                new(
+                    reader.GetString(3),
+                    reader.GetInt64(4),
+                    reader.GetInt64(5),
+                    reader.IsDBNull(7) ? null : reader.GetString(7)
+                ),
                 DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
             ),
             cancellationToken,

@@ -166,6 +166,7 @@ public sealed class SqlServerRunSessions(
         );
         private readonly Dictionary<(string Schema, string Name), SqlServerWriteTable> _targets = [];
         private long _bytesTransferred;
+        private long _skippedRows;
 
         /// <summary>The target shape is read once per table for the session, not once per batch.</summary>
         private async Task<SqlServerWriteTable> TargetAsync(
@@ -235,6 +236,7 @@ public sealed class SqlServerRunSessions(
             );
             var commit = await _executor.ExecuteAsync(Context(run, lease), target, batch, cancellationToken);
             _bytesTransferred += unit.BytesTransferred;
+            _skippedRows += Math.Max(0, rows.Count - commit.Affected);
             var checkpoint =
                 commit.Checkpoint
                 ?? await _checkpoints.ReadAsync(run.JobId, run.RunId, cancellationToken)
@@ -261,7 +263,8 @@ public sealed class SqlServerRunSessions(
                     checkpoint.CumulativeAffected,
                     run.ManifestSealHash,
                     checkpoint.FenceToken,
-                    _bytesTransferred
+                    _bytesTransferred,
+                    SkippedRows: _skippedRows
                 );
             var planTable = checkpoint.LastTable is null
                 ? Tables(content).Single()
@@ -285,7 +288,8 @@ public sealed class SqlServerRunSessions(
                 run.ManifestSealHash,
                 checkpoint.FenceToken,
                 _bytesTransferred,
-                planTable.Mapping.Source
+                planTable.Mapping.Source,
+                _skippedRows
             );
         }
     }
@@ -371,7 +375,9 @@ public sealed class SqlServerRunSessions(
         {
             RootConflictPolicy.SkipExisting => SqlServerConflictPolicy.SkipExisting,
             RootConflictPolicy.Upsert => SqlServerConflictPolicy.Upsert,
-            _ => SqlServerConflictPolicy.InsertOnly,
+            // Rows the target already has are skipped, never a failure: parents pulled in by the graph are often
+            // reference data that exists on both sides, and the root's existence was settled at sealing time.
+            _ => SqlServerConflictPolicy.SkipExisting,
         };
 
     private static StableKey TargetKey(StableKey source, IReadOnlyList<ColumnMapping> mappings) =>
