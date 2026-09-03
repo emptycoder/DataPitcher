@@ -182,6 +182,26 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
+    public async Task DataPitcherApplication_TestConnection_ReportsTheDriverFailureWithoutSecrets()
+    {
+        using var fixture = new ProductionApplicationFixture();
+
+        var result = await fixture.Application.TestConnectionAsync(
+            new ConnectionTestRequest(
+                "postgresql",
+                "Host=127.0.0.1;Port=1;Database=app;Username=u;Password=topsecret;Timeout=1"
+            ),
+            CancellationToken.None
+        );
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("Unhealthy", result.Health);
+        Assert.False(string.IsNullOrWhiteSpace(result.Error));
+        Assert.DoesNotContain("topsecret", result.Error);
+        Assert.Contains("CanConnect", result.MissingRequired);
+    }
+
+    [Fact]
     public async Task DataPitcherApplication_ListsOnlyRequestedConnectionSnapshots()
     {
         using var fixture = new ProductionApplicationFixture();
@@ -712,6 +732,8 @@ public sealed class ProductionCompositionTests
                 Plans,
                 Jobs,
                 Events,
+                providers: new ConnectionProviderRegistry([new PostgreSqlConnectionProvider()]),
+                secretResolver: new SecretReferenceResolver(Path.GetTempPath()),
                 secretWriter: new FileSecretStore(
                     Path.Combine(Path.GetTempPath(), "datapitcher-secrets-" + Guid.NewGuid().ToString("N"))
                 )

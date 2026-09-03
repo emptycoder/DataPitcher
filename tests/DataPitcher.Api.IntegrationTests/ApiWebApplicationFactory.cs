@@ -220,6 +220,16 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
             () => new ConnectionResponse(connectionId, request.DisplayName, request.ProviderId, "Unknown", "etag-2")
         );
 
+    public Task<ConnectionTestResponse> TestConnectionAsync(
+        ConnectionTestRequest request,
+        CancellationToken cancellationToken
+    ) =>
+        ObserveAsync(
+            nameof(TestConnectionAsync),
+            cancellationToken,
+            () => new ConnectionTestResponse(true, "Healthy", "db", "1.0", ["CanConnect"], [], null)
+        );
+
     public Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken) =>
         ObserveAsync(nameof(DeleteConnectionAsync), cancellationToken, () => connectionId);
 

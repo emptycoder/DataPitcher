@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { connectionsApi, providerLabels, type Connection } from '../../api/connections';
+import { connectionsApi, providerLabels, type Connection, type ConnectionTest } from '../../api/connections';
 import {
     authOption,
     authOptionsFor,
@@ -132,6 +132,7 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
     const [scan, setScan] = useState<ScanProgress | null>(null);
     const [removing, setRemoving] = useState(false);
     const [editing, setEditing] = useState(false);
+    const [checkDetail, setCheckDetail] = useState<ConnectionTest | null>(null);
     const abort = useRef<AbortController | null>(null);
     useEffect(() => () => abort.current?.abort(), []);
 
@@ -148,13 +149,26 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                 .getQueryData<readonly Connection[]>(queryKeys.connections)
                 ?.find((item) => item.connectionId === connection.connectionId);
             const health = refreshed?.health ?? 'Unknown';
-            if (health === 'Healthy') toast.success(`${connection.displayName} is healthy`);
-            else
+            if (health === 'Healthy') {
+                setCheckDetail(null);
+                toast.success(`${connection.displayName} is healthy`);
+            } else {
+                try {
+                    setCheckDetail(
+                        await connectionsApi.test(
+                            { providerId: connection.providerId, connectionId: connection.connectionId },
+                            authentication,
+                        ),
+                    );
+                } catch {
+                    setCheckDetail(null);
+                }
                 toast.push({
                     tone: 'warning',
                     title: `${connection.displayName} is ${health.toLowerCase()}`,
                     description: 'Check the credential environment variable and network access.',
                 });
+            }
         },
         onError: (error) => toast.error('Health check failed', describeError(error)),
     });
@@ -330,6 +344,15 @@ function ConnectionCard({ connection }: Readonly<{ connection: Connection }>) {
                 )}
             </div>
 
+            {checkDetail && !checkDetail.succeeded ? (
+                <Alert tone="danger">
+                    <div className="font-medium">Connection check failed</div>
+                    <div className="mt-0.5 break-words">{checkDetail.error ?? 'The database did not answer.'}</div>
+                    {checkDetail.missingRequired.length ? (
+                        <div className="mt-1 text-xs opacity-80">Missing: {checkDetail.missingRequired.join(', ')}</div>
+                    ) : null}
+                </Alert>
+            ) : null}
             <div className="mt-auto flex flex-wrap gap-2">
                 <Button
                     disabled={!canWrite}
@@ -460,6 +483,7 @@ function ConnectionDialog({
     const [rawConnectionString, setRawConnectionString] = useState('');
     const [credentialId, setCredentialId] = useState(() => crypto.randomUUID());
     const [error, setError] = useState<string | null>(null);
+    const [testResult, setTestResult] = useState<ConnectionTest | null>(null);
     const providerId = details.providerId;
 
     function reset() {
@@ -472,6 +496,32 @@ function ConnectionDialog({
 
     const connectionString = () =>
         mode === 'details' ? buildConnectionString(details) : mode === 'raw' ? rawConnectionString.trim() : null;
+    const credentialsReady =
+        mode === 'keep'
+            ? existing !== undefined
+            : mode === 'raw'
+              ? rawConnectionString.trim().length > 0
+              : validateConnectionDetails(details) === null;
+    const test = useMutation({
+        mutationFn: () =>
+            connectionsApi.test(
+                mode === 'keep'
+                    ? { providerId, connectionId: existing!.connectionId }
+                    : { providerId, connectionString: connectionString() },
+                authentication,
+            ),
+        onSuccess: setTestResult,
+        onError: (caught) =>
+            setTestResult({
+                succeeded: false,
+                health: 'Unknown',
+                databaseIdentity: null,
+                providerVersion: null,
+                capabilities: [],
+                missingRequired: [],
+                error: describeError(caught, 'The test request failed.'),
+            }),
+    });
     const create = useMutation({
         mutationFn: () =>
             existing
@@ -540,6 +590,15 @@ function ConnectionDialog({
             }
             footer={
                 <>
+                    <Button
+                        className="mr-auto"
+                        disabled={!credentialsReady}
+                        icon={<Icons.Activity size={15} />}
+                        loading={test.isPending}
+                        onClick={() => test.mutate()}
+                    >
+                        Test connection
+                    </Button>
                     <Button onClick={onClose}>Cancel</Button>
                     <Button form="add-connection" loading={create.isPending} type="submit" variant="primary">
                         {isEdit ? 'Save changes' : 'Add connection'}
@@ -608,7 +667,10 @@ function ConnectionDialog({
                                   { value: 'raw', label: 'Connection string' },
                               ]
                     }
-                    onChange={setMode}
+                    onChange={(next) => {
+                        setMode(next);
+                        setTestResult(null);
+                    }}
                     value={mode}
                 />
 
@@ -741,6 +803,26 @@ function ConnectionDialog({
                     </Field>
                 ) : null}
 
+                {testResult ? (
+                    testResult.succeeded ? (
+                        <Alert tone="success" title="Connection succeeded">
+                            {testResult.databaseIdentity ? (
+                                <span className="font-mono">{testResult.databaseIdentity}</span>
+                            ) : null}
+                            {testResult.providerVersion ? <span> · {testResult.providerVersion}</span> : null}
+                            <span> · {testResult.capabilities.length} capabilities verified</span>
+                        </Alert>
+                    ) : (
+                        <Alert tone="danger" title={`Connection failed (${testResult.health})`}>
+                            <div className="break-words">{testResult.error ?? 'The database did not answer.'}</div>
+                            {testResult.missingRequired.length ? (
+                                <div className="mt-1 text-xs opacity-80">
+                                    Missing capabilities: {testResult.missingRequired.join(', ')}
+                                </div>
+                            ) : null}
+                        </Alert>
+                    )
+                ) : null}
                 {error ? <Alert tone="danger">{error}</Alert> : null}
             </form>
         </Modal>

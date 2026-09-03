@@ -31,6 +31,9 @@ public static class EndpointGroups
             connections.MapPost("", CreateConnectionAsync).RequireAuthorization(ApiPolicyNames.ConnectionsWrite)
         );
         WithStandardProblems(
+            connections.MapPost("/test", TestConnectionAsync).RequireAuthorization(ApiPolicyNames.ConnectionsWrite)
+        );
+        WithStandardProblems(
             connections
                 .MapPut("/{connectionId:guid}", UpdateConnectionAsync)
                 .RequireAuthorization(ApiPolicyNames.ConnectionsWrite)
@@ -161,6 +164,35 @@ public static class EndpointGroups
                 title: "A connection string is required."
             );
         return TypedResults.Ok(await application.CreateConnectionAsync(request, cancellationToken));
+    }
+
+    private static async Task<Results<Ok<ConnectionTestResponse>, ProblemHttpResult>> TestConnectionAsync(
+        ConnectionTestRequest request,
+        HttpContext context,
+        ClaimsPrincipal user,
+        IAuthorizationService authorizationService,
+        IDataPitcherApplication application,
+        CancellationToken cancellationToken
+    )
+    {
+        if (string.IsNullOrWhiteSpace(request.ConnectionString) && request.ConnectionId is null)
+            return TypedResults.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "A connection string or an existing connection is required."
+            );
+        if (
+            request.ConnectionId is Guid connectionId
+            && await AuthorizeResourceAsync(
+                context,
+                authorizationService,
+                user,
+                new ConnectionResource(connectionId),
+                Permissions.ConnectionsWrite
+            )
+                is { } problem
+        )
+            return problem;
+        return TypedResults.Ok(await application.TestConnectionAsync(request, cancellationToken));
     }
 
     private static async Task<Results<Ok<ConnectionResponse>, ProblemHttpResult>> UpdateConnectionAsync(

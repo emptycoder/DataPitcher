@@ -66,6 +66,31 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task TestConnection_ProbesInlineCredentials()
+    {
+        var request = new ConnectionTestRequest("postgresql", "Host=localhost;Database=app");
+
+        using var response = await _client.PostAsJsonAsync("/api/connections/test", request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<ConnectionTestResponse>();
+        Assert.True(result!.Succeeded);
+        Assert.Contains("TestConnectionAsync", _factory.Application.Invocations);
+    }
+
+    [Fact]
+    public async Task TestConnection_WithoutCredentialsOrConnection_ReturnsValidationProblemDetails()
+    {
+        using var response = await _client.PostAsJsonAsync(
+            "/api/connections/test",
+            new ConnectionTestRequest("postgresql"),
+            CancellationToken.None
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task UpdateConnection_ReturnsTheUpdatedConnectionWithoutSecrets()
     {
         var connectionId = Guid.NewGuid();

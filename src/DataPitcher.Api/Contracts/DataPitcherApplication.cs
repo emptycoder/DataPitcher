@@ -31,7 +31,9 @@ public sealed class DataPitcherApplication(
     IJobRepository jobs,
     IJobEventReader jobEvents,
     PlanSealingService? sealing = null,
-    ISecretWriter? secretWriter = null
+    ISecretWriter? secretWriter = null,
+    IConnectionProviderRegistry? providers = null,
+    ISecretReferenceResolver? secretResolver = null
 ) : IDataPitcherApplication
 {
     private const string DefaultBusinessSchema = "app";
@@ -99,6 +101,110 @@ public sealed class DataPitcherApplication(
             await secretWriter.RemoveAsync(existing.SecretReference, cancellationToken);
         var summary = await connections.GetSummaryAsync(profile.ConnectionId, cancellationToken);
         return ToConnectionResponse(summary);
+    }
+
+    public async Task<ConnectionTestResponse> TestConnectionAsync(
+        ConnectionTestRequest request,
+        CancellationToken cancellationToken
+    )
+    {
+        var registry = providers ?? throw new InvalidOperationException("Connection providers are not configured.");
+        ConnectionProfile profile;
+        string connectionString;
+        if (!string.IsNullOrWhiteSpace(request.ConnectionString))
+        {
+            profile = new ConnectionProfile(
+                request.ConnectionId ?? Guid.Empty,
+                "connection test",
+                request.ProviderId,
+                new SecretReference(SecretReferenceKind.EnvironmentVariable, "DATAPITCHER_CONNECTION_TEST"),
+                DefaultBusinessSchema,
+                DefaultStagingSchema,
+                0
+            );
+            connectionString = request.ConnectionString;
+        }
+        else if (request.ConnectionId is Guid connectionId)
+        {
+            profile = await connections.GetProfileAsync(connectionId, cancellationToken);
+            connectionString = await (
+                secretResolver ?? throw new InvalidOperationException("Secret resolution is not configured.")
+            ).ResolveAsync(profile.SecretReference, cancellationToken);
+        }
+        else
+            throw new ArgumentException("A connection string or an existing connection is required.", nameof(request));
+
+        IConnectionProvider provider;
+        try
+        {
+            provider = registry.Get(profile.ProviderId);
+        }
+        catch (UnsupportedConnectionProviderException exception)
+        {
+            return new ConnectionTestResponse(
+                false,
+                ConnectionHealthState.Unhealthy.ToString(),
+                null,
+                null,
+                [],
+                [],
+                exception.Message
+            );
+        }
+        var requirements = ConnectionRequirements.For(TransferMode.DirectFast, ConnectionRole.Source);
+        try
+        {
+            var evidence = await provider.CapabilityDetector.ProbeAsync(
+                new ConnectionProbeRequest(profile, ConnectionRole.Source, TransferMode.DirectFast, connectionString),
+                cancellationToken
+            );
+            var assessment = ConnectionHealthClassifier.Classify(requirements, evidence);
+            return new ConnectionTestResponse(
+                assessment.State is ConnectionHealthState.Healthy,
+                assessment.State.ToString(),
+                evidence.DatabaseIdentity,
+                evidence.ProviderVersion,
+                evidence.Available.Select(capability => capability.ToString()).Order(StringComparer.Ordinal).ToArray(),
+                assessment
+                    .MissingRequired.Select(capability => capability.ToString())
+                    .Order(StringComparer.Ordinal)
+                    .ToArray(),
+                assessment.State is ConnectionHealthState.Healthy
+                    ? null
+                    : "The database was reached but required capabilities are missing."
+            );
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new ConnectionTestResponse(
+                false,
+                ConnectionHealthState.Unhealthy.ToString(),
+                null,
+                null,
+                [],
+                requirements
+                    .Required.Select(capability => capability.ToString())
+                    .Order(StringComparer.Ordinal)
+                    .ToArray(),
+                Redact(exception.GetBaseException().Message, connectionString)
+            );
+        }
+    }
+
+    /// <summary>Drops any secret-looking connection-string values from a driver message before it leaves the API.</summary>
+    private static string Redact(string message, string connectionString)
+    {
+        foreach (var part in connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = part.IndexOf('=');
+            if (separator < 0)
+                continue;
+            var key = part[..separator].Trim().ToLowerInvariant();
+            var value = part[(separator + 1)..].Trim().Trim('"', '\'');
+            if (value.Length >= 3 && (key.Contains("password") || key.Contains("pwd") || key.Contains("secret")))
+                message = message.Replace(value, "•••", StringComparison.Ordinal);
+        }
+        return message;
     }
 
     public async Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken)

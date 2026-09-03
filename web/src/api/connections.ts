@@ -77,7 +77,27 @@ export type UpdateConnectionInput = Readonly<{
     connectionString: string | null;
 }>;
 
+export const ConnectionTestSchema = z.object({
+    succeeded: z.boolean(),
+    health: z.string(),
+    databaseIdentity: z.string().nullable(),
+    providerVersion: z.string().nullable(),
+    capabilities: z.array(z.string()),
+    missingRequired: z.array(z.string()),
+    error: z.string().nullable(),
+});
+export type ConnectionTest = z.infer<typeof ConnectionTestSchema>;
+export type ConnectionTestInput = Readonly<{
+    providerId: string;
+    connectionString?: string | null;
+    connectionId?: string | null;
+}>;
+
 export const connectionsApi = {
+    test: (input: ConnectionTestInput, auth: AuthenticationAdapter) =>
+        requestJson<unknown>('/api/connections/test', auth, { method: 'POST', body: input }).then((data) =>
+            ConnectionTestSchema.parse(data),
+        ),
     update: (connectionId: string, input: UpdateConnectionInput, eTag: string, auth: AuthenticationAdapter) =>
         requestJson<unknown>(`/api/connections/${connectionId}`, auth, {
             method: 'PUT',

@@ -24,6 +24,26 @@ public sealed record UpdateConnectionRequest(
     string? ConnectionString = null
 );
 
+/// <summary>
+/// Probes a database without persisting anything: either credentials supplied inline (for a connection being added or
+/// edited) or the credentials stored for an existing connection. The response never echoes the connection string.
+/// </summary>
+public sealed record ConnectionTestRequest(
+    string ProviderId,
+    string? ConnectionString = null,
+    Guid? ConnectionId = null
+);
+
+public sealed record ConnectionTestResponse(
+    bool Succeeded,
+    string Health,
+    string? DatabaseIdentity,
+    string? ProviderVersion,
+    IReadOnlyList<string> Capabilities,
+    IReadOnlyList<string> MissingRequired,
+    string? Error
+);
+
 public sealed record ConnectionResponse(
     Guid ConnectionId,
     string DisplayName,

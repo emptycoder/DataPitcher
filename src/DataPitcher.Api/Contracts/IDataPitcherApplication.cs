@@ -21,6 +21,10 @@ public interface IDataPitcherApplication
         CancellationToken cancellationToken
     );
     Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken);
+    Task<ConnectionTestResponse> TestConnectionAsync(
+        ConnectionTestRequest request,
+        CancellationToken cancellationToken
+    );
     Task<OperationReceiptResponse> QueueConnectionCheckAsync(Guid connectionId, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueSchemaScanAsync(Guid connectionId, CancellationToken cancellationToken);
     Task<IReadOnlyList<SchemaSnapshotSummaryResponse>> ListSnapshotsAsync(
