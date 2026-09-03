@@ -79,11 +79,12 @@ public sealed class SqlServerTargetCheckpointStore(string targetConnectionString
         long affected,
         long inserts,
         long updates,
+        int phase,
         CancellationToken cancellationToken
     )
     {
         const string sql =
-            "UPDATE [datapitcher].[transfer_checkpoints] SET last_batch_sequence=@sequence,last_stable_key=@key,last_table=@table,cumulative_affected=cumulative_affected+@affected,cumulative_inserts=cumulative_inserts+@inserts,cumulative_updates=cumulative_updates+@updates WHERE job_id=@job AND run_id=@run AND manifest_hash=@hash AND fence_token=@fence AND last_batch_sequence=@previous";
+            "UPDATE [datapitcher].[transfer_checkpoints] SET last_batch_sequence=@sequence,last_stable_key=@key,last_table=@table,phase=@phase,cumulative_affected=cumulative_affected+@affected,cumulative_inserts=cumulative_inserts+@inserts,cumulative_updates=cumulative_updates+@updates WHERE job_id=@job AND run_id=@run AND manifest_hash=@hash AND fence_token=@fence AND last_batch_sequence=@previous";
         await using var command = new SqlCommand(sql, connection, transaction);
         AddContext(command, context);
         command.Parameters.Add("@sequence", SqlDbType.BigInt).Value = batch.Sequence;
@@ -92,6 +93,7 @@ public sealed class SqlServerTargetCheckpointStore(string targetConnectionString
             table
         );
         command.Parameters.Add("@table", SqlDbType.NVarChar, 512).Value = JsonSerializer.Serialize(table.Target);
+        command.Parameters.Add("@phase", SqlDbType.Int).Value = phase;
         command.Parameters.Add("@affected", SqlDbType.BigInt).Value = affected;
         command.Parameters.Add("@inserts", SqlDbType.BigInt).Value = inserts;
         command.Parameters.Add("@updates", SqlDbType.BigInt).Value = updates;
@@ -107,7 +109,7 @@ public sealed class SqlServerTargetCheckpointStore(string targetConnectionString
     )
     {
         await using var command = new SqlCommand(
-            "IF SCHEMA_ID(N'datapitcher') IS NULL EXEC(N'CREATE SCHEMA [datapitcher]'); IF OBJECT_ID(N'[datapitcher].[transfer_checkpoints]',N'U') IS NULL CREATE TABLE [datapitcher].[transfer_checkpoints] (job_id uniqueidentifier NOT NULL,run_id uniqueidentifier NOT NULL,last_batch_sequence bigint NOT NULL,last_stable_key varbinary(max) NOT NULL,last_table nvarchar(512) NULL,cumulative_affected bigint NOT NULL,cumulative_inserts bigint NOT NULL,cumulative_updates bigint NOT NULL,manifest_hash nvarchar(128) NOT NULL,fence_token bigint NOT NULL,PRIMARY KEY(job_id,run_id)); IF COL_LENGTH(N'datapitcher.transfer_checkpoints', N'last_table') IS NULL ALTER TABLE [datapitcher].[transfer_checkpoints] ADD last_table nvarchar(512) NULL;",
+            "IF SCHEMA_ID(N'datapitcher') IS NULL EXEC(N'CREATE SCHEMA [datapitcher]'); IF OBJECT_ID(N'[datapitcher].[transfer_checkpoints]',N'U') IS NULL CREATE TABLE [datapitcher].[transfer_checkpoints] (job_id uniqueidentifier NOT NULL,run_id uniqueidentifier NOT NULL,last_batch_sequence bigint NOT NULL,last_stable_key varbinary(max) NOT NULL,last_table nvarchar(512) NULL,cumulative_affected bigint NOT NULL,cumulative_inserts bigint NOT NULL,cumulative_updates bigint NOT NULL,manifest_hash nvarchar(128) NOT NULL,fence_token bigint NOT NULL,PRIMARY KEY(job_id,run_id)); IF COL_LENGTH(N'datapitcher.transfer_checkpoints', N'last_table') IS NULL ALTER TABLE [datapitcher].[transfer_checkpoints] ADD last_table nvarchar(512) NULL; IF COL_LENGTH(N'datapitcher.transfer_checkpoints', N'phase') IS NULL ALTER TABLE [datapitcher].[transfer_checkpoints] ADD phase int NOT NULL CONSTRAINT [DF_transfer_checkpoints_phase] DEFAULT 0;",
             connection,
             transaction
         );
@@ -123,7 +125,7 @@ public sealed class SqlServerTargetCheckpointStore(string targetConnectionString
     )
     {
         await using var command = new SqlCommand(
-            "SELECT job_id,run_id,last_batch_sequence,last_stable_key,cumulative_affected,cumulative_inserts,cumulative_updates,manifest_hash,fence_token,last_table FROM "
+            "SELECT job_id,run_id,last_batch_sequence,last_stable_key,cumulative_affected,cumulative_inserts,cumulative_updates,manifest_hash,fence_token,last_table,phase FROM "
                 + Name
                 + " WHERE job_id=@job AND run_id=@run",
             connection,
@@ -143,7 +145,8 @@ public sealed class SqlServerTargetCheckpointStore(string targetConnectionString
                 reader.GetInt64(6),
                 reader.GetString(7),
                 reader.GetInt64(8),
-                reader.IsDBNull(9) ? null : JsonSerializer.Deserialize<TableAddress>(reader.GetString(9))
+                reader.IsDBNull(9) ? null : JsonSerializer.Deserialize<TableAddress>(reader.GetString(9)),
+                reader.GetInt32(10)
             )
             : null;
     }

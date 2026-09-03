@@ -29,13 +29,15 @@ public sealed class ProviderRunSessionRouter(
         TransferRun run,
         StableKey? startAfter,
         CancellationToken cancellationToken,
-        TableAddress? table = null
+        TableAddress? table = null,
+        TransferPhase phase = TransferPhase.Rows
     ) =>
         await (await ProviderForAsync(run.SourceConnectionId, cancellationToken)).OpenKeysetAsync(
             run,
             startAfter,
             cancellationToken,
-            table
+            table,
+            phase
         );
 
     public async Task<ITargetRunSession> OpenAsync(TransferRun run, CancellationToken cancellationToken) =>

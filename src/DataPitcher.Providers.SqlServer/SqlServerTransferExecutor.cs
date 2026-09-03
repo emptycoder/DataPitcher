@@ -63,15 +63,48 @@ public sealed class SqlServerTransferExecutor
             result.Affected,
             result.Inserts,
             result.Updates,
+            0,
             cancellationToken
         );
         await transaction.CommitAsync(cancellationToken);
+        var checkpoint = await CommittedAsync(connection, context, cancellationToken);
+        return new SqlServerBatchCommit(batch.Sequence, result.Affected, result.Inserts, result.Updates, checkpoint);
+    }
+
+    /// <summary>
+    /// Second phase: fills in the deferred columns of rows this run wrote. <paramref name="table"/> carries the stable
+    /// key plus the deferred columns only. Row counters stay untouched; the checkpoint records phase 1.
+    /// </summary>
+    public async Task<SqlServerBatchCommit> BackfillAsync(
+        SqlServerExecutionContext context,
+        SqlServerWriteTable table,
+        SqlServerTransferBatch batch,
+        CancellationToken cancellationToken
+    )
+    {
+        await InitializeAsync(context, cancellationToken);
+        await using var connection = new SqlConnection(_targetConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        var affected = await _applier.BackfillAsync(connection, transaction, context, table, batch, cancellationToken);
+        await _checkpoints.AdvanceAsync(connection, transaction, context, table, batch, 0, 0, 0, 1, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        var checkpoint = await CommittedAsync(connection, context, cancellationToken);
+        return new SqlServerBatchCommit(batch.Sequence, affected, 0, 0, checkpoint);
+    }
+
+    private async Task<SqlServerTargetCheckpoint> CommittedAsync(
+        SqlConnection connection,
+        SqlServerExecutionContext context,
+        CancellationToken cancellationToken
+    )
+    {
         var checkpoint =
             await _checkpoints.ReadAsync(connection, context.JobId, context.RunId, cancellationToken)
             ?? throw new InvalidOperationException("Committed target checkpoint was not found.");
         await _barrier.WaitAsync(checkpoint, cancellationToken);
         await _mirror.WriteAsync(checkpoint, cancellationToken);
-        return new SqlServerBatchCommit(batch.Sequence, result.Affected, result.Inserts, result.Updates, checkpoint);
+        return checkpoint;
     }
 
     public async Task<SqlServerResumePoint> RecoverAsync(

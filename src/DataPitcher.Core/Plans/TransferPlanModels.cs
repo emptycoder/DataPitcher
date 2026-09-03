@@ -157,7 +157,8 @@ public sealed class PlanTable
         PlanTableState state,
         ManifestCounts manifest,
         TopologicalGroup topologicalGroup,
-        CycleStrategy cycleStrategy
+        CycleStrategy cycleStrategy,
+        IReadOnlyList<string>? deferredColumns = null
     )
     {
         Mapping = mapping;
@@ -165,6 +166,7 @@ public sealed class PlanTable
         Manifest = manifest;
         TopologicalGroup = topologicalGroup;
         CycleStrategy = cycleStrategy;
+        DeferredColumns = Array.AsReadOnly((deferredColumns ?? []).ToArray());
     }
 
     public TableMapping Mapping { get; }
@@ -172,6 +174,12 @@ public sealed class PlanTable
     public ManifestCounts Manifest { get; }
     public TopologicalGroup TopologicalGroup { get; }
     public CycleStrategy CycleStrategy { get; }
+
+    /// <summary>
+    /// Source columns of nullable foreign keys that close a cycle in the table graph. Rows are written with these
+    /// columns NULL and the values are filled in once every table has been written, so constraints stay enforced.
+    /// </summary>
+    public IReadOnlyList<string> DeferredColumns { get; }
 }
 
 public sealed class TransferPlanContent

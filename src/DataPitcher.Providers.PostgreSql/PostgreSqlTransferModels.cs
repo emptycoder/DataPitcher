@@ -99,7 +99,9 @@ public sealed record PostgreSqlTargetCheckpoint(
     long CumulativeUpdates,
     string ManifestHash,
     long FenceToken,
-    TableAddress? LastTable = null
+    TableAddress? LastTable = null,
+    /// <summary>0 while rows are written, 1 once deferred columns are being filled in.</summary>
+    int Phase = 0
 );
 
 public sealed record PostgreSqlResumePoint(long NextBatchSequence, StableKey? AfterStableKey);

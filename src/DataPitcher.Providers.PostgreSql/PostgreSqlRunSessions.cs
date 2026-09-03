@@ -28,7 +28,8 @@ public sealed class PostgreSqlRunSessions(
         TransferRun run,
         StableKey? startAfter,
         CancellationToken cancellationToken,
-        TableAddress? table = null
+        TableAddress? table = null,
+        TransferPhase phase = TransferPhase.Rows
     )
     {
         var content = await ContentAsync(run, cancellationToken);
@@ -45,7 +46,8 @@ public sealed class PostgreSqlRunSessions(
             run.PlanId,
             startAfter,
             table,
-            BatchSequence.WorkerFromProvider(checkpoint.LastBatchSequence) + 1
+            BatchSequence.WorkerFromProvider(checkpoint.LastBatchSequence) + 1,
+            phase
         );
     }
 
@@ -74,100 +76,135 @@ public sealed class PostgreSqlRunSessions(
         Guid planId,
         StableKey? startAfter,
         TableAddress? startTable,
-        long nextSequence
+        long nextSequence,
+        TransferPhase startPhase
     ) : ITransferReadSession
     {
         private readonly IReadOnlyList<PlanTable> _tables = Tables(content);
-        private readonly Dictionary<int, PostgreSqlWriteTable> _sources = [];
-        private int _index = StartIndex(Tables(content), startTable);
+        private readonly IReadOnlyList<PlanTable> _deferred = Deferred(content);
+        private readonly Dictionary<(TransferPhase Phase, int Index), PostgreSqlWriteTable> _sources = [];
+        private TransferPhase _phase = startPhase;
+        private int _index = StartIndex(
+            startPhase == TransferPhase.Rows ? Tables(content) : Deferred(content),
+            startTable
+        );
         private StableKey? _after = startAfter;
         private int? _afterGeneration;
         private long _nextSequence = nextSequence;
 
         public async Task<TransferUnit?> ReadNextAsync(CancellationToken cancellationToken)
         {
-            while (_index < _tables.Count)
+            while (true)
             {
-                var planTable = _tables[_index];
-                var stableKey = StableKey(content, planTable);
-                // The source shape is read once per table, not once per batch.
-                if (!_sources.TryGetValue(_index, out var source))
+                var tables = _phase == TransferPhase.Rows ? _tables : _deferred;
+                if (_index >= tables.Count)
                 {
-                    var sourceSchema = await new PostgreSqlTransferSchemaReader(dataSource).ReadAsync(
-                        planTable.Mapping.Source.Schema,
-                        planTable.Mapping.Source.Name,
-                        stableKey.Columns,
-                        cancellationToken
-                    );
-                    source = _sources[_index] = SourceTable(sourceSchema, planTable, stableKey);
+                    if (_phase == TransferPhase.DeferredColumns)
+                        return null;
+                    // Every row is in the target: fill in the columns that were held back to break cycles.
+                    _phase = TransferPhase.DeferredColumns;
+                    _index = 0;
+                    _after = null;
+                    _afterGeneration = null;
+                    continue;
                 }
-                var join =
-                    " JOIN "
-                    + PostgreSqlStagingTables.Qualified(
-                        PostgreSqlStagingTables.SourceTableName(planId, planTable.Mapping.Source)
-                    )
-                    + " f ON "
-                    + string.Join(
-                        " AND ",
-                        source.StableKeyColumns.Select(
-                            (column, index) => "s." + PostgreSqlIdentifier.Quote(column.Name) + "=f.k" + index
-                        )
-                    );
-                if (_after is not null && _afterGeneration is null)
-                    _afterGeneration = await GenerationAsync(planTable, source, _after, cancellationToken);
-                var query = PostgreSqlKeysetSeek.Build(
-                    source,
-                    _after,
-                    content.BatchTarget.MaximumRows,
-                    join,
-                    _afterGeneration
-                );
-                int? lastGeneration = null;
-                var rows = new List<TransferRow>();
-                StableKey? last = null;
-                var bytes = 0L;
-                await using var command = dataSource.CreateCommand(query.Sql);
-                foreach (var parameter in query.Parameters)
-                    command.Parameters.Add(parameter);
-                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-                while (await reader.ReadAsync(cancellationToken))
-                {
-                    var values = source
-                        .InsertColumns.Select((_, index) => reader.IsDBNull(index) ? null : reader.GetValue(index))
-                        .ToArray();
-                    var payload = values.Sum(PayloadBytes);
-                    if (rows.Count != 0 && bytes + payload > content.BatchTarget.MaximumBytes)
-                        break;
-                    rows.Add(new TransferRow(values, payload));
-                    lastGeneration = reader.GetInt32(source.InsertColumns.Count);
-                    bytes += payload;
-                    last = new StableKey(
-                        source.StableKeyColumns.Select(column => new KeyComponent(
-                            column.Name,
-                            values[Array.IndexOf(source.InsertColumns.ToArray(), column)]
-                        ))
-                    );
-                }
-
-                if (rows.Count != 0)
-                {
-                    _after = last;
-                    _afterGeneration = lastGeneration;
-                    return new TransferUnit(
-                        _nextSequence++,
-                        last!,
-                        rows.Count,
-                        TransferUnitKind.Batch,
-                        bytes,
-                        planTable.Mapping.Source,
-                        rows
-                    );
-                }
+                var unit = await ReadBatchAsync(tables[_index], cancellationToken);
+                if (unit is not null)
+                    return unit;
                 _index++;
                 _after = null;
                 _afterGeneration = null;
             }
-            return null;
+        }
+
+        private async Task<TransferUnit?> ReadBatchAsync(PlanTable planTable, CancellationToken cancellationToken)
+        {
+            var stableKey = StableKey(content, planTable);
+            // The source shape is read once per table and phase, not once per batch.
+            if (!_sources.TryGetValue((_phase, _index), out var source))
+            {
+                var sourceSchema = await new PostgreSqlTransferSchemaReader(dataSource).ReadAsync(
+                    planTable.Mapping.Source.Schema,
+                    planTable.Mapping.Source.Name,
+                    stableKey.Columns,
+                    cancellationToken
+                );
+                source = _sources[(_phase, _index)] =
+                    _phase == TransferPhase.Rows
+                        ? SourceTable(sourceSchema, planTable, stableKey)
+                        : DeferredTable(sourceSchema, planTable, stableKey);
+            }
+            // Deferred columns leave the source as NULL in the rows phase; the second phase writes their values.
+            var withheld =
+                _phase == TransferPhase.Rows
+                    ? source
+                        .InsertColumns.Select((column, index) => (column.Name, Index: index))
+                        .Where(item => planTable.DeferredColumns.Contains(item.Name, StringComparer.Ordinal))
+                        .Select(item => item.Index)
+                        .ToArray()
+                    : [];
+            var join =
+                " JOIN "
+                + PostgreSqlStagingTables.Qualified(
+                    PostgreSqlStagingTables.SourceTableName(planId, planTable.Mapping.Source)
+                )
+                + " f ON "
+                + string.Join(
+                    " AND ",
+                    source.StableKeyColumns.Select(
+                        (column, index) => "s." + PostgreSqlIdentifier.Quote(column.Name) + "=f.k" + index
+                    )
+                );
+            if (_after is not null && _afterGeneration is null)
+                _afterGeneration = await GenerationAsync(planTable, source, _after, cancellationToken);
+            var query = PostgreSqlKeysetSeek.Build(
+                source,
+                _after,
+                content.BatchTarget.MaximumRows,
+                join,
+                _afterGeneration
+            );
+            int? lastGeneration = null;
+            var rows = new List<TransferRow>();
+            StableKey? last = null;
+            var bytes = 0L;
+            await using var command = dataSource.CreateCommand(query.Sql);
+            foreach (var parameter in query.Parameters)
+                command.Parameters.Add(parameter);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var values = source
+                    .InsertColumns.Select((_, index) => reader.IsDBNull(index) ? null : reader.GetValue(index))
+                    .ToArray();
+                foreach (var index in withheld)
+                    values[index] = null;
+                var payload = values.Sum(PayloadBytes);
+                if (rows.Count != 0 && bytes + payload > content.BatchTarget.MaximumBytes)
+                    break;
+                rows.Add(new TransferRow(values, payload));
+                lastGeneration = reader.GetInt32(source.InsertColumns.Count);
+                bytes += payload;
+                last = new StableKey(
+                    source.StableKeyColumns.Select(column => new KeyComponent(
+                        column.Name,
+                        values[Array.IndexOf(source.InsertColumns.ToArray(), column)]
+                    ))
+                );
+            }
+            if (rows.Count == 0)
+                return null;
+            _after = last;
+            _afterGeneration = lastGeneration;
+            return new TransferUnit(
+                _nextSequence++,
+                last!,
+                rows.Count,
+                _phase == TransferPhase.Rows ? TransferUnitKind.Batch : TransferUnitKind.DeferredColumns,
+                bytes,
+                planTable.Mapping.Source,
+                rows
+            );
         }
 
         /// <summary>The closure generation sealing stamped on a key; needed to resume generation-ordered paging.</summary>
@@ -270,16 +307,44 @@ public sealed class PostgreSqlRunSessions(
                 )
                 .ToArray();
             var target = await TargetAsync(planTable, targetKeys, cancellationToken);
-            var sourceColumns = SourceColumns(planTable, stableKey);
-            var batch = new PostgreSqlTransferBatch(
-                BatchSequence.ProviderFromWorker(unit.BatchSequence),
-                rows.Select(row => TargetRow(row, sourceColumns, mappings, target)),
-                TargetKey(unit.LastStableKey, mappings),
-                Policy(content, planTable)
-            );
-            var commit = await _executor.ExecuteAsync(Context(run, lease), target, batch, cancellationToken);
-            _bytesTransferred += unit.BytesTransferred;
-            _skippedRows += Math.Max(0, rows.Count - commit.Affected);
+            PostgreSqlBatchCommit commit;
+            if (unit.Kind == TransferUnitKind.DeferredColumns)
+            {
+                // Stable key plus the deferred columns only: the values held back to break a cycle.
+                var deferredTargets = planTable
+                    .DeferredColumns.Select(column =>
+                        mappings.Single(mapping => StringComparer.Ordinal.Equals(mapping.Source, column)).Target
+                    )
+                    .ToArray();
+                var subset = new PostgreSqlWriteTable(
+                    target.Target,
+                    target.Columns.Where(column =>
+                        column.IsStableKey || deferredTargets.Contains(column.Name, StringComparer.Ordinal)
+                    )
+                );
+                var deferredSources = stableKey.Columns.Concat(planTable.DeferredColumns).ToArray();
+                var backfill = new PostgreSqlTransferBatch(
+                    BatchSequence.ProviderFromWorker(unit.BatchSequence),
+                    rows.Select(row => TargetRow(row, deferredSources, mappings, subset)),
+                    TargetKey(unit.LastStableKey, mappings),
+                    Policy(content, planTable)
+                );
+                commit = await _executor.BackfillAsync(Context(run, lease), subset, backfill, cancellationToken);
+                _bytesTransferred += unit.BytesTransferred;
+            }
+            else
+            {
+                var sourceColumns = SourceColumns(planTable, stableKey);
+                var batch = new PostgreSqlTransferBatch(
+                    BatchSequence.ProviderFromWorker(unit.BatchSequence),
+                    rows.Select(row => TargetRow(row, sourceColumns, mappings, target)),
+                    TargetKey(unit.LastStableKey, mappings),
+                    Policy(content, planTable)
+                );
+                commit = await _executor.ExecuteAsync(Context(run, lease), target, batch, cancellationToken);
+                _bytesTransferred += unit.BytesTransferred;
+                _skippedRows += Math.Max(0, rows.Count - commit.Affected);
+            }
             var checkpoint =
                 commit.Checkpoint
                 ?? await _checkpoints.ReadAsync(run.JobId, run.RunId, cancellationToken)
@@ -307,7 +372,8 @@ public sealed class PostgreSqlRunSessions(
                     run.ManifestSealHash,
                     checkpoint.FenceToken,
                     _bytesTransferred,
-                    SkippedRows: _skippedRows
+                    SkippedRows: _skippedRows,
+                    Phase: (TransferPhase)checkpoint.Phase
                 );
             var planTable = checkpoint.LastTable is null
                 ? Tables(content).Single()
@@ -332,7 +398,8 @@ public sealed class PostgreSqlRunSessions(
                 checkpoint.FenceToken,
                 _bytesTransferred,
                 planTable.Mapping.Source,
-                _skippedRows
+                _skippedRows,
+                (TransferPhase)checkpoint.Phase
             );
         }
     }
@@ -358,6 +425,16 @@ public sealed class PostgreSqlRunSessions(
         ordered.AddRange(planned.Where(table => !ordered.Contains(table)));
         return ordered;
     }
+
+    /// <summary>Tables with columns held back to break a cycle, in write order; the second phase fills them in.</summary>
+    private static IReadOnlyList<PlanTable> Deferred(TransferPlanContent content) =>
+        Tables(content).Where(table => table.DeferredColumns.Count > 0).ToArray();
+
+    private static PostgreSqlWriteTable DeferredTable(
+        PostgreSqlWriteTable schema,
+        PlanTable table,
+        StableKeyDefinition stableKey
+    ) => new(schema.Target, stableKey.Columns.Concat(table.DeferredColumns).Select(schema.Column));
 
     private static int StartIndex(IReadOnlyList<PlanTable> tables, TableAddress? startTable) =>
         startTable is null

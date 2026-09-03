@@ -80,7 +80,8 @@ public sealed class JobWorker(
                 run,
                 checkpoint.LastStableKey,
                 leaseLost.Token,
-                checkpoint.LastTable
+                checkpoint.LastTable,
+                checkpoint.Phase
             );
             for (TransferUnit? unit; (unit = await source.ReadNextAsync(leaseLost.Token)) is not null; )
             {

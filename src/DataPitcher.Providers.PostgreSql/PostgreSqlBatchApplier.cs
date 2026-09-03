@@ -58,6 +58,103 @@ public sealed class PostgreSqlBatchApplier
         return new PostgreSqlApplyResult(affected.Count, inserts.Count, updates.Count);
     }
 
+    /// <summary>
+    /// Fills in the deferred columns of rows this run wrote: the batch carries stable keys plus the deferred values,
+    /// and only keys in the run's ledger are touched so rows the target already had stay as they were.
+    /// </summary>
+    public async Task<long> BackfillAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        PostgreSqlExecutionContext context,
+        PostgreSqlWriteTable table,
+        PostgreSqlTransferBatch batch,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!_ledgerEnsured)
+        {
+            await EnsureLedgerAsync(connection, transaction, cancellationToken);
+            _ledgerEnsured = true;
+        }
+        var deferred = table.InsertColumns.Where(column => !column.IsStableKey).ToArray();
+        if (deferred.Length == 0)
+            return 0;
+        const string temp = "datapitcher_backfill";
+        var declaration = string.Join(
+            ", ",
+            table
+                .InsertColumns.Select(column =>
+                    PostgreSqlIdentifier.Quote(column.Name)
+                    + " "
+                    + column.StoreType
+                    + (column.IsStableKey ? " NOT NULL" : " NULL")
+                )
+                .Append("__stable_key bytea NOT NULL")
+        );
+        await using (
+            var create = new NpgsqlCommand(
+                "CREATE TEMP TABLE " + temp + " (" + declaration + ") ON COMMIT DROP",
+                connection,
+                transaction
+            )
+        )
+            await create.ExecuteNonQueryAsync(cancellationToken);
+        var names = string.Join(
+            ", ",
+            table.InsertColumns.Select(column => PostgreSqlIdentifier.Quote(column.Name)).Append("__stable_key")
+        );
+        await using (
+            var importer = await connection.BeginBinaryImportAsync(
+                "COPY " + temp + " (" + names + ") FROM STDIN (FORMAT BINARY)",
+                cancellationToken
+            )
+        )
+        {
+            foreach (var row in batch.Rows)
+            {
+                await importer.StartRowAsync(cancellationToken);
+                foreach (var column in table.InsertColumns)
+                {
+                    var value = row.Values[column.Name];
+                    if (value is null)
+                        await importer.WriteNullAsync(cancellationToken);
+                    else
+                        await importer.WriteAsync(value, column.ProviderType, cancellationToken);
+                }
+                await importer.WriteAsync(
+                    PostgreSqlStableKeyCodec.Encode(row.StableKey, table),
+                    NpgsqlTypes.NpgsqlDbType.Bytea,
+                    cancellationToken
+                );
+            }
+            await importer.CompleteAsync(cancellationToken);
+        }
+        var set = string.Join(
+            ", ",
+            deferred.Select(column =>
+                PostgreSqlIdentifier.Quote(column.Name) + "=b." + PostgreSqlIdentifier.Quote(column.Name)
+            )
+        );
+        await using var update = new NpgsqlCommand(
+            "UPDATE "
+                + PostgreSqlIdentifier.Qualified(table.Target.Schema, table.Target.Name)
+                + " t SET "
+                + set
+                + " FROM "
+                + temp
+                + " b WHERE "
+                + Join(table.StableKeyColumns, "b", "t")
+                + " AND EXISTS (SELECT 1 FROM datapitcher.transfer_affected_keys l WHERE l.job_id=@job AND l.run_id=@run AND l.table_schema=@schema AND l.table_name=@table AND l.stable_key=b.__stable_key)",
+            connection,
+            transaction
+        );
+        update.Parameters.AddWithValue("job", context.JobId);
+        update.Parameters.AddWithValue("run", context.RunId);
+        update.Parameters.AddWithValue("schema", table.Target.Schema);
+        update.Parameters.AddWithValue("table", table.Target.Name);
+        return await update.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static string InsertSql(PostgreSqlWriteTable table, PostgreSqlConflictPolicy policy)
     {
         var target = PostgreSqlIdentifier.Qualified(table.Target.Schema, table.Target.Name);

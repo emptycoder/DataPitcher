@@ -27,6 +27,7 @@ public sealed class PostgreSqlTargetCheckpointStoreTests : IClassFixture<Postgre
             1,
             1,
             0,
+            0,
             CancellationToken.None
         );
         await transaction.CommitAsync();
@@ -57,6 +58,7 @@ public sealed class PostgreSqlTargetCheckpointStoreTests : IClassFixture<Postgre
                 PostgreSqlTransferTestData.Batch(0, (1, "a")),
                 1,
                 1,
+                0,
                 0,
                 CancellationToken.None
             )

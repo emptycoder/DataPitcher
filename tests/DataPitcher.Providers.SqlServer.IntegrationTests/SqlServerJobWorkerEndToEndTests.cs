@@ -197,6 +197,43 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
         );
     }
 
+    [Fact]
+    public async Task Transfer_WhenTwoTablesReferenceEachOther_FillsTheNullableSideAfterTheRows()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE dbo.worker_teams (id int NOT NULL CONSTRAINT PK_worker_teams PRIMARY KEY, lead_id int NULL);"
+            + " CREATE TABLE dbo.worker_people (id int NOT NULL CONSTRAINT PK_worker_people PRIMARY KEY, team_id int NOT NULL CONSTRAINT FK_worker_people_team FOREIGN KEY REFERENCES dbo.worker_teams(id));"
+            + " ALTER TABLE dbo.worker_teams ADD CONSTRAINT FK_worker_teams_lead FOREIGN KEY (lead_id) REFERENCES dbo.worker_people(id);";
+        // 2,100 teams, each led by one of 2,100 people: neither table can go first while lead_id carries a value.
+        const string numbers =
+            "WITH n AS (SELECT TOP (2100) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS i FROM sys.all_objects a CROSS JOIN sys.all_objects b)";
+        await scope.ExecuteAsync(
+            ddl
+                + " "
+                + numbers
+                + " INSERT dbo.worker_teams (id, lead_id) SELECT i, NULL FROM n; "
+                + numbers
+                + " INSERT dbo.worker_people (id, team_id) SELECT i, i FROM n; UPDATE dbo.worker_teams SET lead_id = id;"
+        );
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(scope, "worker_people", "PK_worker_people", "SELECT * FROM dbo.worker_people");
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal(2100, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_people"));
+        Assert.Equal(
+            2100,
+            await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_teams WHERE lead_id = id")
+        );
+        Assert.Equal(
+            2,
+            await scope.ScalarTargetAsync<int>(
+                "SELECT COUNT(*) FROM sys.foreign_keys WHERE name IN ('FK_worker_people_team', 'FK_worker_teams_lead') AND is_disabled = 0 AND is_not_trusted = 0"
+            )
+        );
+    }
+
     /// <summary>Scans, selects every row of <paramref name="rootTable"/>, seals, runs the worker and waits for the end.</summary>
     private static async Task<TransferJob> RunTransferAsync(
         SqlServerClosureScope scope,

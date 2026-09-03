@@ -694,7 +694,8 @@ public sealed class JobWorkerTests
             TransferRun run,
             StableKey? startAfter,
             CancellationToken cancellationToken,
-            TableAddress? table = null
+            TableAddress? table = null,
+            TransferPhase phase = TransferPhase.Rows
         )
         {
             OpenCalls++;

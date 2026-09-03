@@ -26,6 +26,7 @@ public sealed class SqlServerTargetCheckpointStoreTests(SqlServerClosureFixture 
             1,
             1,
             0,
+            0,
             CancellationToken.None
         );
         await transaction.CommitAsync(CancellationToken.None);
@@ -45,6 +46,7 @@ public sealed class SqlServerTargetCheckpointStoreTests(SqlServerClosureFixture 
                 SqlServerTransferTestData.Batch(1, (2, "two")),
                 1,
                 1,
+                0,
                 0,
                 CancellationToken.None
             )

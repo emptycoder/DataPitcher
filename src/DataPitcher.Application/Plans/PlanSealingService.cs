@@ -126,9 +126,18 @@ public sealed class PlanSealingService(
             if (store is IAsyncDisposable disposable)
                 await disposable.DisposeAsync();
         }
-        var selfRelationships = relationships.Where(r => r.FromTable == r.ToTable).ToArray();
-        if (selfRelationships.Length > 0)
-            await session.OrderHierarchiesAsync(selfRelationships, stableKeys, planId, cancellationToken);
+        var depth = closure
+            .Rows.GroupBy(row => row.Table)
+            .ToDictionary(group => group.Key, group => group.Max(row => row.Generation));
+        var order = ImportOrdering.Plan(
+            depth.Keys.ToArray(),
+            relationships,
+            depth,
+            relationship => IsNullable(relationship, session.TargetSchema),
+            relationship => IsOntoStableKey(relationship, stableKeys)
+        );
+        if (order.Levelled.Count > 0)
+            await session.OrderHierarchiesAsync(order.Levelled, stableKeys, planId, cancellationToken);
         var content = Content(
             selection,
             snapshot,
@@ -140,6 +149,7 @@ public sealed class PlanSealingService(
             relationships,
             stableKeys,
             closure,
+            order,
             parameterHash
         );
         var sealedPlan = new TransferPlanLifecycle(
@@ -159,21 +169,22 @@ public sealed class PlanSealingService(
         IReadOnlyCollection<ClosureRelationship> relationships,
         IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
         ClosureResult closure,
+        ImportOrder order,
         string parameterHash
     )
     {
         var groups = closure.Rows.GroupBy(row => row.Table).ToArray();
-        var order = TransferOrder(
-            groups.Select(group => group.Key).ToArray(),
-            relationships,
-            groups.ToDictionary(group => group.Key, group => group.Max(row => row.Generation))
-        );
         var tables = groups
-            .OrderBy(group => order[group.Key])
+            .OrderBy(group => order.Order[group.Key])
             .Select(group =>
             {
                 var address = Address(group.Key);
                 var count = group.LongCount();
+                var deferred = order
+                    .Deferred.Where(relationship => relationship.FromTable == group.Key)
+                    .SelectMany(relationship => relationship.FromColumns)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
                 return new PlanTable(
                     new TableMapping(
                         address,
@@ -183,7 +194,10 @@ public sealed class PlanSealingService(
                     group.Key == root ? PlanTableState.Root : PlanTableState.RequiredDependency,
                     new ManifestCounts(count, count, count, 0),
                     new TopologicalGroup([address]),
-                    CycleStrategy.NotApplicable
+                    deferred.Length > 0 ? CycleStrategy.NullableForeignKeyTwoPhase
+                        : order.Blocked.Contains(group.Key) ? CycleStrategy.Blocked
+                        : CycleStrategy.NotApplicable,
+                    deferred
                 );
             })
             .ToArray();
@@ -245,40 +259,32 @@ public sealed class PlanSealingService(
         );
     }
 
-    /// <summary>
-    /// Parents before children (Kahn's algorithm over the planned tables), so a target that enforces foreign keys
-    /// accepts the rows in the order they are written. Tables in a cycle fall back to deepest-generation-first.
-    /// </summary>
-    private static IReadOnlyDictionary<TableDefinition, int> TransferOrder(
-        IReadOnlyList<TableDefinition> planned,
-        IReadOnlyCollection<ClosureRelationship> relationships,
-        IReadOnlyDictionary<TableDefinition, int> depth
-    )
+    /// <summary>A relationship can be deferred when the target accepts NULL in every referencing column.</summary>
+    private static bool IsNullable(ClosureRelationship relationship, SchemaSnapshotContent targetSchema)
     {
-        var set = planned.ToHashSet();
-        // child -> parents, restricted to planned tables and ignoring self references.
-        var parents = planned.ToDictionary(
-            table => table,
-            table =>
-                relationships
-                    .Where(r => r.FromTable == table && r.ToTable != table && set.Contains(r.ToTable))
-                    .Select(r => r.ToTable)
-                    .ToHashSet()
+        var table = targetSchema.Tables.SingleOrDefault(candidate =>
+            string.Equals(candidate.Schema, relationship.FromTable.Schema, StringComparison.Ordinal)
+            && string.Equals(candidate.Name, relationship.FromTable.Name, StringComparison.Ordinal)
         );
-        var order = new Dictionary<TableDefinition, int>();
-        var remaining = planned
-            .OrderByDescending(table => depth[table])
-            .ThenBy(table => table.Schema, StringComparer.Ordinal)
-            .ThenBy(table => table.Name, StringComparer.Ordinal)
-            .ToList();
-        while (remaining.Count > 0)
-        {
-            var next = remaining.FirstOrDefault(table => parents[table].All(order.ContainsKey)) ?? remaining[0];
-            order[next] = order.Count;
-            remaining.Remove(next);
-        }
-        return order;
+        return relationship.FromColumns.All(name =>
+            table is null
+                ? relationship.FromTable.Columns.Any(column =>
+                    string.Equals(column.Name, name, StringComparison.Ordinal) && column.IsNullable
+                )
+                : table.Columns.Any(column =>
+                    string.Equals(column.Name, name, StringComparison.Ordinal) && column.IsNullable
+                )
+        );
     }
+
+    /// <summary>Only a self reference onto the stable key can be levelled through the sealed keys.</summary>
+    private static bool IsOntoStableKey(
+        ClosureRelationship relationship,
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys
+    ) =>
+        stableKeys.TryGetValue(relationship.FromTable, out var selection)
+        && selection.Constraint is { } constraint
+        && relationship.ToColumns.SequenceEqual(constraint.Columns, StringComparer.Ordinal);
 
     private static IReadOnlyCollection<ClosureRelationship> ReachableRelationships(
         IReadOnlyCollection<ForeignKeyDefinition> foreignKeys,

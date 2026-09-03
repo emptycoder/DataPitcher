@@ -75,6 +75,9 @@ public static class CanonicalPlanHasher
         Counts(w, x.Manifest);
         Group(w, x.TopologicalGroup);
         w.Int((int)x.CycleStrategy);
+        // Only written when present so plans sealed before deferred columns existed keep their hash.
+        if (x.DeferredColumns.Count > 0)
+            Ordered(w, x.DeferredColumns, (a, v) => a.Text(v));
     }
 
     private static void Mapping(Writer w, TableMapping x)

@@ -199,6 +199,33 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
         Assert.Equal(2001L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_nodes"));
     }
 
+    [Fact]
+    public async Task Transfer_WhenTwoTablesReferenceEachOther_FillsTheNullableSideAfterTheRows()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE worker_teams (id integer NOT NULL CONSTRAINT pk_worker_teams PRIMARY KEY, lead_id integer NULL);"
+            + " CREATE TABLE worker_people (id integer NOT NULL CONSTRAINT pk_worker_people PRIMARY KEY, team_id integer NOT NULL CONSTRAINT fk_worker_people_team REFERENCES worker_teams(id));"
+            + " ALTER TABLE worker_teams ADD CONSTRAINT fk_worker_teams_lead FOREIGN KEY (lead_id) REFERENCES worker_people(id);";
+        // 2,100 teams, each led by one of 2,100 people: neither table can go first while lead_id carries a value.
+        await scope.ExecuteAsync(
+            ddl
+                + " INSERT INTO worker_teams (id, lead_id) SELECT g, NULL FROM generate_series(1, 2100) g;"
+                + " INSERT INTO worker_people (id, team_id) SELECT g, g FROM generate_series(1, 2100) g;"
+                + " UPDATE worker_teams SET lead_id = id;"
+        );
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(scope, "worker_people", "pk_worker_people", "SELECT * FROM worker_people");
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal(2100L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_people"));
+        Assert.Equal(
+            2100L,
+            await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_teams WHERE lead_id = id")
+        );
+    }
+
     private static async Task<TransferJob> RunTransferAsync(
         PostgreSqlClosureScope scope,
         string rootTable,

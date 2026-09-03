@@ -31,13 +31,28 @@ public sealed record TargetCheckpoint(
     long BytesTransferred = 0,
     TableAddress? LastTable = null,
     /// <summary>Rows the target already had and that were therefore skipped, cumulative for the run.</summary>
-    long SkippedRows = 0
+    long SkippedRows = 0,
+    /// <summary>The phase the last committed unit belonged to; a resume continues in the same phase.</summary>
+    TransferPhase Phase = TransferPhase.Rows
 );
+
+/// <summary>
+/// A transfer writes every table's rows first, then fills in the deferred columns (nullable foreign keys that
+/// close a cycle) once all the rows they point at exist in the target.
+/// </summary>
+public enum TransferPhase
+{
+    Rows,
+    DeferredColumns,
+}
 
 public enum TransferUnitKind
 {
     Batch,
     AtomicComponent,
+
+    /// <summary>Stable keys plus the deferred column values to fill in on rows this run already wrote.</summary>
+    DeferredColumns,
 }
 
 public sealed record TransferUnit(
@@ -50,7 +65,8 @@ public sealed record TransferUnit(
     IReadOnlyList<TransferRow>? Rows = null
 )
 {
-    public bool CanPauseAfterCommit => Kind is TransferUnitKind.Batch or TransferUnitKind.AtomicComponent;
+    public bool CanPauseAfterCommit =>
+        Kind is TransferUnitKind.Batch or TransferUnitKind.AtomicComponent or TransferUnitKind.DeferredColumns;
 }
 
 public enum TargetMutationKind
@@ -150,7 +166,8 @@ public interface ITransferReadSessionFactory
         TransferRun run,
         StableKey? startAfter,
         CancellationToken cancellationToken,
-        TableAddress? table = null
+        TableAddress? table = null,
+        TransferPhase phase = TransferPhase.Rows
     );
 }
 

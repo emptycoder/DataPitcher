@@ -69,6 +69,93 @@ public sealed class SqlServerBatchApplier
         }
     }
 
+    /// <summary>
+    /// Fills in the deferred columns of rows this run wrote: the batch carries stable keys plus the deferred values,
+    /// and only keys in the run's ledger are touched so rows the target already had stay as they were.
+    /// </summary>
+    public async Task<long> BackfillAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        SqlServerExecutionContext context,
+        SqlServerWriteTable table,
+        SqlServerTransferBatch batch,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!_ledgerEnsured)
+        {
+            await EnsureLedgerAsync(connection, transaction, cancellationToken);
+            _ledgerEnsured = true;
+        }
+        var deferred = table.InsertColumns.Where(column => !column.IsStableKey).ToArray();
+        if (deferred.Length == 0)
+            return 0;
+        var declarations = string.Join(
+            ",",
+            table
+                .StableKeyColumns.Select(column =>
+                    SqlServerIdentifier.Quote(column.Name)
+                    + " "
+                    + column.StoreType
+                    + (column.Collation is null ? "" : " COLLATE " + column.Collation)
+                    + " NOT NULL"
+                )
+                .Concat(
+                    deferred.Select(column => SqlServerIdentifier.Quote(column.Name) + " " + column.StoreType + " NULL")
+                )
+                .Append("[__stable_key] varbinary(max) NOT NULL")
+        );
+        await using (
+            var create = new SqlCommand("CREATE TABLE #backfill (" + declarations + ");", connection, transaction)
+        )
+            await create.ExecuteNonQueryAsync(cancellationToken);
+        var data = new DataTable();
+        foreach (var column in table.InsertColumns)
+            data.Columns.Add(column.Name, column.ClrType);
+        data.Columns.Add("__stable_key", typeof(byte[]));
+        foreach (var row in batch.Rows)
+        {
+            var values = data.NewRow();
+            foreach (var column in table.InsertColumns)
+                values[column.Name] = row.Values[column.Name] ?? DBNull.Value;
+            values["__stable_key"] = SqlServerStableKeyCodec.Encode(row.StableKey, table);
+            data.Rows.Add(values);
+        }
+        using (var reader = data.CreateDataReader())
+        using (var bulk = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
+        {
+            bulk.DestinationTableName = "#backfill";
+            bulk.BatchSize = 0;
+            bulk.BulkCopyTimeout = 30;
+            bulk.EnableStreaming = true;
+            for (var ordinal = 0; ordinal < data.Columns.Count; ordinal++)
+                bulk.ColumnMappings.Add(ordinal, data.Columns[ordinal].ColumnName);
+            await bulk.WriteToServerAsync(reader, cancellationToken);
+        }
+        var set = string.Join(
+            ",",
+            deferred.Select(column =>
+                "t." + SqlServerIdentifier.Quote(column.Name) + "=b." + SqlServerIdentifier.Quote(column.Name)
+            )
+        );
+        await using var update = new SqlCommand(
+            "UPDATE t SET "
+                + set
+                + " FROM "
+                + SqlServerIdentifier.Qualified(table.Target.Schema, table.Target.Name)
+                + " t JOIN #backfill b ON "
+                + Join(table.StableKeyColumns, "b", "t")
+                + " WHERE EXISTS (SELECT 1 FROM [datapitcher].[transfer_affected_keys] l WHERE l.job_id=@job AND l.run_id=@run AND l.table_schema=@schema AND l.table_name=@name AND l.stable_key=b.[__stable_key]); DROP TABLE #backfill;",
+            connection,
+            transaction
+        );
+        update.Parameters.AddWithValue("@job", context.JobId);
+        update.Parameters.AddWithValue("@run", context.RunId);
+        update.Parameters.AddWithValue("@schema", table.Target.Schema);
+        update.Parameters.AddWithValue("@name", table.Target.Name);
+        return await update.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static async Task<long> ApplyAndRecordAsync(
         SqlConnection connection,
         SqlTransaction transaction,

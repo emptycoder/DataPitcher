@@ -204,7 +204,8 @@ internal sealed class TestTransferReadSessionFactory(TestTransferReadSession ses
         TransferRun run,
         StableKey? startAfter,
         CancellationToken cancellationToken,
-        TableAddress? table = null
+        TableAddress? table = null,
+        TransferPhase phase = TransferPhase.Rows
     )
     {
         LastRequestedStartAfter = startAfter;
@@ -419,7 +420,8 @@ internal sealed class PrefetchedReadSessionFactory(PrefetchedReadSession session
         TransferRun run,
         StableKey? startAfter,
         CancellationToken cancellationToken,
-        TableAddress? table = null
+        TableAddress? table = null,
+        TransferPhase phase = TransferPhase.Rows
     )
     {
         LastRequestedStartAfter = startAfter;
