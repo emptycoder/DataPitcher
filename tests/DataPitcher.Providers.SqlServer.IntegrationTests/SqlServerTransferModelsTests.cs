@@ -219,7 +219,7 @@ public sealed class SqlServerTransferModelsTests(SqlServerClosureFixture fixture
     public async Task ReadAsync_WhenAColumnTypeIsNotSupported_ThrowsNotSupportedException()
     {
         await using var scope = await fixture.CreateScopeAsync();
-        await scope.ExecuteTargetAsync("CREATE TABLE dbo.transfer_rows (id int PRIMARY KEY, flag bit NOT NULL);");
+        await scope.ExecuteTargetAsync("CREATE TABLE dbo.transfer_rows (id int PRIMARY KEY, shape geography NOT NULL);");
         var error = await Assert.ThrowsAsync<NotSupportedException>(() =>
             new SqlServerTransferSchemaReader(scope.TargetConnectionString).ReadAsync(
                 "dbo",
@@ -228,7 +228,7 @@ public sealed class SqlServerTransferModelsTests(SqlServerClosureFixture fixture
                 CancellationToken.None
             )
         );
-        Assert.Contains("bit", error.Message, StringComparison.Ordinal);
+        Assert.Contains("geography", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

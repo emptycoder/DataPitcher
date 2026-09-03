@@ -41,6 +41,10 @@ The verified development prerequisites are .NET SDK 10.0.400 and Node v25.2.1. D
 
 The next action is to read [`docs/plans/2026-09-02-slice-1-domain-spine.md`](docs/plans/2026-09-02-slice-1-domain-spine.md) and execute Task 1. It creates the initial solution and domain-test scaffold, requires no Docker, and is the first step toward executable evidence rather than a claim that such evidence already exists.
 
+### Performance tests
+
+`./scripts/test-performance.sh` runs opt-in timing tests against real SQL Server and PostgreSQL containers: a schema scan of a 300-table catalog, and scan, plan sealing and transfer of a three-level graph (orders → customers → countries). Set `DATAPITCHER_PERF_ROWS` to size the graph (default 20 000 root rows) and `DATAPITCHER_PERF_BUDGET_SECONDS` to fail any phase slower than the budget (default 120 s). Each run appends one JSON line per scenario to `artifacts/performance/results.jsonl` with the phase timings and rows per second, so changes can be compared against earlier runs.
+
 ## Git hooks and CI
 
 Install [pre-commit](https://pre-commit.com/) 4.2.0 with `uv tool install pre-commit==4.2.0`; if prompted, run `uv tool update-shell` and restart the shell. Then run `pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push`. It is Python-based, so backend-only contributors do not need `npm install` just to commit.

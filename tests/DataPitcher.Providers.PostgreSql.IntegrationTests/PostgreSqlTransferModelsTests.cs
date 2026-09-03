@@ -140,7 +140,7 @@ public sealed class PostgreSqlTransferModelsTests : IClassFixture<PostgreSqlClos
     public async Task ReadAsync_WhenAColumnTypeIsNotSupported_ThrowsNotSupportedException()
     {
         await using var scope = await _fixture.CreateScopeAsync();
-        await scope.ExecuteTargetAsync("CREATE TABLE transfer_rows (id integer PRIMARY KEY, flag boolean NOT NULL);");
+        await scope.ExecuteTargetAsync("CREATE TABLE transfer_rows (id integer PRIMARY KEY, spot point NOT NULL);");
         var error = await Assert.ThrowsAsync<NotSupportedException>(() =>
             new PostgreSqlTransferSchemaReader(scope.Target).ReadAsync(
                 scope.Schema,
@@ -149,6 +149,6 @@ public sealed class PostgreSqlTransferModelsTests : IClassFixture<PostgreSqlClos
                 CancellationToken.None
             )
         );
-        Assert.Contains("bool", error.Message, StringComparison.Ordinal);
+        Assert.Contains("point", error.Message, StringComparison.Ordinal);
     }
 }

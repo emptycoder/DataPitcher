@@ -20,7 +20,7 @@ public sealed class SqlServerTransferSchemaReader(string connectionString)
     )
     {
         const string sql =
-            "SELECT c.name,ty.name,c.max_length,c.is_nullable,c.is_identity,c.is_computed,CASE WHEN ty.name='timestamp' THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,c.collation_name FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id JOIN sys.columns c ON c.object_id=t.object_id JOIN sys.types ty ON ty.user_type_id=c.user_type_id WHERE s.name=@schema AND t.name=@table ORDER BY c.column_id";
+            "SELECT c.name,ty.name,c.max_length,c.is_nullable,c.is_identity,c.is_computed,CASE WHEN ty.name='timestamp' THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,c.collation_name,c.precision,c.scale FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id JOIN sys.columns c ON c.object_id=t.object_id JOIN sys.types ty ON ty.user_type_id=c.user_type_id WHERE s.name=@schema AND t.name=@table ORDER BY c.column_id";
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var command = new SqlCommand(sql, connection);
@@ -38,7 +38,12 @@ public sealed class SqlServerTransferSchemaReader(string connectionString)
             columns.Add(
                 new SqlServerWriteColumn(
                     name,
-                    StoreType(typeName, reader.GetInt16(2)),
+                    SqlServerCatalogReader.StoreType(
+                        typeName,
+                        reader.GetInt16(2),
+                        reader.GetByte(8),
+                        reader.GetByte(9)
+                    ),
                     mapped.Item1,
                     mapped.Item2,
                     stableKeys.Contains(name, StringComparer.Ordinal),
@@ -53,15 +58,38 @@ public sealed class SqlServerTransferSchemaReader(string connectionString)
         return new SqlServerWriteTable(new TableAddress(schema, table), columns);
     }
 
-    private static (Type, SqlDbType) Map(string type) =>
+    /// <summary>CLR and provider types used to bulk-copy values; the declared store type still drives staging DDL.</summary>
+    internal static (Type, SqlDbType) Map(string type) =>
         type switch
         {
-            "int" => (typeof(int), SqlDbType.Int),
             "bigint" => (typeof(long), SqlDbType.BigInt),
-            "nvarchar" => (typeof(string), SqlDbType.NVarChar),
+            "int" => (typeof(int), SqlDbType.Int),
+            "smallint" => (typeof(short), SqlDbType.SmallInt),
+            "tinyint" => (typeof(byte), SqlDbType.TinyInt),
+            "bit" => (typeof(bool), SqlDbType.Bit),
+            "decimal" or "numeric" => (typeof(decimal), SqlDbType.Decimal),
+            "money" => (typeof(decimal), SqlDbType.Money),
+            "smallmoney" => (typeof(decimal), SqlDbType.SmallMoney),
+            "float" => (typeof(double), SqlDbType.Float),
+            "real" => (typeof(float), SqlDbType.Real),
+            "date" => (typeof(DateTime), SqlDbType.Date),
+            "time" => (typeof(TimeSpan), SqlDbType.Time),
+            "datetime" => (typeof(DateTime), SqlDbType.DateTime),
+            "datetime2" => (typeof(DateTime), SqlDbType.DateTime2),
+            "smalldatetime" => (typeof(DateTime), SqlDbType.SmallDateTime),
+            "datetimeoffset" => (typeof(DateTimeOffset), SqlDbType.DateTimeOffset),
+            "char" => (typeof(string), SqlDbType.Char),
+            "varchar" => (typeof(string), SqlDbType.VarChar),
+            "text" => (typeof(string), SqlDbType.Text),
+            "nchar" => (typeof(string), SqlDbType.NChar),
+            "nvarchar" or "sysname" => (typeof(string), SqlDbType.NVarChar),
+            "ntext" => (typeof(string), SqlDbType.NText),
+            "xml" => (typeof(string), SqlDbType.Xml),
+            "binary" => (typeof(byte[]), SqlDbType.Binary),
+            "varbinary" => (typeof(byte[]), SqlDbType.VarBinary),
+            "image" => (typeof(byte[]), SqlDbType.Image),
+            "uniqueidentifier" => (typeof(Guid), SqlDbType.UniqueIdentifier),
+            "sql_variant" => (typeof(object), SqlDbType.Variant),
             _ => throw new NotSupportedException($"SQL Server transfer column type '{type}' is not supported."),
         };
-
-    private static string StoreType(string type, short length) =>
-        type == "nvarchar" ? (length == -1 ? "nvarchar(max)" : $"nvarchar({length / 2})") : type;
 }

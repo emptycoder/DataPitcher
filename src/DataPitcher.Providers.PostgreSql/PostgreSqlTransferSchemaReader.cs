@@ -46,13 +46,35 @@ public sealed class PostgreSqlTransferSchemaReader(NpgsqlDataSource dataSource)
         return new PostgreSqlWriteTable(new TableAddress(schema, table), columns);
     }
 
-    private static NpgsqlDbType Map(string type) =>
+    /// <summary>Provider type used to bind and copy values; the declared store type still drives staging DDL.</summary>
+    internal static NpgsqlDbType Map(string type) =>
         type switch
         {
-            "int4" => NpgsqlDbType.Integer,
+            "int2" => NpgsqlDbType.Smallint,
+            "int4" or "oid" => NpgsqlDbType.Integer,
             "int8" => NpgsqlDbType.Bigint,
-            "text" => NpgsqlDbType.Text,
+            "bool" => NpgsqlDbType.Boolean,
+            "numeric" => NpgsqlDbType.Numeric,
+            "money" => NpgsqlDbType.Money,
+            "float4" => NpgsqlDbType.Real,
+            "float8" => NpgsqlDbType.Double,
+            "text" or "citext" => NpgsqlDbType.Text,
+            "varchar" => NpgsqlDbType.Varchar,
+            "bpchar" or "char" => NpgsqlDbType.Char,
+            "name" => NpgsqlDbType.Name,
+            "json" => NpgsqlDbType.Json,
+            "jsonb" => NpgsqlDbType.Jsonb,
+            "xml" => NpgsqlDbType.Xml,
             "uuid" => NpgsqlDbType.Uuid,
+            "bytea" => NpgsqlDbType.Bytea,
+            "date" => NpgsqlDbType.Date,
+            "time" => NpgsqlDbType.Time,
+            "timetz" => NpgsqlDbType.TimeTz,
+            "timestamp" => NpgsqlDbType.Timestamp,
+            "timestamptz" => NpgsqlDbType.TimestampTz,
+            "interval" => NpgsqlDbType.Interval,
+            "inet" => NpgsqlDbType.Inet,
+            "macaddr" => NpgsqlDbType.MacAddr,
             _ => throw new NotSupportedException($"PostgreSQL transfer column type '{type}' is not supported."),
         };
 }
