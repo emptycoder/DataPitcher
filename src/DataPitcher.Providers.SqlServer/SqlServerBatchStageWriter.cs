@@ -14,6 +14,8 @@ namespace DataPitcher.Providers.SqlServer;
 
 public sealed class SqlServerBatchStageWriter
 {
+    private readonly HashSet<string> _ensured = new(StringComparer.Ordinal);
+
     public async Task StageAsync(
         SqlConnection connection,
         SqlTransaction transaction,
@@ -42,20 +44,21 @@ public sealed class SqlServerBatchStageWriter
                 )
             )
         );
-        await using (
-            var create = new SqlCommand(
-                "IF SCHEMA_ID(N'datapitcher') IS NULL EXEC(N'CREATE SCHEMA [datapitcher]'); IF OBJECT_ID(N'"
-                    + stage.Replace("'", "''", StringComparison.Ordinal)
-                    + "',N'U') IS NULL CREATE TABLE "
-                    + stage
-                    + " ("
-                    + declarations
-                    + ");",
-                connection,
-                transaction
+        if (_ensured.Add(stage))
+            await using (
+                var create = new SqlCommand(
+                    "IF SCHEMA_ID(N'datapitcher') IS NULL EXEC(N'CREATE SCHEMA [datapitcher]'); IF OBJECT_ID(N'"
+                        + stage.Replace("'", "''", StringComparison.Ordinal)
+                        + "',N'U') IS NULL CREATE TABLE "
+                        + stage
+                        + " ("
+                        + declarations
+                        + ");",
+                    connection,
+                    transaction
+                )
             )
-        )
-            await create.ExecuteNonQueryAsync(cancellationToken);
+                await create.ExecuteNonQueryAsync(cancellationToken);
 
         var data = new DataTable();
         data.Columns.Add("job_id", typeof(Guid));
@@ -77,7 +80,7 @@ public sealed class SqlServerBatchStageWriter
         }
 
         using var reader = data.CreateDataReader();
-        using var bulk = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction)
+        using var bulk = new SqlBulkCopy(connection, SqlBulkCopyOptions.TableLock, transaction)
         {
             DestinationTableName = stage,
             BatchSize = 0,

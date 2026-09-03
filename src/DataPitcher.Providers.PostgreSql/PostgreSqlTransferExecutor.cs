@@ -28,8 +28,19 @@ public sealed class PostgreSqlTransferExecutor
         _checkpoints = new PostgreSqlTargetCheckpointStore(target);
     }
 
-    public Task InitializeAsync(PostgreSqlExecutionContext context, CancellationToken cancellationToken) =>
-        _checkpoints.InitializeAsync(context, cancellationToken);
+    private readonly PostgreSqlBatchStageWriter _stageWriter = new();
+    private readonly PostgreSqlBatchApplier _applier = new();
+
+    // A new fence token re-acquires the checkpoint, so it is part of the key.
+    private (Guid JobId, Guid RunId, long FenceToken)? _initialized;
+
+    public async Task InitializeAsync(PostgreSqlExecutionContext context, CancellationToken cancellationToken)
+    {
+        if (_initialized == (context.JobId, context.RunId, context.FenceToken))
+            return;
+        await _checkpoints.InitializeAsync(context, cancellationToken);
+        _initialized = (context.JobId, context.RunId, context.FenceToken);
+    }
 
     public async Task<PostgreSqlBatchCommit> ExecuteAsync(
         PostgreSqlExecutionContext context,
@@ -41,22 +52,8 @@ public sealed class PostgreSqlTransferExecutor
         await InitializeAsync(context, cancellationToken);
         await using var connection = await _target.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await new PostgreSqlBatchStageWriter().StageAsync(
-            connection,
-            transaction,
-            context,
-            table,
-            batch,
-            cancellationToken
-        );
-        var result = await new PostgreSqlBatchApplier().ApplyAsync(
-            connection,
-            transaction,
-            context,
-            table,
-            batch,
-            cancellationToken
-        );
+        await _stageWriter.StageAsync(connection, transaction, context, table, batch, cancellationToken);
+        var result = await _applier.ApplyAsync(connection, transaction, context, table, batch, cancellationToken);
         await _checkpoints.AdvanceAsync(
             connection,
             transaction,
@@ -69,10 +66,10 @@ public sealed class PostgreSqlTransferExecutor
             cancellationToken
         );
         await transaction.CommitAsync(cancellationToken);
-        var checkpoint = (await _checkpoints.ReadAsync(context.JobId, context.RunId, cancellationToken))!;
+        var checkpoint = (await _checkpoints.ReadAsync(connection, context.JobId, context.RunId, cancellationToken))!;
         await _barrier.WaitAsync(checkpoint, cancellationToken);
         await _mirror.WriteAsync(checkpoint, cancellationToken);
-        return new PostgreSqlBatchCommit(batch.Sequence, result.Affected, result.Inserts, result.Updates);
+        return new PostgreSqlBatchCommit(batch.Sequence, result.Affected, result.Inserts, result.Updates, checkpoint);
     }
 
     public async Task<PostgreSqlResumePoint> RecoverAsync(

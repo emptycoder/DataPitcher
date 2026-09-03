@@ -14,6 +14,8 @@ namespace DataPitcher.Providers.PostgreSql;
 
 public sealed class PostgreSqlBatchStageWriter
 {
+    private readonly HashSet<string> _ensured = new(StringComparer.Ordinal);
+
     public async Task StageAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -41,12 +43,17 @@ public sealed class PostgreSqlBatchStageWriter
                 "batch_sequence bigint NOT NULL",
             }.Concat(columns.Select(x => PostgreSqlIdentifier.Quote(x.Name) + " " + x.StoreType))
         );
-        await ExecuteAsync(
-            connection,
-            transaction,
-            "CREATE SCHEMA IF NOT EXISTS datapitcher; CREATE TABLE IF NOT EXISTS " + stage + " (" + declaration + ")",
-            cancellationToken
-        );
+        if (_ensured.Add(stage))
+            await ExecuteAsync(
+                connection,
+                transaction,
+                "CREATE SCHEMA IF NOT EXISTS datapitcher; CREATE TABLE IF NOT EXISTS "
+                    + stage
+                    + " ("
+                    + declaration
+                    + ")",
+                cancellationToken
+            );
         await using var importer = await connection.BeginBinaryImportAsync(
             "COPY " + stage + " (" + names + ") FROM STDIN (FORMAT BINARY)",
             cancellationToken

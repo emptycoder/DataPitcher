@@ -71,6 +71,7 @@ public sealed class SqlServerRunSessions(
     ) : ITransferReadSession
     {
         private readonly IReadOnlyList<PlanTable> _tables = Tables(content);
+        private readonly Dictionary<int, SqlServerWriteTable> _sources = [];
         private int _index = StartIndex(Tables(content), startTable);
         private StableKey? _after = startAfter;
         private long _nextSequence = nextSequence;
@@ -81,13 +82,17 @@ public sealed class SqlServerRunSessions(
             {
                 var planTable = _tables[_index];
                 var stableKey = StableKey(content, planTable);
-                var sourceSchema = await new SqlServerTransferSchemaReader(connectionString).ReadAsync(
-                    planTable.Mapping.Source.Schema,
-                    planTable.Mapping.Source.Name,
-                    stableKey.Columns,
-                    cancellationToken
-                );
-                var source = SourceTable(sourceSchema, planTable, stableKey);
+                // The source shape is read once per table, not once per batch.
+                if (!_sources.TryGetValue(_index, out var source))
+                {
+                    var sourceSchema = await new SqlServerTransferSchemaReader(connectionString).ReadAsync(
+                        planTable.Mapping.Source.Schema,
+                        planTable.Mapping.Source.Name,
+                        stableKey.Columns,
+                        cancellationToken
+                    );
+                    source = _sources[_index] = SourceTable(sourceSchema, planTable, stableKey);
+                }
                 var join =
                     " JOIN "
                     + SqlServerStagingTables.Qualified(
@@ -159,7 +164,26 @@ public sealed class SqlServerRunSessions(
             new NoopMirror(),
             new NoopBarrier()
         );
+        private readonly Dictionary<(string Schema, string Name), SqlServerWriteTable> _targets = [];
         private long _bytesTransferred;
+
+        /// <summary>The target shape is read once per table for the session, not once per batch.</summary>
+        private async Task<SqlServerWriteTable> TargetAsync(
+            PlanTable planTable,
+            string[] targetKeys,
+            CancellationToken cancellationToken
+        )
+        {
+            var address = (planTable.Mapping.Target.Schema, planTable.Mapping.Target.Name);
+            if (!_targets.TryGetValue(address, out var target))
+                target = _targets[address] = await new SqlServerTransferSchemaReader(connectionString).ReadAsync(
+                    planTable.Mapping.Target.Schema,
+                    planTable.Mapping.Target.Name,
+                    targetKeys,
+                    cancellationToken
+                );
+            return target;
+        }
 
         public async Task<RecoverySnapshot> AcquireFenceReadCheckpointAndJournalAsync(
             TransferRun run,
@@ -201,12 +225,7 @@ public sealed class SqlServerRunSessions(
                     mappings.Single(mapping => StringComparer.Ordinal.Equals(mapping.Source, column)).Target
                 )
                 .ToArray();
-            var target = await new SqlServerTransferSchemaReader(connectionString).ReadAsync(
-                planTable.Mapping.Target.Schema,
-                planTable.Mapping.Target.Name,
-                targetKeys,
-                cancellationToken
-            );
+            var target = await TargetAsync(planTable, targetKeys, cancellationToken);
             var sourceColumns = SourceColumns(planTable, stableKey);
             var batch = new SqlServerTransferBatch(
                 BatchSequence.ProviderFromWorker(unit.BatchSequence),
@@ -214,10 +233,11 @@ public sealed class SqlServerRunSessions(
                 TargetKey(unit.LastStableKey, mappings),
                 Policy(content, planTable)
             );
-            await _executor.ExecuteAsync(Context(run, lease), target, batch, cancellationToken);
+            var commit = await _executor.ExecuteAsync(Context(run, lease), target, batch, cancellationToken);
             _bytesTransferred += unit.BytesTransferred;
             var checkpoint =
-                await _checkpoints.ReadAsync(run.JobId, run.RunId, cancellationToken)
+                commit.Checkpoint
+                ?? await _checkpoints.ReadAsync(run.JobId, run.RunId, cancellationToken)
                 ?? throw new InvalidOperationException("Committed target checkpoint was not found.");
             return await CheckpointAsync(run, checkpoint, cancellationToken);
         }
@@ -254,12 +274,7 @@ public sealed class SqlServerRunSessions(
                         .Target
                 )
                 .ToArray();
-            var target = await new SqlServerTransferSchemaReader(connectionString).ReadAsync(
-                planTable.Mapping.Target.Schema,
-                planTable.Mapping.Target.Name,
-                targetKeys,
-                cancellationToken
-            );
+            var target = await TargetAsync(planTable, targetKeys, cancellationToken);
             var key = SqlServerStableKeyCodec.Decode(checkpoint.LastStableKey, target);
             return new TargetCheckpoint(
                 run.JobId,

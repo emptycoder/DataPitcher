@@ -62,6 +62,14 @@ public sealed class SqlServerTargetCheckpointStore(string targetConnectionString
         return await ReadAsync(connection, null, jobId, runId, cancellationToken);
     }
 
+    /// <summary>Reads the checkpoint over an already open connection, saving a round trip after a commit.</summary>
+    public Task<SqlServerTargetCheckpoint?> ReadAsync(
+        SqlConnection connection,
+        Guid jobId,
+        Guid runId,
+        CancellationToken cancellationToken
+    ) => ReadAsync(connection, null, jobId, runId, cancellationToken);
+
     public async Task AdvanceAsync(
         SqlConnection connection,
         SqlTransaction transaction,

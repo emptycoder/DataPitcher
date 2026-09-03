@@ -104,7 +104,13 @@ public sealed record PostgreSqlTargetCheckpoint(
 
 public sealed record PostgreSqlResumePoint(long NextBatchSequence, StableKey? AfterStableKey);
 
-public sealed record PostgreSqlBatchCommit(long Sequence, long Affected, long Inserts, long Updates);
+public sealed record PostgreSqlBatchCommit(
+    long Sequence,
+    long Affected,
+    long Inserts,
+    long Updates,
+    PostgreSqlTargetCheckpoint? Checkpoint = null
+);
 
 public interface IDerivedCheckpointMirror
 {

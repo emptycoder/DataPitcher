@@ -1,3 +1,4 @@
+using System.Data;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
@@ -14,6 +15,8 @@ public sealed record SqlServerApplyResult(long Affected, long Inserts, long Upda
 
 public sealed class SqlServerBatchApplier
 {
+    private bool _ledgerEnsured;
+
     public async Task<SqlServerApplyResult> ApplyAsync(
         SqlConnection connection,
         SqlTransaction transaction,
@@ -23,7 +26,11 @@ public sealed class SqlServerBatchApplier
         CancellationToken cancellationToken
     )
     {
-        await EnsureLedgerAsync(connection, transaction, cancellationToken);
+        if (!_ledgerEnsured)
+        {
+            await EnsureLedgerAsync(connection, transaction, cancellationToken);
+            _ledgerEnsured = true;
+        }
         var updates =
             batch.Policy == SqlServerConflictPolicy.Upsert && table.UpdateColumns.Count != 0
                 ? await ApplyAndRecordAsync(
@@ -112,8 +119,7 @@ public sealed class SqlServerBatchApplier
                 )
             );
         await rows.CloseAsync();
-        foreach (var key in keys)
-            await RecordAsync(connection, transaction, context, table, key, action, cancellationToken);
+        await RecordAsync(connection, transaction, context, table, keys, action, cancellationToken);
         return keys.Count;
     }
 
@@ -204,31 +210,46 @@ public sealed class SqlServerBatchApplier
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    /// <summary>Writes every affected key of the batch to the ledger in one bulk copy instead of one INSERT per key.</summary>
     private static async Task RecordAsync(
         SqlConnection connection,
         SqlTransaction transaction,
         SqlServerExecutionContext context,
         SqlServerWriteTable table,
-        StableKey key,
+        IReadOnlyList<StableKey> keys,
         string action,
         CancellationToken cancellationToken
     )
     {
-        await using var command = new SqlCommand(
-            "INSERT [datapitcher].[transfer_affected_keys] VALUES (@job,@run,@schema,@table,@key,@action)",
-            connection,
-            transaction
-        );
-        command.Parameters.AddWithValue("@job", context.JobId);
-        command.Parameters.AddWithValue("@run", context.RunId);
-        command.Parameters.AddWithValue("@schema", table.Target.Schema);
-        command.Parameters.AddWithValue("@table", table.Target.Name);
-        command.Parameters.Add("@key", System.Data.SqlDbType.VarBinary, -1).Value = SqlServerStableKeyCodec.Encode(
-            key,
-            table
-        );
-        command.Parameters.AddWithValue("@action", action);
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        if (keys.Count == 0)
+            return;
+        var data = new DataTable();
+        data.Columns.Add("job_id", typeof(Guid));
+        data.Columns.Add("run_id", typeof(Guid));
+        data.Columns.Add("table_schema", typeof(string));
+        data.Columns.Add("table_name", typeof(string));
+        data.Columns.Add("stable_key", typeof(byte[]));
+        data.Columns.Add("action_name", typeof(string));
+        foreach (var key in keys)
+            data.Rows.Add(
+                context.JobId,
+                context.RunId,
+                table.Target.Schema,
+                table.Target.Name,
+                SqlServerStableKeyCodec.Encode(key, table),
+                action
+            );
+        using var reader = data.CreateDataReader();
+        using var bulk = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction)
+        {
+            DestinationTableName = "[datapitcher].[transfer_affected_keys]",
+            BatchSize = 0,
+            BulkCopyTimeout = 30,
+            EnableStreaming = true,
+        };
+        for (var ordinal = 0; ordinal < data.Columns.Count; ordinal++)
+            bulk.ColumnMappings.Add(ordinal, data.Columns[ordinal].ColumnName);
+        await bulk.WriteToServerAsync(reader, cancellationToken);
     }
 
     private static async Task SetIdentityInsertAsync(

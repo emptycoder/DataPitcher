@@ -108,7 +108,13 @@ public sealed record SqlServerTargetCheckpoint(
 
 public sealed record SqlServerResumePoint(long NextBatchSequence, StableKey? AfterStableKey);
 
-public sealed record SqlServerBatchCommit(long Sequence, long Affected, long Inserts, long Updates);
+public sealed record SqlServerBatchCommit(
+    long Sequence,
+    long Affected,
+    long Inserts,
+    long Updates,
+    SqlServerTargetCheckpoint? Checkpoint = null
+);
 
 public interface ISqlServerDerivedCheckpointMirror
 {

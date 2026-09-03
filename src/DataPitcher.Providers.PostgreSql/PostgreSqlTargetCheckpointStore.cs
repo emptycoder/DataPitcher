@@ -69,6 +69,14 @@ public sealed class PostgreSqlTargetCheckpointStore(NpgsqlDataSource dataSource)
         return await ReadAsync(connection, null, jobId, runId, cancellationToken);
     }
 
+    /// <summary>Reads the checkpoint over an already open connection, saving a round trip after a commit.</summary>
+    public Task<PostgreSqlTargetCheckpoint?> ReadAsync(
+        NpgsqlConnection connection,
+        Guid jobId,
+        Guid runId,
+        CancellationToken cancellationToken
+    ) => ReadAsync(connection, null, jobId, runId, cancellationToken);
+
     public async Task AdvanceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
