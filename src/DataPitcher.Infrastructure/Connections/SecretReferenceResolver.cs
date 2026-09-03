@@ -14,7 +14,10 @@ public sealed class SecretReferenceResolver(string secretsRoot) : ISecretReferen
         cancellationToken.ThrowIfCancellationRequested();
         return reference.Kind switch
         {
-            SecretReferenceKind.EnvironmentVariable => Task.FromResult(Environment.GetEnvironmentVariable(reference.Locator) ?? throw new InvalidOperationException("Configured secret is unavailable.")),
+            SecretReferenceKind.EnvironmentVariable => Task.FromResult(
+                Environment.GetEnvironmentVariable(reference.Locator)
+                    ?? throw new InvalidOperationException("Configured secret is unavailable.")
+            ),
             SecretReferenceKind.FileMounted => ReadMountedAsync(reference.Locator, cancellationToken),
             _ => throw new ArgumentOutOfRangeException(nameof(reference)),
         };

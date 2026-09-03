@@ -17,7 +17,10 @@ public sealed class PostgreSqlConnectionProbeTests : IClassFixture<PostgreSqlClo
     {
         await using var scope = await PostgreSqlProbeScope.CreateAsync(_fixture, ConnectionRole.Source, false);
 
-        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(scope.Request(TransferMode.ResumableStaged), CancellationToken.None);
+        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(
+            scope.Request(TransferMode.ResumableStaged),
+            CancellationToken.None
+        );
 
         Assert.Contains(ConnectionCapability.CanConnect, evidence.Available);
         Assert.Contains(ConnectionCapability.CanReadSchema, evidence.Available);
@@ -36,7 +39,10 @@ public sealed class PostgreSqlConnectionProbeTests : IClassFixture<PostgreSqlClo
     {
         await using var scope = await PostgreSqlProbeScope.CreateAsync(_fixture, ConnectionRole.Target, false);
 
-        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(scope.Request(TransferMode.ResumableStaged), CancellationToken.None);
+        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(
+            scope.Request(TransferMode.ResumableStaged),
+            CancellationToken.None
+        );
 
         Assert.Contains(ConnectionCapability.CanBulkInsert, evidence.Available);
         Assert.Contains(ConnectionCapability.CanPreserveIdentity, evidence.Available);
@@ -50,7 +56,10 @@ public sealed class PostgreSqlConnectionProbeTests : IClassFixture<PostgreSqlClo
     {
         await using var scope = await PostgreSqlProbeScope.CreateAsync(_fixture, ConnectionRole.Source, true);
 
-        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(scope.Request(TransferMode.ResumableStaged), CancellationToken.None);
+        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(
+            scope.Request(TransferMode.ResumableStaged),
+            CancellationToken.None
+        );
 
         Assert.NotNull(evidence.CleanupFailureCode);
         Assert.Equal("staging_cleanup_failed", evidence.CleanupFailureCode);
@@ -62,7 +71,10 @@ public sealed class PostgreSqlConnectionProbeTests : IClassFixture<PostgreSqlClo
     {
         await using var scope = await PostgreSqlProbeScope.CreateAsync(_fixture, ConnectionRole.Source, false);
 
-        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(scope.Request(TransferMode.DirectFast), CancellationToken.None);
+        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(
+            scope.Request(TransferMode.DirectFast),
+            CancellationToken.None
+        );
 
         Assert.DoesNotContain(ConnectionCapability.CanCreateSourceStaging, evidence.Available);
         Assert.Equal(0, await scope.StagingObjectCountAsync());
@@ -73,7 +85,10 @@ public sealed class PostgreSqlConnectionProbeTests : IClassFixture<PostgreSqlClo
     {
         await using var scope = await PostgreSqlProbeScope.CreateAsync(_fixture, ConnectionRole.Source, false, false);
 
-        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(scope.Request(TransferMode.ResumableStaged), CancellationToken.None);
+        var evidence = await new PostgreSqlConnectionProbe().ProbeAsync(
+            scope.Request(TransferMode.ResumableStaged),
+            CancellationToken.None
+        );
 
         Assert.DoesNotContain(ConnectionCapability.CanCreateSourceStaging, evidence.Available);
         Assert.DoesNotContain(ConnectionCapability.CanDropSourceStaging, evidence.Available);
@@ -83,10 +98,20 @@ public sealed class PostgreSqlConnectionProbeTests : IClassFixture<PostgreSqlClo
     [Fact]
     public async Task ProbeAsync_WhenStagingCreateFails_DoesNotClaimAConnectionCanBeProbed()
     {
-        await using var scope = await PostgreSqlProbeScope.CreateAsync(_fixture, ConnectionRole.Source, false, true, true);
+        await using var scope = await PostgreSqlProbeScope.CreateAsync(
+            _fixture,
+            ConnectionRole.Source,
+            false,
+            true,
+            true
+        );
 
-        await Assert.ThrowsAsync<PostgresException>(() => new PostgreSqlConnectionProbe().ProbeAsync(
-            scope.Request(TransferMode.ResumableStaged), CancellationToken.None));
+        await Assert.ThrowsAsync<PostgresException>(() =>
+            new PostgreSqlConnectionProbe().ProbeAsync(
+                scope.Request(TransferMode.ResumableStaged),
+                CancellationToken.None
+            )
+        );
     }
 
     [Fact]
@@ -94,10 +119,17 @@ public sealed class PostgreSqlConnectionProbeTests : IClassFixture<PostgreSqlClo
     {
         await using var scope = await PostgreSqlProbeScope.CreateAsync(_fixture, ConnectionRole.Source, false);
 
-        var snapshot = await new PostgreSqlSchemaIntrospector().ReadAsync(scope.Profile, scope.ConnectionString, CancellationToken.None);
+        var snapshot = await new PostgreSqlSchemaIntrospector().ReadAsync(
+            scope.Profile,
+            scope.ConnectionString,
+            CancellationToken.None
+        );
 
         Assert.Contains(snapshot.Tables, table => string.Equals(table.Name, "customers", StringComparison.Ordinal));
-        Assert.Contains(snapshot.ForeignKeys, foreignKey => string.Equals(foreignKey.Name, "orders_customer_id_fkey", StringComparison.Ordinal));
+        Assert.Contains(
+            snapshot.ForeignKeys,
+            foreignKey => string.Equals(foreignKey.Name, "orders_customer_id_fkey", StringComparison.Ordinal)
+        );
     }
 }
 
@@ -109,8 +141,15 @@ internal sealed class PostgreSqlProbeScope : IAsyncDisposable
     private readonly string? _blocker;
     private readonly string? _blockerFunction;
 
-    private PostgreSqlProbeScope(PostgreSqlClosureScope scope, string role, string stagingSchema, string connectionString,
-        ConnectionProfile profile, string? blocker, string? blockerFunction)
+    private PostgreSqlProbeScope(
+        PostgreSqlClosureScope scope,
+        string role,
+        string stagingSchema,
+        string connectionString,
+        ConnectionProfile profile,
+        string? blocker,
+        string? blockerFunction
+    )
     {
         _scope = scope;
         _role = role;
@@ -124,7 +163,13 @@ internal sealed class PostgreSqlProbeScope : IAsyncDisposable
     public string ConnectionString { get; }
     public ConnectionProfile Profile { get; }
 
-    public static async Task<PostgreSqlProbeScope> CreateAsync(PostgreSqlClosureFixture fixture, ConnectionRole role, bool denyDrop, bool grantStaging = true, bool denyCreate = false)
+    public static async Task<PostgreSqlProbeScope> CreateAsync(
+        PostgreSqlClosureFixture fixture,
+        ConnectionRole role,
+        bool denyDrop,
+        bool grantStaging = true,
+        bool denyCreate = false
+    )
     {
         var scope = await fixture.CreateScopeAsync();
         var name = Guid.NewGuid().ToString("N");
@@ -148,10 +193,14 @@ internal sealed class PostgreSqlProbeScope : IAsyncDisposable
         {
             blocker = "dp_probe_drop_" + name;
             blockerFunction = blocker + "_function";
-            await ExecuteAsync(admin,
-                $"CREATE FUNCTION {Quote(blockerFunction)}() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN IF current_user = '{login}' THEN RAISE EXCEPTION 'drop denied'; END IF; END; $$;");
-            await ExecuteAsync(admin,
-                $"CREATE EVENT TRIGGER {Quote(blocker)} ON ddl_command_start WHEN TAG IN ({(denyDrop ? "'DROP TABLE'" : "'CREATE TABLE'")}) EXECUTE FUNCTION {Quote(blockerFunction)}();");
+            await ExecuteAsync(
+                admin,
+                $"CREATE FUNCTION {Quote(blockerFunction)}() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN IF current_user = '{login}' THEN RAISE EXCEPTION 'drop denied'; END IF; END; $$;"
+            );
+            await ExecuteAsync(
+                admin,
+                $"CREATE EVENT TRIGGER {Quote(blocker)} ON ddl_command_start WHEN TAG IN ({(denyDrop ? "'DROP TABLE'" : "'CREATE TABLE'")}) EXECUTE FUNCTION {Quote(blockerFunction)}();"
+            );
         }
 
         var connectionString = new NpgsqlConnectionStringBuilder(admin.ConnectionString)
@@ -160,20 +209,43 @@ internal sealed class PostgreSqlProbeScope : IAsyncDisposable
             Password = password,
             Pooling = false,
         }.ConnectionString;
-        var profile = new ConnectionProfile(Guid.NewGuid(), role.ToString(), "postgresql",
-            new SecretReference(SecretReferenceKind.EnvironmentVariable, "DP_PROBE"), scope.Schema, stagingSchema, 1);
-        return new PostgreSqlProbeScope(scope, login, stagingSchema, connectionString, profile, blocker, blockerFunction);
+        var profile = new ConnectionProfile(
+            Guid.NewGuid(),
+            role.ToString(),
+            "postgresql",
+            new SecretReference(SecretReferenceKind.EnvironmentVariable, "DP_PROBE"),
+            scope.Schema,
+            stagingSchema,
+            1
+        );
+        return new PostgreSqlProbeScope(
+            scope,
+            login,
+            stagingSchema,
+            connectionString,
+            profile,
+            blocker,
+            blockerFunction
+        );
     }
 
-    public ConnectionProbeRequest Request(TransferMode mode) => new(Profile,
-        string.Equals(Profile.DisplayName, ConnectionRole.Source.ToString(), StringComparison.Ordinal) ? ConnectionRole.Source : ConnectionRole.Target,
-        mode, ConnectionString);
+    public ConnectionProbeRequest Request(TransferMode mode) =>
+        new(
+            Profile,
+            string.Equals(Profile.DisplayName, ConnectionRole.Source.ToString(), StringComparison.Ordinal)
+                ? ConnectionRole.Source
+                : ConnectionRole.Target,
+            mode,
+            ConnectionString
+        );
 
     public async Task<int> StagingObjectCountAsync()
     {
         await using var connection = await _scope.Source.OpenConnectionAsync();
         await using var command = new NpgsqlCommand(
-            "SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=@schema", connection);
+            "SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=@schema",
+            connection
+        );
         command.Parameters.AddWithValue("schema", _stagingSchema);
         return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
@@ -198,5 +270,6 @@ internal sealed class PostgreSqlProbeScope : IAsyncDisposable
         await command.ExecuteNonQueryAsync();
     }
 
-    private static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+    private static string Quote(string identifier) =>
+        "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 }

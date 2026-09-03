@@ -27,15 +27,32 @@ public sealed class ConnectionModelsTests
 
     [Fact]
     public void SecretReference_WhenMountedLocatorIsRelative_Throws() =>
-        Assert.Throws<ArgumentException>(() => new SecretReference(SecretReferenceKind.FileMounted, "secrets/connection"));
+        Assert.Throws<ArgumentException>(() =>
+            new SecretReference(SecretReferenceKind.FileMounted, "secrets/connection")
+        );
 
     [Fact]
     public void ConnectionProfileAndSummary_PreserveSafeMetadata()
     {
         var connectionId = Guid.NewGuid();
-        var profile = new ConnectionProfile(connectionId, "source", "postgresql", new(SecretReferenceKind.EnvironmentVariable, "DP_CONNECTION"), "app", "__datapitcher", 1);
+        var profile = new ConnectionProfile(
+            connectionId,
+            "source",
+            "postgresql",
+            new(SecretReferenceKind.EnvironmentVariable, "DP_CONNECTION"),
+            "app",
+            "__datapitcher",
+            1
+        );
         var copy = profile with { Version = 2 };
-        var summary = new ConnectionProfileSummary(connectionId, "source", "postgresql", SecretReferenceKind.EnvironmentVariable, ConnectionHealthState.Unknown, "\"1\"");
+        var summary = new ConnectionProfileSummary(
+            connectionId,
+            "source",
+            "postgresql",
+            SecretReferenceKind.EnvironmentVariable,
+            ConnectionHealthState.Unknown,
+            "\"1\""
+        );
 
         Assert.Equal(connectionId, profile.ConnectionId);
         Assert.Equal("source", profile.DisplayName);
@@ -63,7 +80,9 @@ public sealed class ConnectionModelsTests
 
         Assert.DoesNotContain(ConnectionCapability.CanReadSchema, requirements.Required);
         Assert.Contains(ConnectionCapability.CanUseSnapshotIsolation, requirements.Optional);
-        Assert.Throws<NotSupportedException>(() => ((ISet<ConnectionCapability>)requirements.Required).Add(ConnectionCapability.CanReadSchema));
+        Assert.Throws<NotSupportedException>(() =>
+            ((ISet<ConnectionCapability>)requirements.Required).Add(ConnectionCapability.CanReadSchema)
+        );
     }
 
     [Theory]
@@ -73,7 +92,12 @@ public sealed class ConnectionModelsTests
     [InlineData(TransferMode.ResumableStaged, ConnectionRole.Target, ConnectionCapability.CanCreateTargetStaging, true)]
     [InlineData(TransferMode.ServerSide, ConnectionRole.Source, ConnectionCapability.CanUseServerSideTransfer, true)]
     [InlineData(TransferMode.ServerSide, ConnectionRole.Target, ConnectionCapability.CanUseServerSideTransfer, true)]
-    public void ConnectionRequirements_ForModeAndRole_DeclaresExpectedCapability(TransferMode mode, ConnectionRole role, ConnectionCapability capability, bool isRequired)
+    public void ConnectionRequirements_ForModeAndRole_DeclaresExpectedCapability(
+        TransferMode mode,
+        ConnectionRole role,
+        ConnectionCapability capability,
+        bool isRequired
+    )
     {
         var requirements = ConnectionRequirements.For(mode, role);
 
@@ -113,20 +137,36 @@ public sealed class ConnectionModelsTests
     {
         var requirements = new ConnectionRequirements(
             new HashSet<ConnectionCapability> { ConnectionCapability.CanConnect, ConnectionCapability.CanReadSchema },
-            new HashSet<ConnectionCapability> { ConnectionCapability.SupportsDurableResume });
+            new HashSet<ConnectionCapability> { ConnectionCapability.SupportsDurableResume }
+        );
         var assessment = ConnectionHealthClassifier.Classify(
             requirements,
-            new ConnectionProbeEvidence("identity", "version",
-                new HashSet<ConnectionCapability> { ConnectionCapability.CanConnect, ConnectionCapability.CanReadSchema }, null));
+            new ConnectionProbeEvidence(
+                "identity",
+                "version",
+                new HashSet<ConnectionCapability>
+                {
+                    ConnectionCapability.CanConnect,
+                    ConnectionCapability.CanReadSchema,
+                },
+                null
+            )
+        );
 
         Assert.Equal(ConnectionHealthState.Degraded, assessment.State);
-        Assert.Single(assessment.MissingOptional, capability => capability == ConnectionCapability.SupportsDurableResume);
+        Assert.Single(
+            assessment.MissingOptional,
+            capability => capability == ConnectionCapability.SupportsDurableResume
+        );
     }
 
     [Fact]
     public void ConnectionHealthClassifier_WhenRequiredCapabilityIsMissing_IsUnhealthy()
     {
-        var assessment = ConnectionHealthClassifier.Classify(Requirements(), Evidence(ConnectionCapability.CanReadSchema));
+        var assessment = ConnectionHealthClassifier.Classify(
+            Requirements(),
+            Evidence(ConnectionCapability.CanReadSchema)
+        );
 
         Assert.Equal(ConnectionHealthState.Unhealthy, assessment.State);
         Assert.Single(assessment.MissingRequired, capability => capability == ConnectionCapability.CanReadSchema);
@@ -135,7 +175,10 @@ public sealed class ConnectionModelsTests
     [Fact]
     public void ConnectionHealthClassifier_WhenStagingCleanupFails_IsUnhealthy()
     {
-        var assessment = ConnectionHealthClassifier.Classify(Requirements(), Evidence(cleanupFailureCode: "staging_cleanup_failed"));
+        var assessment = ConnectionHealthClassifier.Classify(
+            Requirements(),
+            Evidence(cleanupFailureCode: "staging_cleanup_failed")
+        );
 
         Assert.Equal(ConnectionHealthState.Unhealthy, assessment.State);
         Assert.Equal("staging_cleanup_failed", assessment.CleanupFailureCode);
@@ -157,7 +200,15 @@ public sealed class ConnectionModelsTests
         var available = new HashSet<ConnectionCapability> { ConnectionCapability.CanConnect };
         var missingRequired = new HashSet<ConnectionCapability> { ConnectionCapability.CanReadSchema };
         var missingOptional = new HashSet<ConnectionCapability> { ConnectionCapability.CanUseSnapshotIsolation };
-        var assessment = new ConnectionAssessment(ConnectionHealthState.Degraded, "identity", "version", available, missingRequired, missingOptional, null);
+        var assessment = new ConnectionAssessment(
+            ConnectionHealthState.Degraded,
+            "identity",
+            "version",
+            available,
+            missingRequired,
+            missingOptional,
+            null
+        );
         available.Clear();
         missingRequired.Clear();
         missingOptional.Clear();
@@ -186,7 +237,10 @@ public sealed class ConnectionModelsTests
     public void SchemaSnapshotProjections_WhenInputCollectionsChange_RetainReadOnlyCopies()
     {
         var tables = new List<SchemaTableAddress> { new("app", "Orders") };
-        var edges = new List<SchemaGraphEdge> { new(new("app", "Orders"), new("app", "Customers"), "FK_Orders_Customers") };
+        var edges = new List<SchemaGraphEdge>
+        {
+            new(new("app", "Orders"), new("app", "Customers"), "FK_Orders_Customers"),
+        };
         var graph = new SchemaGraphProjection(tables, edges);
         var detail = new SchemaTableProjection(Orders(), [ForeignKey()]);
         var neighbourhood = new SchemaNeighbourhoodProjection(new("app", "Orders"), 1, tables, edges);
@@ -222,7 +276,12 @@ public sealed class ConnectionModelsTests
     public void CanonicalSchemaSnapshotHasher_WhenInputOrderAndDisplayFactsDiffer_HashesEqually()
     {
         var first = Content();
-        var second = new SchemaSnapshotContent([Customers(), Orders()], [ForeignKey()], "different identity", "different version");
+        var second = new SchemaSnapshotContent(
+            [Customers(), Orders()],
+            [ForeignKey()],
+            "different identity",
+            "different version"
+        );
 
         Assert.Equal("identity", first.DatabaseIdentity);
         Assert.Equal("version", first.ProviderVersion);
@@ -236,7 +295,10 @@ public sealed class ConnectionModelsTests
     [InlineData("fk-column-order")]
     public void CanonicalSchemaSnapshotHasher_WhenTransferRelevantMetadataChanges_HashChanges(string change)
     {
-        Assert.NotEqual(CanonicalSchemaSnapshotHasher.Hash(Content()), CanonicalSchemaSnapshotHasher.Hash(Changed(change)));
+        Assert.NotEqual(
+            CanonicalSchemaSnapshotHasher.Hash(Content()),
+            CanonicalSchemaSnapshotHasher.Hash(Changed(change))
+        );
     }
 
     [Fact]
@@ -246,8 +308,21 @@ public sealed class ConnectionModelsTests
         var introspector = new Introspector();
         var provider = new Provider("postgresql", detector, introspector);
         var registry = new ConnectionProviderRegistry([provider]);
-        var profile = new ConnectionProfile(Guid.NewGuid(), "source", "postgresql", new(SecretReferenceKind.EnvironmentVariable, "DP_CONNECTION"), "app", "__datapitcher", 1);
-        var request = new ConnectionProbeRequest(profile, ConnectionRole.Source, TransferMode.DirectFast, "resolved-secret");
+        var profile = new ConnectionProfile(
+            Guid.NewGuid(),
+            "source",
+            "postgresql",
+            new(SecretReferenceKind.EnvironmentVariable, "DP_CONNECTION"),
+            "app",
+            "__datapitcher",
+            1
+        );
+        var request = new ConnectionProbeRequest(
+            profile,
+            ConnectionRole.Source,
+            TransferMode.DirectFast,
+            "resolved-secret"
+        );
 
         Assert.Same(provider, registry.Get("postgresql"));
         Assert.Same(detector, provider.CapabilityDetector);
@@ -258,60 +333,124 @@ public sealed class ConnectionModelsTests
         Assert.Equal(TransferMode.DirectFast, request.Mode);
         Assert.Equal("resolved-secret", request.ResolvedConnectionString);
         Assert.Equal("identity", (await detector.ProbeAsync(request, CancellationToken.None)).DatabaseIdentity);
-        Assert.Equal(2, (await introspector.ReadAsync(profile, "resolved-secret", CancellationToken.None)).Tables.Count);
+        Assert.Equal(
+            2,
+            (await introspector.ReadAsync(profile, "resolved-secret", CancellationToken.None)).Tables.Count
+        );
     }
 
     [Fact]
     public void ConnectionProviderRegistry_WhenProviderIsUnsupported_UsesFixedSafeCode()
     {
-        var exception = Assert.Throws<UnsupportedConnectionProviderException>(() => new ConnectionProviderRegistry([]).Get("password-redaction-sentinel"));
+        var exception = Assert.Throws<UnsupportedConnectionProviderException>(() =>
+            new ConnectionProviderRegistry([]).Get("password-redaction-sentinel")
+        );
 
         Assert.Equal("unsupported_provider", exception.Code);
         Assert.DoesNotContain("password-redaction-sentinel", exception.Message, StringComparison.Ordinal);
     }
 
-    private static ConnectionRequirements Requirements() => new(
-        [ConnectionCapability.CanConnect, ConnectionCapability.CanReadSchema],
-        [ConnectionCapability.CanUseSnapshotIsolation]);
+    private static ConnectionRequirements Requirements() =>
+        new(
+            [ConnectionCapability.CanConnect, ConnectionCapability.CanReadSchema],
+            [ConnectionCapability.CanUseSnapshotIsolation]
+        );
 
-    private static ConnectionProbeEvidence Evidence(ConnectionCapability? omitted = null, string? cleanupFailureCode = null) => new(
-        "identity", "version", new[] { ConnectionCapability.CanConnect, ConnectionCapability.CanReadSchema, ConnectionCapability.CanUseSnapshotIsolation }
-            .Where(capability => capability != omitted), cleanupFailureCode);
+    private static ConnectionProbeEvidence Evidence(
+        ConnectionCapability? omitted = null,
+        string? cleanupFailureCode = null
+    ) =>
+        new(
+            "identity",
+            "version",
+            new[]
+            {
+                ConnectionCapability.CanConnect,
+                ConnectionCapability.CanReadSchema,
+                ConnectionCapability.CanUseSnapshotIsolation,
+            }.Where(capability => capability != omitted),
+            cleanupFailureCode
+        );
 
-    private static SchemaSnapshotContent Content() => new([Orders(), Customers()], [ForeignKey()], "identity", "version");
+    private static SchemaSnapshotContent Content() =>
+        new([Orders(), Customers()], [ForeignKey()], "identity", "version");
 
-    private static SchemaSnapshotContent Changed(string change) => change switch
-    {
-        "column" => new([Orders("CustomerNumber"), Customers()], [ForeignKey()], "identity", "version"),
-        "key-order" => new([Orders(keyColumns: ["Number", "Id"]), Customers()], [ForeignKey()], "identity", "version"),
-        "fk-enforced" => new([Orders(), Customers()], [ForeignKey(isEnforced: false)], "identity", "version"),
-        "fk-column-order" => new([Orders(), Customers(columns: ["Id", "Number"])], [ForeignKey(childColumns: ["Number", "CustomerId"], parentColumns: ["Number", "Id"])], "identity", "version"),
-        _ => throw new ArgumentOutOfRangeException(nameof(change)),
-    };
+    private static SchemaSnapshotContent Changed(string change) =>
+        change switch
+        {
+            "column" => new([Orders("CustomerNumber"), Customers()], [ForeignKey()], "identity", "version"),
+            "key-order" => new(
+                [Orders(keyColumns: ["Number", "Id"]), Customers()],
+                [ForeignKey()],
+                "identity",
+                "version"
+            ),
+            "fk-enforced" => new([Orders(), Customers()], [ForeignKey(isEnforced: false)], "identity", "version"),
+            "fk-column-order" => new(
+                [Orders(), Customers(columns: ["Id", "Number"])],
+                [ForeignKey(childColumns: ["Number", "CustomerId"], parentColumns: ["Number", "Id"])],
+                "identity",
+                "version"
+            ),
+            _ => throw new ArgumentOutOfRangeException(nameof(change)),
+        };
 
-    private static SchemaTable Orders(string customerColumn = "CustomerId", IReadOnlyList<string>? keyColumns = null) => new(
-        "app", "Orders", [new("Id", "int", "System.Int32", false), new(customerColumn, "int", "System.Int32", false), new("Number", "int", "System.Int32", false)],
-        new("PK_Orders", keyColumns ?? ["Id", "Number"]), []);
+    private static SchemaTable Orders(string customerColumn = "CustomerId", IReadOnlyList<string>? keyColumns = null) =>
+        new(
+            "app",
+            "Orders",
+            [
+                new("Id", "int", "System.Int32", false),
+                new(customerColumn, "int", "System.Int32", false),
+                new("Number", "int", "System.Int32", false),
+            ],
+            new("PK_Orders", keyColumns ?? ["Id", "Number"]),
+            []
+        );
 
-    private static SchemaTable Customers(IReadOnlyList<string>? columns = null) => new(
-        "app", "Customers", (columns ?? ["Id"]).Select(name => new SchemaColumn(name, "int", "System.Int32", false)), new("PK_Customers", ["Id"]), []);
+    private static SchemaTable Customers(IReadOnlyList<string>? columns = null) =>
+        new(
+            "app",
+            "Customers",
+            (columns ?? ["Id"]).Select(name => new SchemaColumn(name, "int", "System.Int32", false)),
+            new("PK_Customers", ["Id"]),
+            []
+        );
 
-    private static SchemaForeignKey ForeignKey(bool isEnforced = true, IReadOnlyList<string>? childColumns = null, IReadOnlyList<string>? parentColumns = null) => new(
-        "FK_Orders_Customers", new("app", "Orders"), new("app", "Customers"), childColumns ?? ["CustomerId"], parentColumns ?? ["Id"], isEnforced, true);
+    private static SchemaForeignKey ForeignKey(
+        bool isEnforced = true,
+        IReadOnlyList<string>? childColumns = null,
+        IReadOnlyList<string>? parentColumns = null
+    ) =>
+        new(
+            "FK_Orders_Customers",
+            new("app", "Orders"),
+            new("app", "Customers"),
+            childColumns ?? ["CustomerId"],
+            parentColumns ?? ["Id"],
+            isEnforced,
+            true
+        );
 
     private sealed class Detector : ICapabilityDetector
     {
-        public Task<ConnectionProbeEvidence> ProbeAsync(ConnectionProbeRequest request, CancellationToken cancellationToken) =>
-            Task.FromResult(Evidence());
+        public Task<ConnectionProbeEvidence> ProbeAsync(
+            ConnectionProbeRequest request,
+            CancellationToken cancellationToken
+        ) => Task.FromResult(Evidence());
     }
 
     private sealed class Introspector : ISchemaIntrospector
     {
-        public Task<SchemaSnapshotContent> ReadAsync(ConnectionProfile profile, string resolvedConnectionString, CancellationToken cancellationToken) =>
-            Task.FromResult(Content());
+        public Task<SchemaSnapshotContent> ReadAsync(
+            ConnectionProfile profile,
+            string resolvedConnectionString,
+            CancellationToken cancellationToken
+        ) => Task.FromResult(Content());
     }
 
-    private sealed class Provider(string providerId, ICapabilityDetector detector, ISchemaIntrospector introspector) : IConnectionProvider
+    private sealed class Provider(string providerId, ICapabilityDetector detector, ISchemaIntrospector introspector)
+        : IConnectionProvider
     {
         public string ProviderId { get; } = providerId;
         public ICapabilityDetector CapabilityDetector { get; } = detector;

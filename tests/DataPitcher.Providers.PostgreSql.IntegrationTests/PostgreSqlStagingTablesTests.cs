@@ -17,7 +17,10 @@ public sealed class PostgreSqlStagingTablesTests : IClassFixture<PostgreSqlClosu
         await using var scope = await _fixture.CreateScopeAsync();
         var schema = await new PostgreSqlCatalogReader(scope.Source).ReadAsync(scope.Schema, CancellationToken.None);
         var table = schema.Table("declared_key").Definition;
-        var selections = new Dictionary<TableDefinition, StableKeySelection> { [table] = StableKeySelector.Select(table, null) };
+        var selections = new Dictionary<TableDefinition, StableKeySelection>
+        {
+            [table] = StableKeySelector.Select(table, null),
+        };
         await using var first = new PostgreSqlStagingTables(scope.Source, scope.Target, schema, selections);
         await using var second = new PostgreSqlStagingTables(scope.Source, scope.Target, schema, selections);
         var key = new StableKey([new("physical_second", 2), new("physical_first", 1)]);

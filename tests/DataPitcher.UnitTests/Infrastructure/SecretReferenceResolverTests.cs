@@ -16,7 +16,10 @@ public sealed class SecretReferenceResolverTests
         {
             var resolver = new SecretReferenceResolver(Path.GetTempPath());
 
-            var resolved = await resolver.ResolveAsync(new(SecretReferenceKind.EnvironmentVariable, name), CancellationToken.None);
+            var resolved = await resolver.ResolveAsync(
+                new(SecretReferenceKind.EnvironmentVariable, name),
+                CancellationToken.None
+            );
 
             Assert.Equal(value, resolved);
         }
@@ -31,7 +34,12 @@ public sealed class SecretReferenceResolverTests
     {
         var resolver = new SecretReferenceResolver(Path.GetTempPath());
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.ResolveAsync(new(SecretReferenceKind.EnvironmentVariable, "DP_TEST_MISSING_SECRET"), CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            resolver.ResolveAsync(
+                new(SecretReferenceKind.EnvironmentVariable, "DP_TEST_MISSING_SECRET"),
+                CancellationToken.None
+            )
+        );
 
         Assert.Equal("Configured secret is unavailable.", exception.Message);
     }
@@ -47,7 +55,10 @@ public sealed class SecretReferenceResolverTests
         {
             var resolver = new SecretReferenceResolver(root);
 
-            var resolved = await resolver.ResolveAsync(new(SecretReferenceKind.FileMounted, path), CancellationToken.None);
+            var resolved = await resolver.ResolveAsync(
+                new(SecretReferenceKind.FileMounted, path),
+                CancellationToken.None
+            );
 
             Assert.Equal("reference-content-sentinel", resolved);
         }
@@ -68,7 +79,9 @@ public sealed class SecretReferenceResolverTests
         {
             var resolver = new SecretReferenceResolver(root);
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => resolver.ResolveAsync(new(SecretReferenceKind.FileMounted, outside), CancellationToken.None));
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                resolver.ResolveAsync(new(SecretReferenceKind.FileMounted, outside), CancellationToken.None)
+            );
 
             Assert.Equal("Mounted secret reference is outside the configured root.", exception.Message);
         }
@@ -89,7 +102,9 @@ public sealed class SecretReferenceResolverTests
         {
             var resolver = new SecretReferenceResolver(root);
 
-            var exception = await Assert.ThrowsAnyAsync<Exception>(() => resolver.ResolveAsync(new(SecretReferenceKind.FileMounted, missing), CancellationToken.None));
+            var exception = await Assert.ThrowsAnyAsync<Exception>(() =>
+                resolver.ResolveAsync(new(SecretReferenceKind.FileMounted, missing), CancellationToken.None)
+            );
 
             Assert.DoesNotContain(missing, exception.Message, StringComparison.Ordinal);
         }
@@ -104,6 +119,8 @@ public sealed class SecretReferenceResolverTests
     {
         var resolver = new SecretReferenceResolver(Path.GetTempPath());
 
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => resolver.ResolveAsync(new((SecretReferenceKind)99, "ignored"), CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            resolver.ResolveAsync(new((SecretReferenceKind)99, "ignored"), CancellationToken.None)
+        );
     }
 }

@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 namespace DataPitcher.Core.Schema;
 
 public sealed record SchemaTableAddress(string Schema, string Name);
+
 public sealed record SchemaColumn(string Name, string StoreType, string ClrType, bool IsNullable);
 
 public sealed record SchemaKey
@@ -21,8 +22,13 @@ public sealed record SchemaKey
 
 public sealed class SchemaTable
 {
-    public SchemaTable(string schema, string name, IEnumerable<SchemaColumn> columns, SchemaKey? primaryKey,
-        IEnumerable<SchemaKey> uniqueConstraints)
+    public SchemaTable(
+        string schema,
+        string name,
+        IEnumerable<SchemaColumn> columns,
+        SchemaKey? primaryKey,
+        IEnumerable<SchemaKey> uniqueConstraints
+    )
     {
         Schema = schema;
         Name = name;
@@ -40,8 +46,15 @@ public sealed class SchemaTable
 
 public sealed class SchemaForeignKey
 {
-    public SchemaForeignKey(string name, SchemaTableAddress childTable, SchemaTableAddress parentTable,
-        IEnumerable<string> childColumns, IEnumerable<string> parentColumns, bool isEnforced, bool isTrusted)
+    public SchemaForeignKey(
+        string name,
+        SchemaTableAddress childTable,
+        SchemaTableAddress parentTable,
+        IEnumerable<string> childColumns,
+        IEnumerable<string> parentColumns,
+        bool isEnforced,
+        bool isTrusted
+    )
     {
         Name = name;
         ChildTable = childTable;
@@ -63,8 +76,12 @@ public sealed class SchemaForeignKey
 
 public sealed class SchemaSnapshotContent
 {
-    public SchemaSnapshotContent(IEnumerable<SchemaTable> tables, IEnumerable<SchemaForeignKey> foreignKeys,
-        string databaseIdentity = "", string providerVersion = "")
+    public SchemaSnapshotContent(
+        IEnumerable<SchemaTable> tables,
+        IEnumerable<SchemaForeignKey> foreignKeys,
+        string databaseIdentity = "",
+        string providerVersion = ""
+    )
     {
         Tables = Array.AsReadOnly(tables.ToArray());
         ForeignKeys = Array.AsReadOnly(foreignKeys.ToArray());
@@ -79,7 +96,12 @@ public sealed class SchemaSnapshotContent
 }
 
 public sealed record StoredSchemaSnapshot(
-    Guid SnapshotId, Guid ConnectionId, string Hash, DateTimeOffset CapturedAtUtc, SchemaSnapshotContent Content);
+    Guid SnapshotId,
+    Guid ConnectionId,
+    string Hash,
+    DateTimeOffset CapturedAtUtc,
+    SchemaSnapshotContent Content
+);
 
 public sealed record SchemaGraphEdge(SchemaTableAddress Child, SchemaTableAddress Parent, string ForeignKeyName);
 
@@ -109,8 +131,12 @@ public sealed class SchemaTableProjection
 
 public sealed class SchemaNeighbourhoodProjection
 {
-    public SchemaNeighbourhoodProjection(SchemaTableAddress center, int depth, IEnumerable<SchemaTableAddress> tables,
-        IEnumerable<SchemaGraphEdge> edges)
+    public SchemaNeighbourhoodProjection(
+        SchemaTableAddress center,
+        int depth,
+        IEnumerable<SchemaTableAddress> tables,
+        IEnumerable<SchemaGraphEdge> edges
+    )
     {
         Center = center;
         Depth = depth;
@@ -187,12 +213,15 @@ public static class CanonicalSchemaSnapshotHasher
 
     private static void Unordered<T>(Writer writer, IEnumerable<T> values, Action<Writer, T> item)
     {
-        var all = values.Select(value =>
-        {
-            var nested = new Writer();
-            item(nested, value);
-            return nested.Bytes.ToArray();
-        }).OrderBy(bytes => Convert.ToHexString(bytes), StringComparer.Ordinal).ToArray();
+        var all = values
+            .Select(value =>
+            {
+                var nested = new Writer();
+                item(nested, value);
+                return nested.Bytes.ToArray();
+            })
+            .OrderBy(bytes => Convert.ToHexString(bytes), StringComparer.Ordinal)
+            .ToArray();
         writer.Int(all.Length);
         foreach (var value in all)
             writer.Raw(value);

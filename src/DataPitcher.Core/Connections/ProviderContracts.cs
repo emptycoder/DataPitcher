@@ -5,7 +5,11 @@ using DataPitcher.Core.Schema;
 namespace DataPitcher.Core.Connections;
 
 public sealed record ConnectionProbeRequest(
-    ConnectionProfile Profile, ConnectionRole Role, TransferMode Mode, string ResolvedConnectionString);
+    ConnectionProfile Profile,
+    ConnectionRole Role,
+    TransferMode Mode,
+    string ResolvedConnectionString
+);
 
 public interface ICapabilityDetector
 {
@@ -14,7 +18,11 @@ public interface ICapabilityDetector
 
 public interface ISchemaIntrospector
 {
-    Task<SchemaSnapshotContent> ReadAsync(ConnectionProfile profile, string resolvedConnectionString, CancellationToken cancellationToken);
+    Task<SchemaSnapshotContent> ReadAsync(
+        ConnectionProfile profile,
+        string resolvedConnectionString,
+        CancellationToken cancellationToken
+    );
 }
 
 public interface IConnectionProvider
@@ -42,6 +50,8 @@ public sealed class ConnectionProviderRegistry : IConnectionProviderRegistry
 
 public sealed class UnsupportedConnectionProviderException : InvalidOperationException
 {
-    public UnsupportedConnectionProviderException() : base("The connection provider is unsupported.") { }
+    public UnsupportedConnectionProviderException()
+        : base("The connection provider is unsupported.") { }
+
     public string Code => "unsupported_provider";
 }

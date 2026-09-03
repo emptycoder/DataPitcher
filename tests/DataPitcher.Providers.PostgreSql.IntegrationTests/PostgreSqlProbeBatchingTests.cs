@@ -25,17 +25,33 @@ public sealed class PostgreSqlProbeBatchingTests : IClassFixture<PostgreSqlClosu
         var recorder = new PostgreSqlCommandRecorder();
         await using var scope = await _fixture.CreateScopeAsync(recorder);
         await BothAsync(scope, "CREATE TABLE batch_parent (id integer PRIMARY KEY)");
-        await BothAsync(scope, "CREATE TABLE batch_child (id integer PRIMARY KEY, pid integer NOT NULL REFERENCES batch_parent(id))");
+        await BothAsync(
+            scope,
+            "CREATE TABLE batch_child (id integer PRIMARY KEY, pid integer NOT NULL REFERENCES batch_parent(id))"
+        );
         var parentValues = string.Join(", ", Enumerable.Range(1, KeyCount).Select(i => $"({i})"));
         var childValues = string.Join(", ", Enumerable.Range(1, KeyCount).Select(i => $"({i}, {i})"));
-        await scope.ExecuteAsync($"INSERT INTO batch_parent VALUES {parentValues}; INSERT INTO batch_child VALUES {childValues};");
+        await scope.ExecuteAsync(
+            $"INSERT INTO batch_parent VALUES {parentValues}; INSERT INTO batch_child VALUES {childValues};"
+        );
         var (source, target) = await ReadAsync(scope);
         var child = source.Table("batch_child").Definition;
         var parent = source.Table("batch_parent").Definition;
         var relationship = new ClosureRelationship(Fk(source, child, parent));
         var roots = Enumerable.Range(1, KeyCount).Select(i => Key("id", i)).ToArray();
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(child, parent));
-        var result = await RunAsync(store, [relationship], Selections(child, parent), new ClosureRoot(child, roots, RootConflictPolicy.FailOnConflict));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(child, parent)
+        );
+        var result = await RunAsync(
+            store,
+            [relationship],
+            Selections(child, parent),
+            new ClosureRoot(child, roots, RootConflictPolicy.FailOnConflict)
+        );
 
         Assert.Equal(KeyCount, result.Rows.Count(row => row.Table == child));
         Assert.Equal(KeyCount, result.Rows.Count(row => row.Table == parent));
@@ -51,21 +67,35 @@ public sealed class PostgreSqlProbeBatchingTests : IClassFixture<PostgreSqlClosu
         await scope.ExecuteTargetAsync(sql);
     }
 
-    private static async Task<(PostgreSqlSchemaSnapshot Source, PostgreSqlSchemaSnapshot Target)> ReadAsync(PostgreSqlClosureScope scope)
+    private static async Task<(PostgreSqlSchemaSnapshot Source, PostgreSqlSchemaSnapshot Target)> ReadAsync(
+        PostgreSqlClosureScope scope
+    )
     {
         var source = await new PostgreSqlCatalogReader(scope.Source).ReadAsync(scope.Schema, CancellationToken.None);
         var target = await new PostgreSqlCatalogReader(scope.Target).ReadAsync(scope.Schema, CancellationToken.None);
         return (source, target);
     }
 
-    private static ForeignKeyDefinition Fk(PostgreSqlSchemaSnapshot catalog, TableDefinition child, TableDefinition parent) =>
-        catalog.ForeignKeys.Single(x => x.ChildTable == child && x.ParentTable == parent);
+    private static ForeignKeyDefinition Fk(
+        PostgreSqlSchemaSnapshot catalog,
+        TableDefinition child,
+        TableDefinition parent
+    ) => catalog.ForeignKeys.Single(x => x.ChildTable == child && x.ParentTable == parent);
 
-    private static IReadOnlyDictionary<TableDefinition, StableKeySelection> Selections(params TableDefinition[] tables) =>
-        tables.Distinct().ToDictionary(t => t, t => StableKeySelector.Select(t, null));
+    private static IReadOnlyDictionary<TableDefinition, StableKeySelection> Selections(
+        params TableDefinition[] tables
+    ) => tables.Distinct().ToDictionary(t => t, t => StableKeySelector.Select(t, null));
 
     private static StableKey Key(string column, object? value) => new([new KeyComponent(column, value)]);
 
-    private static Task<ClosureResult> RunAsync(IClosureStore store, IReadOnlyCollection<ClosureRelationship> relationships, IReadOnlyDictionary<TableDefinition, StableKeySelection> selections, params ClosureRoot[] roots) =>
-        new DependencyClosure(store).ComputeAsync(new ClosureRequest(roots, relationships, selections), CancellationToken.None);
+    private static Task<ClosureResult> RunAsync(
+        IClosureStore store,
+        IReadOnlyCollection<ClosureRelationship> relationships,
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> selections,
+        params ClosureRoot[] roots
+    ) =>
+        new DependencyClosure(store).ComputeAsync(
+            new ClosureRequest(roots, relationships, selections),
+            CancellationToken.None
+        );
 }

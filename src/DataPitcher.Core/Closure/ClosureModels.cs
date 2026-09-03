@@ -13,7 +13,16 @@ public enum RootConflictPolicy
 
 public sealed class ClosureRelationship : IEquatable<ClosureRelationship>
 {
-    private ClosureRelationship(string name, TableDefinition fromTable, TableDefinition toTable, ForeignKeyDefinition? foreignKey, bool isInbound, IReadOnlyList<string> fromColumns, IReadOnlyList<string> toColumns, bool isEnabled)
+    private ClosureRelationship(
+        string name,
+        TableDefinition fromTable,
+        TableDefinition toTable,
+        ForeignKeyDefinition? foreignKey,
+        bool isInbound,
+        IReadOnlyList<string> fromColumns,
+        IReadOnlyList<string> toColumns,
+        bool isEnabled
+    )
     {
         if (fromColumns.Count == 0 || toColumns.Count == 0)
             throw new ArgumentException("Relationship from and to column lists must not be empty.");
@@ -32,12 +41,25 @@ public sealed class ClosureRelationship : IEquatable<ClosureRelationship>
     }
 
     public ClosureRelationship(ForeignKeyDefinition foreignKey, bool isInbound = false, bool isEnabled = true)
-        : this(foreignKey.Name, isInbound ? foreignKey.ParentTable : foreignKey.ChildTable, isInbound ? foreignKey.ChildTable : foreignKey.ParentTable, foreignKey, isInbound, isInbound ? foreignKey.ParentColumns : foreignKey.ChildColumns, isInbound ? foreignKey.ChildColumns : foreignKey.ParentColumns, isEnabled)
-    {
-    }
+        : this(
+            foreignKey.Name,
+            isInbound ? foreignKey.ParentTable : foreignKey.ChildTable,
+            isInbound ? foreignKey.ChildTable : foreignKey.ParentTable,
+            foreignKey,
+            isInbound,
+            isInbound ? foreignKey.ParentColumns : foreignKey.ChildColumns,
+            isInbound ? foreignKey.ChildColumns : foreignKey.ParentColumns,
+            isEnabled
+        ) { }
 
-    public static ClosureRelationship Manual(string name, TableDefinition fromTable, TableDefinition toTable, IReadOnlyList<string> fromColumns, IReadOnlyList<string> toColumns, bool isEnabled = true) =>
-        new(name, fromTable, toTable, null, false, fromColumns, toColumns, isEnabled);
+    public static ClosureRelationship Manual(
+        string name,
+        TableDefinition fromTable,
+        TableDefinition toTable,
+        IReadOnlyList<string> fromColumns,
+        IReadOnlyList<string> toColumns,
+        bool isEnabled = true
+    ) => new(name, fromTable, toTable, null, false, fromColumns, toColumns, isEnabled);
 
     public string Name { get; }
 
@@ -56,14 +78,14 @@ public sealed class ClosureRelationship : IEquatable<ClosureRelationship>
     public bool IsEnabled { get; }
 
     public bool Equals(ClosureRelationship? other) =>
-        other is not null &&
-        StringComparer.Ordinal.Equals(Name, other.Name) &&
-        FromTable.Equals(other.FromTable) &&
-        ToTable.Equals(other.ToTable) &&
-        IsInbound == other.IsInbound &&
-        FromColumns.SequenceEqual(other.FromColumns, StringComparer.Ordinal) &&
-        ToColumns.SequenceEqual(other.ToColumns, StringComparer.Ordinal) &&
-        IsEnabled == other.IsEnabled;
+        other is not null
+        && StringComparer.Ordinal.Equals(Name, other.Name)
+        && FromTable.Equals(other.FromTable)
+        && ToTable.Equals(other.ToTable)
+        && IsInbound == other.IsInbound
+        && FromColumns.SequenceEqual(other.FromColumns, StringComparer.Ordinal)
+        && ToColumns.SequenceEqual(other.ToColumns, StringComparer.Ordinal)
+        && IsEnabled == other.IsEnabled;
 
     public override bool Equals(object? obj) => Equals(obj as ClosureRelationship);
 
@@ -101,11 +123,17 @@ public sealed class ClosureRoot
 
 public sealed class ClosureRequest
 {
-    public ClosureRequest(IEnumerable<ClosureRoot> roots, IEnumerable<ClosureRelationship> relationships, IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeySelections)
+    public ClosureRequest(
+        IEnumerable<ClosureRoot> roots,
+        IEnumerable<ClosureRelationship> relationships,
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeySelections
+    )
     {
         Roots = Array.AsReadOnly(roots.ToArray());
         Relationships = Array.AsReadOnly(relationships.ToArray());
-        StableKeySelections = new ReadOnlyDictionary<TableDefinition, StableKeySelection>(stableKeySelections.ToDictionary(x => x.Key, x => x.Value));
+        StableKeySelections = new ReadOnlyDictionary<TableDefinition, StableKeySelection>(
+            stableKeySelections.ToDictionary(x => x.Key, x => x.Value)
+        );
     }
 
     public IReadOnlyCollection<ClosureRoot> Roots { get; }
@@ -126,7 +154,9 @@ public sealed class TargetProbe
     public TargetProbe(bool exists, IReadOnlyDictionary<ClosureRelationship, TargetConstraintState> constraints)
     {
         Exists = exists;
-        Constraints = new ReadOnlyDictionary<ClosureRelationship, TargetConstraintState>(constraints.ToDictionary(x => x.Key, x => x.Value));
+        Constraints = new ReadOnlyDictionary<ClosureRelationship, TargetConstraintState>(
+            constraints.ToDictionary(x => x.Key, x => x.Value)
+        );
     }
 
     public bool Exists { get; }

@@ -9,35 +9,39 @@ public sealed class DependencyClosure(IClosureStore store)
 
     public async Task<ClosureResult> ComputeAsync(ClosureRequest request, CancellationToken cancellationToken)
     {
-        var participants = request.Roots
-            .Select(root => root.Table)
-            .Concat(request.Relationships
-                .Where(relationship => relationship.IsEnabled)
-                .SelectMany(relationship => new[] { relationship.FromTable, relationship.ToTable }))
+        var participants = request
+            .Roots.Select(root => root.Table)
+            .Concat(
+                request
+                    .Relationships.Where(relationship => relationship.IsEnabled)
+                    .SelectMany(relationship => new[] { relationship.FromTable, relationship.ToTable })
+            )
             .Distinct();
         var blocked = participants.FirstOrDefault(table =>
-            !request.StableKeySelections.TryGetValue(table, out var selection) ||
-            !HasUsableStableKey(table, selection));
+            !request.StableKeySelections.TryGetValue(table, out var selection) || !HasUsableStableKey(table, selection)
+        );
         if (blocked is not null)
             throw new BlockedTableException(blocked);
 
         var rootPolicies = new Dictionary<RowAddress, RootConflictPolicy>();
         foreach (var root in request.Roots)
-            foreach (var key in root.Keys)
-            {
-                var address = new RowAddress(root.Table, key);
-                if (rootPolicies.TryGetValue(address, out var policy) && policy != root.ConflictPolicy)
-                    throw new InvalidOperationException($"Conflicting root conflict policies for {root.Table.Schema}.{root.Table.Name}.");
-                rootPolicies[address] = root.ConflictPolicy;
-            }
+        foreach (var key in root.Keys)
+        {
+            var address = new RowAddress(root.Table, key);
+            if (rootPolicies.TryGetValue(address, out var policy) && policy != root.ConflictPolicy)
+                throw new InvalidOperationException(
+                    $"Conflicting root conflict policies for {root.Table.Schema}.{root.Table.Name}."
+                );
+            rootPolicies[address] = root.ConflictPolicy;
+        }
 
         var frontier = new List<Frontier>();
         var included = new Dictionary<RowAddress, ClosureRow>();
         var warnings = new HashSet<TargetConstraintWarning>();
 
         foreach (var root in request.Roots)
-            foreach (var key in await store.SeedRootKeysAsync(root.Table, root.Keys, cancellationToken))
-                frontier.Add(new(root.Table, key, root.ConflictPolicy));
+        foreach (var key in await store.SeedRootKeysAsync(root.Table, root.Keys, cancellationToken))
+            frontier.Add(new(root.Table, key, root.ConflictPolicy));
 
         for (var generation = 0; frontier.Count > 0; generation++)
         {
@@ -46,8 +50,10 @@ public sealed class DependencyClosure(IClosureStore store)
             foreach (var group in frontier.GroupBy(item => item.Table))
             {
                 var keys = group.Select(item => item.Key).Distinct().ToArray();
-                var requirements = request.Relationships
-                    .Where(relationship => relationship.IsEnabled && !relationship.IsInbound && relationship.FromTable == group.Key)
+                var requirements = request
+                    .Relationships.Where(relationship =>
+                        relationship.IsEnabled && !relationship.IsInbound && relationship.FromTable == group.Key
+                    )
                     .ToArray();
                 var probes = await store.ProbeTargetAsync(group.Key, requirements, keys, cancellationToken);
 
@@ -67,7 +73,9 @@ public sealed class DependencyClosure(IClosureStore store)
 
                     var include = item.RootPolicy switch
                     {
-                        RootConflictPolicy.FailOnConflict when probe.Exists => throw new RootConflictException(new(item.Table, item.Key)),
+                        RootConflictPolicy.FailOnConflict when probe.Exists => throw new RootConflictException(
+                            new(item.Table, item.Key)
+                        ),
                         RootConflictPolicy.SkipExisting => !probe.Exists,
                         RootConflictPolicy.Upsert => true,
                         null => !IsTargetSatisfied(probe, requirements),
@@ -89,7 +97,9 @@ public sealed class DependencyClosure(IClosureStore store)
                 if (!expandable.TryGetValue(relationship.FromTable, out var fromKeys))
                     continue;
 
-                foreach (var key in await store.ExpandAsync(relationship, fromKeys.Distinct().ToArray(), cancellationToken))
+                foreach (
+                    var key in await store.ExpandAsync(relationship, fromKeys.Distinct().ToArray(), cancellationToken)
+                )
                     discovered.Add(new(relationship.ToTable, key));
             }
 
@@ -106,17 +116,22 @@ public sealed class DependencyClosure(IClosureStore store)
     }
 
     private static bool IsTargetSatisfied(TargetProbe probe, IReadOnlyCollection<ClosureRelationship> requirements) =>
-        probe.Exists && requirements.All(relationship =>
-            probe.Constraints.TryGetValue(relationship, out var state) &&
-            state is { IsPresent: true, IsEnforced: true, IsTrusted: true });
+        probe.Exists
+        && requirements.All(relationship =>
+            probe.Constraints.TryGetValue(relationship, out var state)
+            && state is { IsPresent: true, IsEnforced: true, IsTrusted: true }
+        );
 
     private static bool HasUsableStableKey(TableDefinition table, StableKeySelection selection)
     {
         if (selection.Constraint is not { Columns.Count: > 0 } constraint)
             return false;
 
-        return table.PrimaryKey == constraint || constraint.Columns.All(name =>
-            table.Columns.FirstOrDefault(column => StringComparer.Ordinal.Equals(column.Name, name)) is { IsNullable: false });
+        return table.PrimaryKey == constraint
+            || constraint.Columns.All(name =>
+                table.Columns.FirstOrDefault(column => StringComparer.Ordinal.Equals(column.Name, name))
+                    is { IsNullable: false }
+            );
     }
 }
 

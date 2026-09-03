@@ -28,7 +28,12 @@ public sealed class OpenApiTests(ApiWebApplicationFactory factory) : IClassFixtu
     {
         using var document = await GetDocumentAsync();
 
-        Assert.True(document.RootElement.GetProperty("components").GetProperty("securitySchemes").TryGetProperty("Bearer", out var bearer));
+        Assert.True(
+            document
+                .RootElement.GetProperty("components")
+                .GetProperty("securitySchemes")
+                .TryGetProperty("Bearer", out var bearer)
+        );
         Assert.Equal("http", bearer.GetProperty("type").GetString());
         Assert.Equal("bearer", bearer.GetProperty("scheme").GetString());
 
@@ -38,14 +43,19 @@ public sealed class OpenApiTests(ApiWebApplicationFactory factory) : IClassFixtu
             {
                 if (path.Name is "/health/live" or "/api/providers")
                 {
-                    Assert.True(operation.Value.TryGetProperty("x-datapitcher-anonymous-justification", out var reason));
+                    Assert.True(
+                        operation.Value.TryGetProperty("x-datapitcher-anonymous-justification", out var reason)
+                    );
                     Assert.False(string.IsNullOrWhiteSpace(reason.GetString()));
                     Assert.False(operation.Value.TryGetProperty("security", out _));
                     continue;
                 }
 
                 Assert.True(operation.Value.TryGetProperty("security", out var security));
-                Assert.Contains(security.EnumerateArray().ToArray(), requirement => requirement.TryGetProperty("Bearer", out _));
+                Assert.Contains(
+                    security.EnumerateArray().ToArray(),
+                    requirement => requirement.TryGetProperty("Bearer", out _)
+                );
             }
         }
     }
@@ -61,8 +71,14 @@ public sealed class OpenApiTests(ApiWebApplicationFactory factory) : IClassFixtu
             {
                 foreach (var response in operation.Value.GetProperty("responses").EnumerateObject())
                 {
-                    if (!int.TryParse(response.Name, out var statusCode) || statusCode < StatusCodes.Status400BadRequest) continue;
-                    Assert.True(response.Value.GetProperty("content").TryGetProperty("application/problem+json", out _));
+                    if (
+                        !int.TryParse(response.Name, out var statusCode)
+                        || statusCode < StatusCodes.Status400BadRequest
+                    )
+                        continue;
+                    Assert.True(
+                        response.Value.GetProperty("content").TryGetProperty("application/problem+json", out _)
+                    );
                 }
             }
         }
@@ -72,17 +88,31 @@ public sealed class OpenApiTests(ApiWebApplicationFactory factory) : IClassFixtu
     public async Task OpenApi_DescribesTheSseHeaderAndContentType()
     {
         using var document = await GetDocumentAsync();
-        var operation = document.RootElement.GetProperty("paths").GetProperty("/api/jobs/{jobId}/events").GetProperty("get");
+        var operation = document
+            .RootElement.GetProperty("paths")
+            .GetProperty("/api/jobs/{jobId}/events")
+            .GetProperty("get");
 
-        Assert.True(operation.GetProperty("responses").GetProperty("200").GetProperty("content").TryGetProperty("text/event-stream", out _));
-        Assert.Contains(operation.GetProperty("parameters").EnumerateArray().ToArray(), parameter =>
-            parameter.GetProperty("name").GetString() == "Last-Event-ID" && parameter.GetProperty("in").GetString() == "header");
+        Assert.True(
+            operation
+                .GetProperty("responses")
+                .GetProperty("200")
+                .GetProperty("content")
+                .TryGetProperty("text/event-stream", out _)
+        );
+        Assert.Contains(
+            operation.GetProperty("parameters").EnumerateArray().ToArray(),
+            parameter =>
+                parameter.GetProperty("name").GetString() == "Last-Event-ID"
+                && parameter.GetProperty("in").GetString() == "header"
+        );
     }
 
     [Fact]
     public async Task OpenApiDocumentAndRepresentativeErrorContainNoCredentialContent()
     {
-        _factory.Application.Delay = _ => Task.FromException(new InvalidOperationException(string.Join(' ', ForbiddenSentinels)));
+        _factory.Application.Delay = _ =>
+            Task.FromException(new InvalidOperationException(string.Join(' ', ForbiddenSentinels)));
         try
         {
             using var document = await GetDocumentAsync();
@@ -106,7 +136,8 @@ public sealed class OpenApiTests(ApiWebApplicationFactory factory) : IClassFixtu
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
     }
 
-    private static bool IsHttpMethod(string value) => value is "get" or "put" or "post" or "delete" or "patch" or "head" or "options";
+    private static bool IsHttpMethod(string value) =>
+        value is "get" or "put" or "post" or "delete" or "patch" or "head" or "options";
 
     private static IEnumerable<string> Strings(JsonElement element)
     {
@@ -117,8 +148,8 @@ public sealed class OpenApiTests(ApiWebApplicationFactory factory) : IClassFixtu
                 break;
             case JsonValueKind.Array:
                 foreach (var item in element.EnumerateArray())
-                    foreach (var value in Strings(item))
-                        yield return value;
+                foreach (var value in Strings(item))
+                    yield return value;
                 break;
             case JsonValueKind.Object:
                 foreach (var property in element.EnumerateObject())

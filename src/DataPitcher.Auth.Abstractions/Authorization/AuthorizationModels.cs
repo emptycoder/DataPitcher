@@ -30,20 +30,36 @@ public enum AuthorizationOutcome
 
 public sealed record AuthorizationDecision(AuthorizationOutcome Outcome, PermissionSet EffectivePermissions);
 
-public sealed record PrincipalStateChange(ExternalPrincipalKey Principal, PrincipalAuthorizationState PreviousState, PrincipalAuthorizationState CurrentState, ExternalPrincipalKey ChangedBy, DateTimeOffset OccurredAt)
+public sealed record PrincipalStateChange(
+    ExternalPrincipalKey Principal,
+    PrincipalAuthorizationState PreviousState,
+    PrincipalAuthorizationState CurrentState,
+    ExternalPrincipalKey ChangedBy,
+    DateTimeOffset OccurredAt
+)
 {
-    public bool RequiresAudit => (PreviousState is PrincipalAuthorizationState.TerminalDeny or PrincipalAuthorizationState.Disabled) && CurrentState == PrincipalAuthorizationState.Active;
+    public bool RequiresAudit =>
+        (PreviousState is PrincipalAuthorizationState.TerminalDeny or PrincipalAuthorizationState.Disabled)
+        && CurrentState == PrincipalAuthorizationState.Active;
 }
 
 public sealed class AuthorizationInput
 {
-    public AuthorizationInput(NormalizedPrincipal principal, PrincipalAuthorizationState principalState, IEnumerable<RoleGrant> positiveGrants, GroupResolutionResult groupResolution, IEnumerable<Role> rolesThatMayBeGrantedByIndeterminateGroups)
+    public AuthorizationInput(
+        NormalizedPrincipal principal,
+        PrincipalAuthorizationState principalState,
+        IEnumerable<RoleGrant> positiveGrants,
+        GroupResolutionResult groupResolution,
+        IEnumerable<Role> rolesThatMayBeGrantedByIndeterminateGroups
+    )
     {
         Principal = principal;
         PrincipalState = principalState;
         PositiveGrants = Array.AsReadOnly(positiveGrants.ToArray());
         GroupResolution = groupResolution;
-        RolesThatMayBeGrantedByIndeterminateGroups = Array.AsReadOnly(rolesThatMayBeGrantedByIndeterminateGroups.Distinct().ToArray());
+        RolesThatMayBeGrantedByIndeterminateGroups = Array.AsReadOnly(
+            rolesThatMayBeGrantedByIndeterminateGroups.Distinct().ToArray()
+        );
     }
 
     public NormalizedPrincipal Principal { get; }

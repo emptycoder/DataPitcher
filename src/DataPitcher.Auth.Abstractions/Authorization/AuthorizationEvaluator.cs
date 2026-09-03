@@ -18,7 +18,12 @@ public static class AuthorizationEvaluator
             return new(AuthorizationOutcome.Granted, effectivePermissions);
         }
 
-        if (input.GroupResolution.State == GroupResolutionState.Indeterminate && input.RolesThatMayBeGrantedByIndeterminateGroups.Any(role => Enum.IsDefined(role) && RoleBundles.For(role).Contains(requiredPermission)))
+        if (
+            input.GroupResolution.State == GroupResolutionState.Indeterminate
+            && input.RolesThatMayBeGrantedByIndeterminateGroups.Any(role =>
+                Enum.IsDefined(role) && RoleBundles.For(role).Contains(requiredPermission)
+            )
+        )
         {
             return new(AuthorizationOutcome.Indeterminate, effectivePermissions);
         }
@@ -27,5 +32,7 @@ public static class AuthorizationEvaluator
     }
 
     public static PermissionSet EffectivePermissions(IEnumerable<RoleGrant> positiveGrants) =>
-        positiveGrants.Where(grant => Enum.IsDefined(grant.Role)).Aggregate(PermissionSet.Empty, (permissions, grant) => permissions.Union(RoleBundles.For(grant.Role)));
+        positiveGrants
+            .Where(grant => Enum.IsDefined(grant.Role))
+            .Aggregate(PermissionSet.Empty, (permissions, grant) => permissions.Union(RoleBundles.For(grant.Role)));
 }

@@ -11,14 +11,16 @@ public sealed class CondensedGraph
         var owner = Components
             .SelectMany(component => component.Tables.Select(table => (table, component.Id)))
             .ToDictionary(x => x.table, x => x.Id);
-        Edges = Array.AsReadOnly(graph.Tables
-            .SelectMany(graph.DependenciesOf)
-            .Select(foreignKey => new CondensedEdge(owner[foreignKey.ParentTable], owner[foreignKey.ChildTable]))
-            .Where(edge => edge.Parent != edge.Child)
-            .Distinct()
-            .OrderBy(edge => edge.Parent)
-            .ThenBy(edge => edge.Child)
-            .ToArray());
+        Edges = Array.AsReadOnly(
+            graph
+                .Tables.SelectMany(graph.DependenciesOf)
+                .Select(foreignKey => new CondensedEdge(owner[foreignKey.ParentTable], owner[foreignKey.ChildTable]))
+                .Where(edge => edge.Parent != edge.Child)
+                .Distinct()
+                .OrderBy(edge => edge.Parent)
+                .ThenBy(edge => edge.Child)
+                .ToArray()
+        );
     }
 
     public IReadOnlyList<Scc> Components { get; }
@@ -57,8 +59,7 @@ public sealed class CondensedGraph
         while (next.Length > 0)
         {
             layers.Add(Array.AsReadOnly(next));
-            next = next
-                .SelectMany(id => outgoing.TryGetValue(id, out var edges) ? edges : Array.Empty<CondensedEdge>())
+            next = next.SelectMany(id => outgoing.TryGetValue(id, out var edges) ? edges : Array.Empty<CondensedEdge>())
                 .Where(edge => --pending[edge.Child] == 0)
                 .Select(edge => edge.Child)
                 .OrderBy(id => id)

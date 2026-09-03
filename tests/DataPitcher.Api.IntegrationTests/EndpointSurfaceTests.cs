@@ -1,8 +1,9 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
-using System.Text.Json;
 using System.Text;
+using System.Text.Json;
 using DataPitcher.Api.Contracts;
 using DataPitcher.Api.Endpoints;
 using DataPitcher.Core.Authorization;
@@ -12,9 +13,8 @@ using DataPitcher.Infrastructure.Connections;
 using DataPitcher.Infrastructure.Plans;
 using DataPitcher.Infrastructure.Storage;
 using LinqToDB.Data;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.DependencyInjection;
-using System.IdentityModel.Tokens.Jwt;
+using Microsoft.IdentityModel.Tokens;
 using Xunit;
 
 namespace DataPitcher.Api.IntegrationTests;
@@ -58,7 +58,11 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     public async Task QueueConnectionCheck_ReturnsAcceptedReceipt()
     {
         var connectionId = Guid.NewGuid();
-        using var response = await _client.PostAsync($"/api/connections/{connectionId}/checks", null, CancellationToken.None);
+        using var response = await _client.PostAsync(
+            $"/api/connections/{connectionId}/checks",
+            null,
+            CancellationToken.None
+        );
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         var receipt = await response.Content.ReadFromJsonAsync<OperationReceiptResponse>();
         Assert.Equal(connectionId, receipt!.ConnectionId);
@@ -68,7 +72,11 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     public async Task QueueSchemaScan_ReturnsAcceptedReceipt()
     {
         var connectionId = Guid.NewGuid();
-        using var response = await _client.PostAsync($"/api/connections/{connectionId}/schema-scans", null, CancellationToken.None);
+        using var response = await _client.PostAsync(
+            $"/api/connections/{connectionId}/schema-scans",
+            null,
+            CancellationToken.None
+        );
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
     }
 
@@ -76,7 +84,18 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     public async Task GetOperationStatus_ReturnsSchemaScanState()
     {
         var operationId = Guid.NewGuid();
-        _factory.Application.OperationStatus = new(operationId, "schema-scan", "Completed", true, false, null, Guid.NewGuid(), Guid.NewGuid(), null, null);
+        _factory.Application.OperationStatus = new(
+            operationId,
+            "schema-scan",
+            "Completed",
+            true,
+            false,
+            null,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            null,
+            null
+        );
         try
         {
             using var response = await _client.GetAsync($"/api/operations/{operationId}", CancellationToken.None);
@@ -110,7 +129,10 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     {
         var connectionId = Guid.NewGuid();
         var snapshotId = Guid.NewGuid();
-        using var response = await _client.GetAsync($"/api/connections/{connectionId}/snapshots/{snapshotId}", CancellationToken.None);
+        using var response = await _client.GetAsync(
+            $"/api/connections/{connectionId}/snapshots/{snapshotId}",
+            CancellationToken.None
+        );
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var snapshot = await response.Content.ReadFromJsonAsync<SchemaSnapshotResponse>();
         Assert.Equal(connectionId, snapshot!.ConnectionId);
@@ -120,7 +142,10 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     [Fact]
     public async Task GetSnapshot_ReturnsTablesAndForeignKeys()
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/connections/{Guid.NewGuid()}/snapshots/{Guid.NewGuid()}");
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/connections/{Guid.NewGuid()}/snapshots/{Guid.NewGuid()}"
+        );
         request.Headers.Add("Authorization", "Bearer " + AccessToken(Permissions.SchemaRead));
         using var response = await _client.SendAsync(request, CancellationToken.None);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -144,10 +169,16 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
         var requestedConnectionId = Guid.NewGuid();
         var otherConnectionId = Guid.NewGuid();
         var snapshotId = Guid.NewGuid();
-        _factory.Application.SnapshotLookup = (connectionId, _) => connectionId == otherConnectionId ? new SchemaSnapshotResponse(otherConnectionId, snapshotId, "other-hash", DateTimeOffset.UnixEpoch) : null;
+        _factory.Application.SnapshotLookup = (connectionId, _) =>
+            connectionId == otherConnectionId
+                ? new SchemaSnapshotResponse(otherConnectionId, snapshotId, "other-hash", DateTimeOffset.UnixEpoch)
+                : null;
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/connections/{requestedConnectionId}/snapshots/{snapshotId}");
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/api/connections/{requestedConnectionId}/snapshots/{snapshotId}"
+            );
             request.Headers.Add("Authorization", "Bearer " + AccessToken(Permissions.SchemaRead));
             using var response = await _client.SendAsync(request, CancellationToken.None);
 
@@ -175,11 +206,35 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     public async Task GetSchemaDependencyGraph_UsesThePlanSourceSnapshotInsteadOfAnotherConnectionSnapshot()
     {
         var profiles = _factory.Services.GetRequiredService<ConnectionProfileStore>();
-        var source = await profiles.CreateAsync(new ConnectionProfileDraft("Source", "postgresql", new(SecretReferenceKind.EnvironmentVariable, "source"), "app", "__datapitcher"), Guid.NewGuid().ToString("N"), CancellationToken.None);
-        var unrelated = await profiles.CreateAsync(new ConnectionProfileDraft("Unrelated", "postgresql", new(SecretReferenceKind.EnvironmentVariable, "unrelated"), "app", "__datapitcher"), Guid.NewGuid().ToString("N"), CancellationToken.None);
+        var source = await profiles.CreateAsync(
+            new ConnectionProfileDraft(
+                "Source",
+                "postgresql",
+                new(SecretReferenceKind.EnvironmentVariable, "source"),
+                "app",
+                "__datapitcher"
+            ),
+            Guid.NewGuid().ToString("N"),
+            CancellationToken.None
+        );
+        var unrelated = await profiles.CreateAsync(
+            new ConnectionProfileDraft(
+                "Unrelated",
+                "postgresql",
+                new(SecretReferenceKind.EnvironmentVariable, "unrelated"),
+                "app",
+                "__datapitcher"
+            ),
+            Guid.NewGuid().ToString("N"),
+            CancellationToken.None
+        );
         var planId = Guid.NewGuid();
-        await _factory.Services.GetRequiredService<PlanStore>().SaveAsync(planId, "Plan", null, "create", CancellationToken.None);
-        await _factory.Services.GetRequiredService<PlanStore>().SealAsync(planId, Plan(source.ConnectionId), CancellationToken.None);
+        await _factory
+            .Services.GetRequiredService<PlanStore>()
+            .SaveAsync(planId, "Plan", null, "create", CancellationToken.None);
+        await _factory
+            .Services.GetRequiredService<PlanStore>()
+            .SealAsync(planId, Plan(source.ConnectionId), CancellationToken.None);
         SeedSnapshot(source.ConnectionId, "source-hash", SourceSchema(), "2026-09-01T00:00:00.0000000+00:00");
         SeedSnapshot(unrelated.ConnectionId, "unrelated-hash", UnrelatedSchema(), "2026-09-02T00:00:00.0000000+00:00");
 
@@ -198,10 +253,24 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     public async Task GetSchemaDependencyGraph_WhenPlanSnapshotIsMissing_ReturnsNotFound()
     {
         var profiles = _factory.Services.GetRequiredService<ConnectionProfileStore>();
-        var source = await profiles.CreateAsync(new ConnectionProfileDraft("Source", "postgresql", new(SecretReferenceKind.EnvironmentVariable, "source"), "app", "__datapitcher"), Guid.NewGuid().ToString("N"), CancellationToken.None);
+        var source = await profiles.CreateAsync(
+            new ConnectionProfileDraft(
+                "Source",
+                "postgresql",
+                new(SecretReferenceKind.EnvironmentVariable, "source"),
+                "app",
+                "__datapitcher"
+            ),
+            Guid.NewGuid().ToString("N"),
+            CancellationToken.None
+        );
         var planId = Guid.NewGuid();
-        await _factory.Services.GetRequiredService<PlanStore>().SaveAsync(planId, "Plan", null, "create", CancellationToken.None);
-        await _factory.Services.GetRequiredService<PlanStore>().SealAsync(planId, Plan(source.ConnectionId, "missing-hash"), CancellationToken.None);
+        await _factory
+            .Services.GetRequiredService<PlanStore>()
+            .SaveAsync(planId, "Plan", null, "create", CancellationToken.None);
+        await _factory
+            .Services.GetRequiredService<PlanStore>()
+            .SealAsync(planId, Plan(source.ConnectionId, "missing-hash"), CancellationToken.None);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/plans/{planId}/schema-dependency-graph");
         request.Headers.Add("Authorization", "Bearer " + AccessToken(Permissions.PlansRead));
@@ -213,53 +282,125 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     private void SeedSnapshot(Guid connectionId, string hash, string content, string createdUtc)
     {
         using var database = _factory.Services.GetRequiredService<ControlDatabase>().Open();
-        database.Execute("INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)", new DataParameter[]
-        {
-            new("snapshotId", Guid.NewGuid().ToString()),
-            new("connectionId", connectionId.ToString()),
-            new("snapshotHash", hash),
-            new("contentJson", content),
-            new("createdUtc", createdUtc),
-        });
+        database.Execute(
+            "INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)",
+            new DataParameter[]
+            {
+                new("snapshotId", Guid.NewGuid().ToString()),
+                new("connectionId", connectionId.ToString()),
+                new("snapshotHash", hash),
+                new("contentJson", content),
+                new("createdUtc", createdUtc),
+            }
+        );
     }
 
-    private static TransferPlanContent Plan(Guid sourceConnectionId, string sourceSchemaHash = "source-hash") => new(
-        new ConnectionFingerprint("postgresql", "source", "source", sourceConnectionId),
-        new ConnectionFingerprint("postgresql", "target", "target"),
-        new SchemaSnapshotReference(sourceSchemaHash), new SchemaSnapshotReference("target-hash"), [], [], [],
-        ConsistencyMode.FrozenKeys, TransferMode.DirectFast, TriggerStrategy.Fire, ConstraintStrategy.Enforce, [], [],
-        new BatchTarget(1, 1), VerificationStrategy.Standard, new ManifestCounts(0, 0, 0, 0));
+    private static TransferPlanContent Plan(Guid sourceConnectionId, string sourceSchemaHash = "source-hash") =>
+        new(
+            new ConnectionFingerprint("postgresql", "source", "source", sourceConnectionId),
+            new ConnectionFingerprint("postgresql", "target", "target"),
+            new SchemaSnapshotReference(sourceSchemaHash),
+            new SchemaSnapshotReference("target-hash"),
+            [],
+            [],
+            [],
+            ConsistencyMode.FrozenKeys,
+            TransferMode.DirectFast,
+            TriggerStrategy.Fire,
+            ConstraintStrategy.Enforce,
+            [],
+            [],
+            new BatchTarget(1, 1),
+            VerificationStrategy.Standard,
+            new ManifestCounts(0, 0, 0, 0)
+        );
 
-    private static string SourceSchema() => JsonSerializer.Serialize(new
-    {
-        Tables = new[]
-        {
-            new { Schema = "app", Name = "Customers", Columns = Array.Empty<object>(), PrimaryKey = (object?)null, UniqueConstraints = Array.Empty<object>() },
-            new { Schema = "app", Name = "Orders", Columns = Array.Empty<object>(), PrimaryKey = (object?)null, UniqueConstraints = Array.Empty<object>() },
-        },
-        ForeignKeys = new[] { new { Name = "FK_Orders_Customers", ChildTable = new { Schema = "app", Name = "Orders" }, ParentTable = new { Schema = "app", Name = "Customers" }, ChildColumns = new[] { "CustomerId" }, ParentColumns = new[] { "Id" }, IsEnforced = true, IsTrusted = true } },
-        DatabaseIdentity = "source",
-        ProviderVersion = "1",
-    });
+    private static string SourceSchema() =>
+        JsonSerializer.Serialize(
+            new
+            {
+                Tables = new[]
+                {
+                    new
+                    {
+                        Schema = "app",
+                        Name = "Customers",
+                        Columns = Array.Empty<object>(),
+                        PrimaryKey = (object?)null,
+                        UniqueConstraints = Array.Empty<object>(),
+                    },
+                    new
+                    {
+                        Schema = "app",
+                        Name = "Orders",
+                        Columns = Array.Empty<object>(),
+                        PrimaryKey = (object?)null,
+                        UniqueConstraints = Array.Empty<object>(),
+                    },
+                },
+                ForeignKeys = new[]
+                {
+                    new
+                    {
+                        Name = "FK_Orders_Customers",
+                        ChildTable = new { Schema = "app", Name = "Orders" },
+                        ParentTable = new { Schema = "app", Name = "Customers" },
+                        ChildColumns = new[] { "CustomerId" },
+                        ParentColumns = new[] { "Id" },
+                        IsEnforced = true,
+                        IsTrusted = true,
+                    },
+                },
+                DatabaseIdentity = "source",
+                ProviderVersion = "1",
+            }
+        );
 
-    private static string UnrelatedSchema() => JsonSerializer.Serialize(new
-    {
-        Tables = new[] { new { Schema = "app", Name = "Secrets", Columns = Array.Empty<object>(), PrimaryKey = (object?)null, UniqueConstraints = Array.Empty<object>() } },
-        ForeignKeys = Array.Empty<object>(),
-        DatabaseIdentity = "unrelated",
-        ProviderVersion = "1",
-    });
+    private static string UnrelatedSchema() =>
+        JsonSerializer.Serialize(
+            new
+            {
+                Tables = new[]
+                {
+                    new
+                    {
+                        Schema = "app",
+                        Name = "Secrets",
+                        Columns = Array.Empty<object>(),
+                        PrimaryKey = (object?)null,
+                        UniqueConstraints = Array.Empty<object>(),
+                    },
+                },
+                ForeignKeys = Array.Empty<object>(),
+                DatabaseIdentity = "unrelated",
+                ProviderVersion = "1",
+            }
+        );
 
-    private static string AccessToken(Permission permission) => new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
-        "https://localhost/datapitcher-dev", "datapitcher-api", [new Claim("sub", "test"), new Claim("permission", permission.Value)],
-        expires: DateTime.UtcNow.AddMinutes(5), signingCredentials: new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes("api-integration-test-signing-key-32")), SecurityAlgorithms.HmacSha256)));
+    private static string AccessToken(Permission permission) =>
+        new JwtSecurityTokenHandler().WriteToken(
+            new JwtSecurityToken(
+                "https://localhost/datapitcher-dev",
+                "datapitcher-api",
+                [new Claim("sub", "test"), new Claim("permission", permission.Value)],
+                expires: DateTime.UtcNow.AddMinutes(5),
+                signingCredentials: new SigningCredentials(
+                    new SymmetricSecurityKey(Encoding.UTF8.GetBytes("api-integration-test-signing-key-32")),
+                    SecurityAlgorithms.HmacSha256
+                )
+            )
+        );
 
     [Fact]
     public async Task SaveSelection_WhenIfMatchIsPresent_UsesSelectionIdentifier()
     {
         var selectionId = Guid.NewGuid();
         var request = new SaveSelectionRequest("My selection", "{}", "etag-0");
-        using var response = await _client.PutAsJsonAsync($"/api/selections/{selectionId}", request, CancellationToken.None);
+        using var response = await _client.PutAsJsonAsync(
+            $"/api/selections/{selectionId}",
+            request,
+            CancellationToken.None
+        );
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var selection = await response.Content.ReadFromJsonAsync<SelectionResponse>();
         Assert.Equal(selectionId, selection!.SelectionId);
@@ -269,7 +410,11 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     public async Task SaveSelection_WhenIfMatchIsMissing_ReturnsValidationProblemDetails()
     {
         var request = new SaveSelectionRequest("My selection", "{}", "");
-        using var response = await _client.PutAsJsonAsync($"/api/selections/{Guid.NewGuid()}", request, CancellationToken.None);
+        using var response = await _client.PutAsJsonAsync(
+            $"/api/selections/{Guid.NewGuid()}",
+            request,
+            CancellationToken.None
+        );
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
     }
@@ -278,7 +423,11 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     public async Task QueueSelectionEvaluation_UsesSelectionIdentifier()
     {
         var selectionId = Guid.NewGuid();
-        using var response = await _client.PostAsync($"/api/selections/{selectionId}/evaluations", null, CancellationToken.None);
+        using var response = await _client.PostAsync(
+            $"/api/selections/{selectionId}/evaluations",
+            null,
+            CancellationToken.None
+        );
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         Assert.Single(_factory.Application.Invocations, name => name == "QueueSelectionEvaluationAsync");
     }
@@ -298,7 +447,11 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     public async Task SavePlan_WhenIfMatchIsMissing_ReturnsValidationProblemDetails()
     {
         var request = new SavePlanRequest("My plan", null, "   ");
-        using var response = await _client.PutAsJsonAsync($"/api/plans/{Guid.NewGuid()}", request, CancellationToken.None);
+        using var response = await _client.PutAsJsonAsync(
+            $"/api/plans/{Guid.NewGuid()}",
+            request,
+            CancellationToken.None
+        );
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
     }
@@ -310,7 +463,14 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
         var selectionId = Guid.NewGuid();
         var sourceConnectionId = Guid.NewGuid();
         var targetConnectionId = Guid.NewGuid();
-        var request = new SavePlanRequest("My plan", null, "etag-0", selectionId, sourceConnectionId, targetConnectionId);
+        var request = new SavePlanRequest(
+            "My plan",
+            null,
+            "etag-0",
+            selectionId,
+            sourceConnectionId,
+            targetConnectionId
+        );
 
         using var response = await _client.PutAsJsonAsync($"/api/plans/{planId}", request, CancellationToken.None);
 
@@ -325,8 +485,18 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     {
         var sourceConnectionId = Guid.NewGuid();
         var invocations = _factory.Application.Invocations.Count;
-        var request = new SavePlanRequest("My plan", null, "etag-0", Guid.NewGuid(), sourceConnectionId, Guid.NewGuid());
-        using var message = new HttpRequestMessage(HttpMethod.Put, $"/api/plans/{Guid.NewGuid()}") { Content = JsonContent.Create(request) };
+        var request = new SavePlanRequest(
+            "My plan",
+            null,
+            "etag-0",
+            Guid.NewGuid(),
+            sourceConnectionId,
+            Guid.NewGuid()
+        );
+        using var message = new HttpRequestMessage(HttpMethod.Put, $"/api/plans/{Guid.NewGuid()}")
+        {
+            Content = JsonContent.Create(request),
+        };
         message.Headers.Add("X-Test-Denied-Resource", sourceConnectionId.ToString());
 
         using var response = await _client.SendAsync(message, CancellationToken.None);
@@ -340,8 +510,18 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     {
         var targetConnectionId = Guid.NewGuid();
         var invocations = _factory.Application.Invocations.Count;
-        var request = new SavePlanRequest("My plan", null, "etag-0", Guid.NewGuid(), Guid.NewGuid(), targetConnectionId);
-        using var message = new HttpRequestMessage(HttpMethod.Put, $"/api/plans/{Guid.NewGuid()}") { Content = JsonContent.Create(request) };
+        var request = new SavePlanRequest(
+            "My plan",
+            null,
+            "etag-0",
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            targetConnectionId
+        );
+        using var message = new HttpRequestMessage(HttpMethod.Put, $"/api/plans/{Guid.NewGuid()}")
+        {
+            Content = JsonContent.Create(request),
+        };
         message.Headers.Add("X-Test-Denied-Resource", targetConnectionId.ToString());
 
         using var response = await _client.SendAsync(message, CancellationToken.None);
@@ -392,7 +572,10 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
             using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
 
             Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-            Assert.Equal("Plan must be sealed before starting a job.", problem.RootElement.GetProperty("title").GetString());
+            Assert.Equal(
+                "Plan must be sealed before starting a job.",
+                problem.RootElement.GetProperty("title").GetString()
+            );
         }
         finally
         {
@@ -453,7 +636,11 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     public async Task QueueJobCommand_ReturnsAcceptedReceipt(JobCommand command)
     {
         var jobId = Guid.NewGuid();
-        using var response = await _client.PostAsJsonAsync($"/api/jobs/{jobId}/commands", new JobCommandRequest(command), CancellationToken.None);
+        using var response = await _client.PostAsJsonAsync(
+            $"/api/jobs/{jobId}/commands",
+            new JobCommandRequest(command),
+            CancellationToken.None
+        );
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         var receipt = await response.Content.ReadFromJsonAsync<OperationReceiptResponse>();
         Assert.Equal(jobId, receipt!.JobId);

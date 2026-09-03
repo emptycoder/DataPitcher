@@ -4,12 +4,18 @@ using Microsoft.Extensions.Hosting;
 
 namespace DataPitcher.Infrastructure.Schema;
 
-public sealed class SchemaScanWorker(SchemaSnapshotStore snapshots, ConnectionProfileStore profiles, ISecretReferenceResolver resolver, IConnectionProviderRegistry providers) : BackgroundService
+public sealed class SchemaScanWorker(
+    SchemaSnapshotStore snapshots,
+    ConnectionProfileStore profiles,
+    ISecretReferenceResolver resolver,
+    IConnectionProviderRegistry providers
+) : BackgroundService
 {
     public async Task ProcessNextAsync(CancellationToken cancellationToken)
     {
         var scan = await snapshots.ClaimNextAsync(cancellationToken);
-        if (scan is null) return;
+        if (scan is null)
+            return;
         ConnectionProfile profile;
         try
         {
@@ -42,7 +48,11 @@ public sealed class SchemaScanWorker(SchemaSnapshotStore snapshots, ConnectionPr
         }
         try
         {
-            await snapshots.CompleteAsync(scan, await provider.SchemaIntrospector.ReadAsync(profile, resolved, cancellationToken), cancellationToken);
+            await snapshots.CompleteAsync(
+                scan,
+                await provider.SchemaIntrospector.ReadAsync(profile, resolved, cancellationToken),
+                cancellationToken
+            );
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {

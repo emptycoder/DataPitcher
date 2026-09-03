@@ -7,7 +7,8 @@ public sealed record SqlServerColumn(string Name, string StoreType, Type ClrType
 
 public sealed record SqlServerTable(TableDefinition Definition, IReadOnlyList<SqlServerColumn> Columns)
 {
-    public SqlServerColumn Column(string name) => Columns.Single(c => string.Equals(c.Name, name, StringComparison.Ordinal));
+    public SqlServerColumn Column(string name) =>
+        Columns.Single(c => string.Equals(c.Name, name, StringComparison.Ordinal));
 }
 
 public sealed class SqlServerSchemaSnapshot
@@ -21,43 +22,46 @@ public sealed class SqlServerSchemaSnapshot
     public IReadOnlyList<SqlServerTable> Tables { get; }
     public IReadOnlyList<ForeignKeyDefinition> ForeignKeys { get; }
 
-    public SqlServerTable Table(string name) => Tables.Single(t => string.Equals(t.Definition.Name, name, StringComparison.Ordinal));
-    public ForeignKeyDefinition ForeignKey(string name) => ForeignKeys.Single(f => string.Equals(f.Name, name, StringComparison.Ordinal));
+    public SqlServerTable Table(string name) =>
+        Tables.Single(t => string.Equals(t.Definition.Name, name, StringComparison.Ordinal));
+
+    public ForeignKeyDefinition ForeignKey(string name) =>
+        ForeignKeys.Single(f => string.Equals(f.Name, name, StringComparison.Ordinal));
 }
 
 public sealed class SqlServerCatalogReader(string connectionString)
 {
     private const string ColumnsSql =
-        "/* DataPitcher.Catalog.Columns */ SELECT t.name, c.name, ty.name, c.max_length, c.is_nullable, CAST(CASE WHEN cc.is_computed = 1 OR c.generated_always_type <> 0 THEN 1 ELSE 0 END AS bit) " +
-        "FROM sys.tables t " +
-        "JOIN sys.schemas s ON s.schema_id = t.schema_id " +
-        "JOIN sys.columns c ON c.object_id = t.object_id " +
-        "JOIN sys.types ty ON ty.user_type_id = c.user_type_id " +
-        "LEFT JOIN sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id " +
-        "WHERE s.name = @schema " +
-        "ORDER BY t.name, c.column_id";
+        "/* DataPitcher.Catalog.Columns */ SELECT t.name, c.name, ty.name, c.max_length, c.is_nullable, CAST(CASE WHEN cc.is_computed = 1 OR c.generated_always_type <> 0 THEN 1 ELSE 0 END AS bit) "
+        + "FROM sys.tables t "
+        + "JOIN sys.schemas s ON s.schema_id = t.schema_id "
+        + "JOIN sys.columns c ON c.object_id = t.object_id "
+        + "JOIN sys.types ty ON ty.user_type_id = c.user_type_id "
+        + "LEFT JOIN sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id "
+        + "WHERE s.name = @schema "
+        + "ORDER BY t.name, c.column_id";
 
     private const string KeysSql =
-        "/* DataPitcher.Catalog.Keys */ SELECT t.name, k.name, k.type, c.name, i.key_ordinal " +
-        "FROM sys.key_constraints k " +
-        "JOIN sys.tables t ON t.object_id = k.parent_object_id " +
-        "JOIN sys.schemas s ON s.schema_id = t.schema_id " +
-        "JOIN sys.index_columns i ON i.object_id = k.parent_object_id AND i.index_id = k.unique_index_id " +
-        "JOIN sys.columns c ON c.object_id = i.object_id AND c.column_id = i.column_id " +
-        "WHERE s.name = @schema AND i.key_ordinal > 0 " +
-        "ORDER BY t.name, k.name, i.key_ordinal";
+        "/* DataPitcher.Catalog.Keys */ SELECT t.name, k.name, k.type, c.name, i.key_ordinal "
+        + "FROM sys.key_constraints k "
+        + "JOIN sys.tables t ON t.object_id = k.parent_object_id "
+        + "JOIN sys.schemas s ON s.schema_id = t.schema_id "
+        + "JOIN sys.index_columns i ON i.object_id = k.parent_object_id AND i.index_id = k.unique_index_id "
+        + "JOIN sys.columns c ON c.object_id = i.object_id AND c.column_id = i.column_id "
+        + "WHERE s.name = @schema AND i.key_ordinal > 0 "
+        + "ORDER BY t.name, k.name, i.key_ordinal";
 
     private const string ForeignKeysSql =
-        "/* DataPitcher.Catalog.ForeignKeys */ SELECT f.name, ct.name, pt.name, cc.name, pc.name, x.constraint_column_id, f.is_disabled, f.is_not_trusted " +
-        "FROM sys.foreign_keys f " +
-        "JOIN sys.tables ct ON ct.object_id = f.parent_object_id " +
-        "JOIN sys.schemas s ON s.schema_id = ct.schema_id " +
-        "JOIN sys.tables pt ON pt.object_id = f.referenced_object_id " +
-        "JOIN sys.foreign_key_columns x ON x.constraint_object_id = f.object_id " +
-        "JOIN sys.columns cc ON cc.object_id = x.parent_object_id AND cc.column_id = x.parent_column_id " +
-        "JOIN sys.columns pc ON pc.object_id = x.referenced_object_id AND pc.column_id = x.referenced_column_id " +
-        "WHERE s.name = @schema " +
-        "ORDER BY f.object_id, x.constraint_column_id";
+        "/* DataPitcher.Catalog.ForeignKeys */ SELECT f.name, ct.name, pt.name, cc.name, pc.name, x.constraint_column_id, f.is_disabled, f.is_not_trusted "
+        + "FROM sys.foreign_keys f "
+        + "JOIN sys.tables ct ON ct.object_id = f.parent_object_id "
+        + "JOIN sys.schemas s ON s.schema_id = ct.schema_id "
+        + "JOIN sys.tables pt ON pt.object_id = f.referenced_object_id "
+        + "JOIN sys.foreign_key_columns x ON x.constraint_object_id = f.object_id "
+        + "JOIN sys.columns cc ON cc.object_id = x.parent_object_id AND cc.column_id = x.parent_column_id "
+        + "JOIN sys.columns pc ON pc.object_id = x.referenced_object_id AND pc.column_id = x.referenced_column_id "
+        + "WHERE s.name = @schema "
+        + "ORDER BY f.object_id, x.constraint_column_id";
 
     public async Task<SqlServerSchemaSnapshot> ReadAsync(string schema, CancellationToken ct)
     {
@@ -65,9 +69,18 @@ public sealed class SqlServerCatalogReader(string connectionString)
         var keys = await ReadKeysAsync(schema, columns.Keys, ct);
         var definitions = columns.ToDictionary(
             x => x.Key,
-            x => new TableDefinition(schema, x.Key, x.Value.Select(c => new ColumnDefinition(c.Name, c.ClrType, c.IsNullable, c.IsGenerated)).ToArray(), keys[x.Key].Primary, keys[x.Key].Unique),
-            StringComparer.Ordinal);
-        var tables = definitions.Values.OrderBy(d => d.Name, StringComparer.Ordinal).Select(d => new SqlServerTable(d, columns[d.Name]));
+            x => new TableDefinition(
+                schema,
+                x.Key,
+                x.Value.Select(c => new ColumnDefinition(c.Name, c.ClrType, c.IsNullable, c.IsGenerated)).ToArray(),
+                keys[x.Key].Primary,
+                keys[x.Key].Unique
+            ),
+            StringComparer.Ordinal
+        );
+        var tables = definitions
+            .Values.OrderBy(d => d.Name, StringComparer.Ordinal)
+            .Select(d => new SqlServerTable(d, columns[d.Name]));
         var foreignKeys = await ReadForeignKeysAsync(schema, definitions, ct);
         return new SqlServerSchemaSnapshot(tables, foreignKeys);
     }
@@ -84,24 +97,41 @@ public sealed class SqlServerCatalogReader(string connectionString)
             if (!columns.TryGetValue(table, out var list))
                 columns[table] = list = [];
             var typeName = rows.GetString(2);
-            list.Add(new SqlServerColumn(rows.GetString(1), StoreType(typeName, rows.GetInt16(3)), Map(typeName), rows.GetBoolean(4), rows.GetBoolean(5)));
+            list.Add(
+                new SqlServerColumn(
+                    rows.GetString(1),
+                    StoreType(typeName, rows.GetInt16(3)),
+                    Map(typeName),
+                    rows.GetBoolean(4),
+                    rows.GetBoolean(5)
+                )
+            );
         }
 
         return columns;
     }
 
     private async Task<Dictionary<string, (UniqueConstraint? Primary, List<UniqueConstraint> Unique)>> ReadKeysAsync(
-        string schema, IEnumerable<string> tables, CancellationToken ct)
+        string schema,
+        IEnumerable<string> tables,
+        CancellationToken ct
+    )
     {
-        var keys = tables.ToDictionary(name => name, _ => ((UniqueConstraint?)null, new List<UniqueConstraint>()), StringComparer.Ordinal);
+        var keys = tables.ToDictionary(
+            name => name,
+            _ => ((UniqueConstraint?)null, new List<UniqueConstraint>()),
+            StringComparer.Ordinal
+        );
         await using var connection = await OpenAsync(ct);
         await using var command = Command(connection, KeysSql, schema);
         await using var rows = await command.ExecuteReaderAsync(ct);
         var groups = new List<(string Table, string Name, string Type, List<string> Columns)>();
         while (await rows.ReadAsync(ct))
         {
-            var group = groups.LastOrDefault(x => string.Equals(x.Table, rows.GetString(0), StringComparison.Ordinal) &&
-                string.Equals(x.Name, rows.GetString(1), StringComparison.Ordinal));
+            var group = groups.LastOrDefault(x =>
+                string.Equals(x.Table, rows.GetString(0), StringComparison.Ordinal)
+                && string.Equals(x.Name, rows.GetString(1), StringComparison.Ordinal)
+            );
             if (group.Columns is null)
             {
                 group = (rows.GetString(0), rows.GetString(1), rows.GetString(2).TrimEnd(), []);
@@ -115,16 +145,30 @@ public sealed class SqlServerCatalogReader(string connectionString)
         {
             var constraint = new UniqueConstraint(group.Name, group.Columns);
             var prior = keys[group.Table];
-            keys[group.Table] = string.Equals(group.Type, "PK", StringComparison.Ordinal) ? (constraint, prior.Item2) : (prior.Item1, [.. prior.Item2, constraint]);
+            keys[group.Table] = string.Equals(group.Type, "PK", StringComparison.Ordinal)
+                ? (constraint, prior.Item2)
+                : (prior.Item1, [.. prior.Item2, constraint]);
         }
 
         return keys;
     }
 
     private async Task<List<ForeignKeyDefinition>> ReadForeignKeysAsync(
-        string schema, IReadOnlyDictionary<string, TableDefinition> tables, CancellationToken ct)
+        string schema,
+        IReadOnlyDictionary<string, TableDefinition> tables,
+        CancellationToken ct
+    )
     {
-        var groups = new List<(string Name, string Child, string Parent, List<string> ChildColumns, List<string> ParentColumns, bool Disabled, bool NotTrusted)>();
+        var groups =
+            new List<(
+                string Name,
+                string Child,
+                string Parent,
+                List<string> ChildColumns,
+                List<string> ParentColumns,
+                bool Disabled,
+                bool NotTrusted
+            )>();
         await using var connection = await OpenAsync(ct);
         await using var command = Command(connection, ForeignKeysSql, schema);
         await using var rows = await command.ExecuteReaderAsync(ct);
@@ -133,7 +177,15 @@ public sealed class SqlServerCatalogReader(string connectionString)
             var group = groups.LastOrDefault(x => string.Equals(x.Name, rows.GetString(0), StringComparison.Ordinal));
             if (group.ChildColumns is null)
             {
-                group = (rows.GetString(0), rows.GetString(1), rows.GetString(2), [], [], rows.GetBoolean(6), rows.GetBoolean(7));
+                group = (
+                    rows.GetString(0),
+                    rows.GetString(1),
+                    rows.GetString(2),
+                    [],
+                    [],
+                    rows.GetBoolean(6),
+                    rows.GetBoolean(7)
+                );
                 groups.Add(group);
             }
 
@@ -141,7 +193,17 @@ public sealed class SqlServerCatalogReader(string connectionString)
             group.ParentColumns.Add(rows.GetString(4));
         }
 
-        return groups.Select(g => new ForeignKeyDefinition(g.Name, tables[g.Child], tables[g.Parent], g.ChildColumns, g.ParentColumns, !g.Disabled, !g.NotTrusted)).ToList();
+        return groups
+            .Select(g => new ForeignKeyDefinition(
+                g.Name,
+                tables[g.Child],
+                tables[g.Parent],
+                g.ChildColumns,
+                g.ParentColumns,
+                !g.Disabled,
+                !g.NotTrusted
+            ))
+            .ToList();
     }
 
     private async Task<SqlConnection> OpenAsync(CancellationToken ct)
@@ -158,13 +220,15 @@ public sealed class SqlServerCatalogReader(string connectionString)
         return command;
     }
 
-    private static Type Map(string type) => type switch
-    {
-        "int" => typeof(int),
-        "nvarchar" => typeof(string),
-        "varbinary" => typeof(byte[]),
-        _ => throw new NotSupportedException($"SQL Server type '{type}' is not mapped.")
-    };
+    private static Type Map(string type) =>
+        type switch
+        {
+            "int" => typeof(int),
+            "nvarchar" => typeof(string),
+            "varbinary" => typeof(byte[]),
+            _ => throw new NotSupportedException($"SQL Server type '{type}' is not mapped."),
+        };
 
-    private static string StoreType(string type, short length) => string.Equals(type, "nvarchar", StringComparison.Ordinal) ? $"nvarchar({length / 2})" : type;
+    private static string StoreType(string type, short length) =>
+        string.Equals(type, "nvarchar", StringComparison.Ordinal) ? $"nvarchar({length / 2})" : type;
 }

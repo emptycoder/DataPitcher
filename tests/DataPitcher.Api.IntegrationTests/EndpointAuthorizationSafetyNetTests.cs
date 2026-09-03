@@ -12,7 +12,8 @@ using Xunit;
 
 namespace DataPitcher.Api.IntegrationTests;
 
-public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory factory) : IClassFixture<ApiWebApplicationFactory>
+public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory factory)
+    : IClassFixture<ApiWebApplicationFactory>
 {
     private readonly ApiWebApplicationFactory _factory = factory;
     private readonly HttpClient _client = factory.CreateClient();
@@ -27,8 +28,9 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
     public void RoutedEndpoints_AreExplicitlyProtectedOrJustifiedAnonymous()
     {
         using var scope = _factory.Services.CreateScope();
-        var endpoints = scope.ServiceProvider.GetRequiredService<EndpointDataSource>().Endpoints
-            .Where(endpoint => endpoint.Metadata.GetMetadata<HttpMethodMetadata>() is not null);
+        var endpoints = scope
+            .ServiceProvider.GetRequiredService<EndpointDataSource>()
+            .Endpoints.Where(endpoint => endpoint.Metadata.GetMetadata<HttpMethodMetadata>() is not null);
 
         foreach (var endpoint in endpoints)
         {
@@ -36,7 +38,9 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
             var anonymous = endpoint.Metadata.GetMetadata<IAllowAnonymous>() is not null;
             var justification = endpoint.Metadata.GetMetadata<AnonymousAccessJustificationMetadata>();
             var valid = authorized ^ anonymous && (!anonymous || !string.IsNullOrWhiteSpace(justification?.Reason));
-            var route = endpoint is RouteEndpoint routeEndpoint ? routeEndpoint.RoutePattern.RawText : "(no route pattern)";
+            var route = endpoint is RouteEndpoint routeEndpoint
+                ? routeEndpoint.RoutePattern.RawText
+                : "(no route pattern)";
             Assert.True(valid, $"{endpoint.DisplayName} ({route}) must have exactly one access mode.");
         }
     }
@@ -45,8 +49,9 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
     public void RoutedEndpoints_AnonymousAccessIsLimitedToLivenessAndProviderDiscovery()
     {
         using var scope = _factory.Services.CreateScope();
-        var endpoints = scope.ServiceProvider.GetRequiredService<EndpointDataSource>().Endpoints
-            .Where(endpoint => endpoint.Metadata.GetMetadata<HttpMethodMetadata>() is not null)
+        var endpoints = scope
+            .ServiceProvider.GetRequiredService<EndpointDataSource>()
+            .Endpoints.Where(endpoint => endpoint.Metadata.GetMetadata<HttpMethodMetadata>() is not null)
             .Where(endpoint => endpoint.Metadata.GetMetadata<IAllowAnonymous>() is not null)
             .Select(endpoint => endpoint is RouteEndpoint routeEndpoint ? routeEndpoint.RoutePattern.RawText : null)
             .ToArray();
@@ -98,7 +103,15 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
     [Fact]
     public async Task JobList_ExcludesJobsWithoutAResourceGrant()
     {
-        var job = new JobSummaryResponse(Guid.NewGuid(), Guid.NewGuid(), "Running", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, 0, 0);
+        var job = new JobSummaryResponse(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "Running",
+            DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch,
+            0,
+            0
+        );
         _factory.Application.JobSummaries = [job];
         _factory.Grants.AllowJob(job.JobId, false);
         try
@@ -119,7 +132,18 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
     public async Task OperationStatus_UsesTheOperationResourceGrant()
     {
         var connectionId = Guid.NewGuid();
-        _factory.Application.OperationStatus = new(Guid.NewGuid(), "schema-scan", "Queued", false, false, null, connectionId, null, null, null);
+        _factory.Application.OperationStatus = new(
+            Guid.NewGuid(),
+            "schema-scan",
+            "Queued",
+            false,
+            false,
+            null,
+            connectionId,
+            null,
+            null,
+            null
+        );
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/operations/{Guid.NewGuid()}");
@@ -138,7 +162,18 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
     public async Task OperationStatus_UsesTheJobResourceGrant()
     {
         var jobId = Guid.NewGuid();
-        _factory.Application.OperationStatus = new(Guid.NewGuid(), "job", "Queued", false, false, null, null, null, Guid.NewGuid(), jobId);
+        _factory.Application.OperationStatus = new(
+            Guid.NewGuid(),
+            "job",
+            "Queued",
+            false,
+            false,
+            null,
+            null,
+            null,
+            Guid.NewGuid(),
+            jobId
+        );
         _factory.Grants.AllowJob(jobId, false);
         try
         {
@@ -156,7 +191,10 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
     public async Task ResourceAuthorization_GrantsOnlyTheSpecificConnectionIdentifier()
     {
         var deniedConnectionId = Guid.NewGuid();
-        using var deniedRequest = new HttpRequestMessage(HttpMethod.Post, $"/api/connections/{deniedConnectionId}/checks");
+        using var deniedRequest = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/connections/{deniedConnectionId}/checks"
+        );
         deniedRequest.Headers.Add("X-Test-Denied-Resource", deniedConnectionId.ToString());
         using var deniedResponse = await _client.SendAsync(deniedRequest, CancellationToken.None);
         Assert.Equal(HttpStatusCode.Forbidden, deniedResponse.StatusCode);
@@ -186,7 +224,11 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
     public async Task ResourceAuthorization_WhenPermissionIsMissing_DoesNotReadResourceGrant()
     {
         var calls = _factory.Grants.JobAuthorizationCalls;
-        var context = new AuthorizationHandlerContext([new ResourcePermissionRequirement(Permissions.TransfersRead)], new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity()), new JobResource(Guid.NewGuid()));
+        var context = new AuthorizationHandlerContext(
+            [new ResourcePermissionRequirement(Permissions.TransfersRead)],
+            new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity()),
+            new JobResource(Guid.NewGuid())
+        );
 
         await new ResourceAuthorizationHandler(_factory.Grants).HandleAsync(context);
 
@@ -206,14 +248,24 @@ public sealed class EndpointAuthorizationSafetyNetTests(ApiWebApplicationFactory
         var invocationCount = _factory.Application.Invocations.Count;
         using var request = operation switch
         {
-            "snapshot" => new HttpRequestMessage(HttpMethod.Get, $"/api/connections/{resourceId}/snapshots/{Guid.NewGuid()}"),
+            "snapshot" => new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/api/connections/{resourceId}/snapshots/{Guid.NewGuid()}"
+            ),
             "schema-scan" => new HttpRequestMessage(HttpMethod.Post, $"/api/connections/{resourceId}/schema-scans"),
-            "plan-save" => new HttpRequestMessage(HttpMethod.Put, $"/api/plans/{resourceId}") { Content = JsonContent.Create(new SavePlanRequest("Plan", null, "etag-1")) },
+            "plan-save" => new HttpRequestMessage(HttpMethod.Put, $"/api/plans/{resourceId}")
+            {
+                Content = JsonContent.Create(new SavePlanRequest("Plan", null, "etag-1")),
+            },
             "job-start" => new HttpRequestMessage(HttpMethod.Post, $"/api/plans/{resourceId}/jobs"),
-            "job-command" => new HttpRequestMessage(HttpMethod.Post, $"/api/jobs/{resourceId}/commands") { Content = JsonContent.Create(new JobCommandRequest(JobCommand.Pause)) },
+            "job-command" => new HttpRequestMessage(HttpMethod.Post, $"/api/jobs/{resourceId}/commands")
+            {
+                Content = JsonContent.Create(new JobCommandRequest(JobCommand.Pause)),
+            },
             _ => throw new ArgumentOutOfRangeException(nameof(operation)),
         };
-        if (operation == "job-start") request.Headers.Add("Idempotency-Key", "request-authorization");
+        if (operation == "job-start")
+            request.Headers.Add("Idempotency-Key", "request-authorization");
         request.Headers.Add("X-Test-Denied-Resource", resourceId.ToString());
 
         using var response = await _client.SendAsync(request, CancellationToken.None);

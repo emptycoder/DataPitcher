@@ -12,17 +12,37 @@ namespace DataPitcher.Auth.Hosting;
 
 public static class DataPitcherAuthenticationHostingExtensions
 {
-    public static IServiceCollection AddDataPitcherAuthenticationProviders(this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
+    public static IServiceCollection AddDataPitcherAuthenticationProviders(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment environment
+    )
     {
         var providers = new List<IAuthProviderRegistration>();
-        if (configuration.GetValue<bool>("Authentication:Entra:Enabled")) providers.Add(new EntraProviderRegistration(configuration.GetSection("Authentication:Entra")));
-        if (configuration.GetValue<bool>("Authentication:Generic:Enabled")) providers.Add(new GenericOpenIdConnectProviderRegistration(configuration.GetSection("Authentication:Generic")));
+        if (configuration.GetValue<bool>("Authentication:Entra:Enabled"))
+            providers.Add(new EntraProviderRegistration(configuration.GetSection("Authentication:Entra")));
+        if (configuration.GetValue<bool>("Authentication:Generic:Enabled"))
+            providers.Add(
+                new GenericOpenIdConnectProviderRegistration(configuration.GetSection("Authentication:Generic"))
+            );
 #if DEBUG
-        if (configuration.GetValue<bool>("Authentication:Development:Enabled")) providers.Add(new DevelopmentProviderRegistration(environment, configuration.GetSection("Authentication:Development").Get<DevelopmentProviderOptions>()!));
+        if (configuration.GetValue<bool>("Authentication:Development:Enabled"))
+            providers.Add(
+                new DevelopmentProviderRegistration(
+                    environment,
+                    configuration.GetSection("Authentication:Development").Get<DevelopmentProviderOptions>()!
+                )
+            );
 #else
-        if (configuration.GetValue<bool>("Authentication:Development:Enabled")) throw new InvalidOperationException("Development authentication cannot be enabled in a Release artifact.");
+        if (configuration.GetValue<bool>("Authentication:Development:Enabled"))
+            throw new InvalidOperationException("Development authentication cannot be enabled in a Release artifact.");
 #endif
-        if (providers.Count > 0) return services.AddDataPitcherAuthentication("DataPitcher.Router", configuration["Authentication:FallbackScheme"] ?? providers[0].SchemeName, providers.ToArray());
+        if (providers.Count > 0)
+            return services.AddDataPitcherAuthentication(
+                "DataPitcher.Router",
+                configuration["Authentication:FallbackScheme"] ?? providers[0].SchemeName,
+                providers.ToArray()
+            );
         throw new InvalidOperationException("At least one authentication provider must be enabled.");
     }
 }

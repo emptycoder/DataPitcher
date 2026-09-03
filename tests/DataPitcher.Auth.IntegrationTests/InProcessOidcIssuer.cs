@@ -30,8 +30,19 @@ internal sealed class InProcessOidcIssuer(WebApplication app) : IAsyncDisposable
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         var application = builder.Build();
         var issuer = new InProcessOidcIssuer(application);
-        application.MapGet("/.well-known/openid-configuration", () => Results.Json(issuer.Discovery(issuer.BaseAddress)));
-        application.MapGet("/{tenant}/v2.0/.well-known/openid-configuration", (string tenant) => Results.Json(issuer.Discovery(tenant == "organizations" ? issuer.BaseAddress + "/{tenantid}/v2.0" : issuer.EntraIssuer(tenant))));
+        application.MapGet(
+            "/.well-known/openid-configuration",
+            () => Results.Json(issuer.Discovery(issuer.BaseAddress))
+        );
+        application.MapGet(
+            "/{tenant}/v2.0/.well-known/openid-configuration",
+            (string tenant) =>
+                Results.Json(
+                    issuer.Discovery(
+                        tenant == "organizations" ? issuer.BaseAddress + "/{tenantid}/v2.0" : issuer.EntraIssuer(tenant)
+                    )
+                )
+        );
         application.MapGet("/keys", () => Results.Json(issuer.Jwks()));
         await application.StartAsync();
         issuer.BaseAddress = application.Urls.Single();
@@ -42,13 +53,43 @@ internal sealed class InProcessOidcIssuer(WebApplication app) : IAsyncDisposable
 
     public string EntraIssuer(string tenant) => BaseAddress + "/" + tenant + "/v2.0";
 
-    public string EntraToken(params Claim[] claims) => Issue(EntraIssuer(AllowlistedTenant), "api", Key, KeyId, claims: [new Claim("tid", AllowlistedTenant), new Claim("oid", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"), new Claim("scp", "api.read"), .. claims]);
+    public string EntraToken(params Claim[] claims) =>
+        Issue(
+            EntraIssuer(AllowlistedTenant),
+            "api",
+            Key,
+            KeyId,
+            claims:
+            [
+                new Claim("tid", AllowlistedTenant),
+                new Claim("oid", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+                new Claim("scp", "api.read"),
+                .. claims,
+            ]
+        );
 
-    public string Issue(string issuer, string audience, RSA signingKey, string keyId, DateTime? expires = null, DateTime? notBefore = null, params Claim[] claims)
+    public string Issue(
+        string issuer,
+        string audience,
+        RSA signingKey,
+        string keyId,
+        DateTime? expires = null,
+        DateTime? notBefore = null,
+        params Claim[] claims
+    )
     {
         var startsAt = notBefore ?? (expires is null ? DateTime.UtcNow.AddMinutes(-1) : expires.Value.AddMinutes(-1));
         var expiresAt = expires ?? DateTime.UtcNow.AddMinutes(5);
-        return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(issuer, audience, [new Claim("sub", "subject"), .. claims], startsAt, expiresAt, new SigningCredentials(new RsaSecurityKey(signingKey) { KeyId = keyId }, SecurityAlgorithms.RsaSha256)));
+        return new JwtSecurityTokenHandler().WriteToken(
+            new JwtSecurityToken(
+                issuer,
+                audience,
+                [new Claim("sub", "subject"), .. claims],
+                startsAt,
+                expiresAt,
+                new SigningCredentials(new RsaSecurityKey(signingKey) { KeyId = keyId }, SecurityAlgorithms.RsaSha256)
+            )
+        );
     }
 
     public ValueTask DisposeAsync()
@@ -57,12 +98,32 @@ internal sealed class InProcessOidcIssuer(WebApplication app) : IAsyncDisposable
         return app.DisposeAsync();
     }
 
-    private object Discovery(string issuer) => new { issuer, jwks_uri = BaseAddress + "/keys", authorization_endpoint = BaseAddress + "/authorize", token_endpoint = BaseAddress + "/token" };
+    private object Discovery(string issuer) =>
+        new
+        {
+            issuer,
+            jwks_uri = BaseAddress + "/keys",
+            authorization_endpoint = BaseAddress + "/authorize",
+            token_endpoint = BaseAddress + "/token",
+        };
 
     private object Jwks()
     {
         var parameters = Key.ExportParameters(false);
-        return new { keys = new[] { new { kty = "RSA", use = "sig", kid = KeyId, n = Base64UrlEncoder.Encode(parameters.Modulus!), e = Base64UrlEncoder.Encode(parameters.Exponent!) } } };
+        return new
+        {
+            keys = new[]
+            {
+                new
+                {
+                    kty = "RSA",
+                    use = "sig",
+                    kid = KeyId,
+                    n = Base64UrlEncoder.Encode(parameters.Modulus!),
+                    e = Base64UrlEncoder.Encode(parameters.Exponent!),
+                },
+            },
+        };
     }
 }
 
@@ -70,7 +131,11 @@ internal sealed class RegisteredBearerHost(WebApplication app) : IAsyncDisposabl
 {
     private readonly TestServer server = app.GetTestServer();
 
-    public static async Task<RegisteredBearerHost> StartAsync(InProcessOidcIssuer issuer, string? validationIssuer = null, bool useEntraClaims = false)
+    public static async Task<RegisteredBearerHost> StartAsync(
+        InProcessOidcIssuer issuer,
+        string? validationIssuer = null,
+        bool useEntraClaims = false
+    )
     {
         var values = new Dictionary<string, string?>
         {
@@ -93,40 +158,58 @@ internal sealed class RegisteredBearerHost(WebApplication app) : IAsyncDisposabl
         builder.WebHost.UseTestServer();
         var generic = new GenericOpenIdConnectProviderRegistration(configuration.GetSection("Generic"));
         var entra = new EntraProviderRegistration(configuration.GetSection("Entra"));
-        builder.Services.AddDataPitcherAuthentication("DataPitcher.Router", "generic", new IAuthProviderRegistration[] { generic });
+        builder.Services.AddDataPitcherAuthentication(
+            "DataPitcher.Router",
+            "generic",
+            new IAuthProviderRegistration[] { generic }
+        );
         entra.Register(builder.Services.AddAuthentication());
-        builder.Services.Configure<JwtBearerOptions>("generic", options =>
-        {
-            options.RequireHttpsMetadata = false;
-            options.TokenValidationParameters.ClockSkew = TimeSpan.Zero;
-            options.Events.OnAuthenticationFailed = context =>
+        builder.Services.Configure<JwtBearerOptions>(
+            "generic",
+            options =>
             {
-                context.HttpContext.Items["AuthenticationFailure"] = context.Exception.Message;
-                return Task.CompletedTask;
-            };
-        });
-        builder.Services.Configure<JwtBearerOptions>("entra", options =>
-        {
-            options.RequireHttpsMetadata = false;
-            options.TokenValidationParameters.ClockSkew = TimeSpan.Zero;
-            options.Events.OnAuthenticationFailed = context =>
+                options.RequireHttpsMetadata = false;
+                options.TokenValidationParameters.ClockSkew = TimeSpan.Zero;
+                options.Events.OnAuthenticationFailed = context =>
+                {
+                    context.HttpContext.Items["AuthenticationFailure"] = context.Exception.Message;
+                    return Task.CompletedTask;
+                };
+            }
+        );
+        builder.Services.Configure<JwtBearerOptions>(
+            "entra",
+            options =>
             {
-                context.HttpContext.Items["AuthenticationFailure"] = context.Exception.Message;
-                return Task.CompletedTask;
-            };
-        });
+                options.RequireHttpsMetadata = false;
+                options.TokenValidationParameters.ClockSkew = TimeSpan.Zero;
+                options.Events.OnAuthenticationFailed = context =>
+                {
+                    context.HttpContext.Items["AuthenticationFailure"] = context.Exception.Message;
+                    return Task.CompletedTask;
+                };
+            }
+        );
         if (useEntraClaims)
         {
-            builder.Services.Configure<JwtBearerOptions>("generic", options =>
-            {
-                var prior = options.Events.OnTokenValidated;
-                options.Events.OnTokenValidated = async context =>
+            builder.Services.Configure<JwtBearerOptions>(
+                "generic",
+                options =>
                 {
-                    if (prior is not null) await prior(context);
-                    var entraTokenValidated = context.HttpContext.RequestServices.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<JwtBearerOptions>>().Get("entra").Events.OnTokenValidated;
-                    if (entraTokenValidated is not null) await entraTokenValidated(context);
-                };
-            });
+                    var prior = options.Events.OnTokenValidated;
+                    options.Events.OnTokenValidated = async context =>
+                    {
+                        if (prior is not null)
+                            await prior(context);
+                        var entraTokenValidated = context
+                            .HttpContext.RequestServices.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<JwtBearerOptions>>()
+                            .Get("entra")
+                            .Events.OnTokenValidated;
+                        if (entraTokenValidated is not null)
+                            await entraTokenValidated(context);
+                    };
+                }
+            );
         }
         var application = builder.Build();
         application.Run(context => ProbeAsync(context, issuer, validationIssuer ?? issuer.BaseAddress, useEntraClaims));
@@ -147,13 +230,19 @@ internal sealed class RegisteredBearerHost(WebApplication app) : IAsyncDisposabl
         return app.DisposeAsync();
     }
 
-    private static async Task ProbeAsync(Microsoft.AspNetCore.Http.HttpContext context, InProcessOidcIssuer issuer, string validatedIssuer, bool useEntraClaims)
+    private static async Task ProbeAsync(
+        Microsoft.AspNetCore.Http.HttpContext context,
+        InProcessOidcIssuer issuer,
+        string validatedIssuer,
+        bool useEntraClaims
+    )
     {
         var scheme = context.Request.Query["scheme"].FirstOrDefault();
         var result = await context.AuthenticateAsync(scheme);
         if (!result.Succeeded)
         {
-            if (context.Items.TryGetValue("AuthenticationFailure", out var failure)) context.Response.Headers["X-Authentication-Failure"] = failure?.ToString();
+            if (context.Items.TryGetValue("AuthenticationFailure", out var failure))
+                context.Response.Headers["X-Authentication-Failure"] = failure?.ToString();
             context.Response.StatusCode = (int)HttpStatusCode.Unauthorized;
             await context.ChallengeAsync(scheme);
             return;

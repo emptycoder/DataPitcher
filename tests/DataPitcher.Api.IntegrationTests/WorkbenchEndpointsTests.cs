@@ -44,15 +44,17 @@ public sealed class WorkbenchEndpointsTests(ApiWebApplicationFactory factory) : 
         var connectionId = Guid.NewGuid();
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/selections/save")
         {
-            Content = JsonContent.Create(new
-            {
-                mode = "raw",
-                visual = (object?)null,
-                rawSql = "SELECT 1",
-                parameters = Array.Empty<object>(),
-                schemaRevision = "schema-revision",
-                connectionId,
-            }),
+            Content = JsonContent.Create(
+                new
+                {
+                    mode = "raw",
+                    visual = (object?)null,
+                    rawSql = "SELECT 1",
+                    parameters = Array.Empty<object>(),
+                    schemaRevision = "schema-revision",
+                    connectionId,
+                }
+            ),
         };
         request.Headers.Add("X-Test-Denied-Resource", connectionId.ToString());
 

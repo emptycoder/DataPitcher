@@ -9,7 +9,8 @@ public sealed class ForeignKeyDefinition
         IReadOnlyList<string> childColumns,
         IReadOnlyList<string> parentColumns,
         bool isEnforced,
-        bool isTrusted)
+        bool isTrusted
+    )
     {
         if (childColumns.Count == 0 || parentColumns.Count == 0)
             throw new ArgumentException("Foreign-key child and parent column lists must not be empty.");
@@ -35,14 +36,14 @@ public sealed class ForeignKeyDefinition
     public bool IsTrusted { get; }
 
     public override bool Equals(object? obj) =>
-        obj is ForeignKeyDefinition other &&
-        Name == other.Name &&
-        ChildTable.Equals(other.ChildTable) &&
-        ParentTable.Equals(other.ParentTable) &&
-        ChildColumns.SequenceEqual(other.ChildColumns) &&
-        ParentColumns.SequenceEqual(other.ParentColumns) &&
-        IsEnforced == other.IsEnforced &&
-        IsTrusted == other.IsTrusted;
+        obj is ForeignKeyDefinition other
+        && Name == other.Name
+        && ChildTable.Equals(other.ChildTable)
+        && ParentTable.Equals(other.ParentTable)
+        && ChildColumns.SequenceEqual(other.ChildColumns)
+        && ParentColumns.SequenceEqual(other.ParentColumns)
+        && IsEnforced == other.IsEnforced
+        && IsTrusted == other.IsTrusted;
 
     public override int GetHashCode()
     {

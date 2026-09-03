@@ -29,5 +29,27 @@ public static class Permissions
     public static Permission AuditWrite { get; } = new("Audit.Write");
     public static Permission AuthProvidersManage { get; } = new("AuthProviders.Manage");
     public static Permission RoleMappingsManage { get; } = new("RoleMappings.Manage");
-    public static IReadOnlyCollection<Permission> All { get; } = Array.AsReadOnly([AuditRead, AuditWrite, AuthProvidersManage, ConnectionsRead, ConnectionsWrite, PlansRead, PlansSeal, PlansWrite, RoleMappingsManage, SchemaRead, SchemaWrite, SelectionsRawSql, SelectionsRead, SelectionsWrite, TransfersConstraintOverride, TransfersRead, TransfersStart, TransfersTriggerOverride, TransfersUsePotentiallyLossyMapping, TransfersWrite]);
+    public static IReadOnlyCollection<Permission> All { get; } =
+        Array.AsReadOnly([
+            AuditRead,
+            AuditWrite,
+            AuthProvidersManage,
+            ConnectionsRead,
+            ConnectionsWrite,
+            PlansRead,
+            PlansSeal,
+            PlansWrite,
+            RoleMappingsManage,
+            SchemaRead,
+            SchemaWrite,
+            SelectionsRawSql,
+            SelectionsRead,
+            SelectionsWrite,
+            TransfersConstraintOverride,
+            TransfersRead,
+            TransfersStart,
+            TransfersTriggerOverride,
+            TransfersUsePotentiallyLossyMapping,
+            TransfersWrite,
+        ]);
 }

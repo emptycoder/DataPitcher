@@ -21,6 +21,8 @@ public sealed class WorkerFaultsTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => faults.HitAsync(TransferFaultPoint.BeforeTargetCommit, cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            faults.HitAsync(TransferFaultPoint.BeforeTargetCommit, cancellation.Token)
+        );
     }
 }

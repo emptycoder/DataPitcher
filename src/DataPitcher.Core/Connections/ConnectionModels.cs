@@ -3,17 +3,48 @@ using DataPitcher.Core.Plans;
 
 namespace DataPitcher.Core.Connections;
 
-public enum SecretReferenceKind { EnvironmentVariable, FileMounted }
-public enum ConnectionRole { Source, Target }
-public enum ConnectionHealthState { Unknown, Checking, Healthy, Degraded, Unhealthy }
+public enum SecretReferenceKind
+{
+    EnvironmentVariable,
+    FileMounted,
+}
+
+public enum ConnectionRole
+{
+    Source,
+    Target,
+}
+
+public enum ConnectionHealthState
+{
+    Unknown,
+    Checking,
+    Healthy,
+    Degraded,
+    Unhealthy,
+}
+
 public enum ConnectionCapability
 {
-    CanConnect, CanReadSchema, CanReadBusinessRows, CanCreateSourceStaging,
-    CanDropSourceStaging, CanCreateTargetStaging, CanDropTargetStaging,
-    CanBulkInsert, CanPreserveIdentity, CanUseTransactions, CanUseSnapshotIsolation,
-    CanDeferConstraints, CanDisableConstraints, CanRevalidateConstraints,
-    CanFireTriggers, CanSuppressTriggers, CanReseedGeneratedKeys,
-    CanUseServerSideTransfer, SupportsDurableResume,
+    CanConnect,
+    CanReadSchema,
+    CanReadBusinessRows,
+    CanCreateSourceStaging,
+    CanDropSourceStaging,
+    CanCreateTargetStaging,
+    CanDropTargetStaging,
+    CanBulkInsert,
+    CanPreserveIdentity,
+    CanUseTransactions,
+    CanUseSnapshotIsolation,
+    CanDeferConstraints,
+    CanDisableConstraints,
+    CanRevalidateConstraints,
+    CanFireTriggers,
+    CanSuppressTriggers,
+    CanReseedGeneratedKeys,
+    CanUseServerSideTransfer,
+    SupportsDurableResume,
 }
 
 public sealed record SecretReference
@@ -32,16 +63,30 @@ public sealed record SecretReference
 }
 
 public sealed record ConnectionProfile(
-    Guid ConnectionId, string DisplayName, string ProviderId, SecretReference SecretReference,
-    string BusinessSchema, string StagingSchema, long Version);
+    Guid ConnectionId,
+    string DisplayName,
+    string ProviderId,
+    SecretReference SecretReference,
+    string BusinessSchema,
+    string StagingSchema,
+    long Version
+);
 
 public sealed record ConnectionProfileSummary(
-    Guid ConnectionId, string DisplayName, string ProviderId, SecretReferenceKind SecretReferenceKind,
-    ConnectionHealthState Health, string ETag);
+    Guid ConnectionId,
+    string DisplayName,
+    string ProviderId,
+    SecretReferenceKind SecretReferenceKind,
+    ConnectionHealthState Health,
+    string ETag
+);
 
 public sealed class ConnectionRequirements
 {
-    public ConnectionRequirements(IEnumerable<ConnectionCapability> required, IEnumerable<ConnectionCapability> optional)
+    public ConnectionRequirements(
+        IEnumerable<ConnectionCapability> required,
+        IEnumerable<ConnectionCapability> optional
+    )
     {
         Required = required.ToFrozenSet();
         Optional = optional.ToFrozenSet();
@@ -84,8 +129,12 @@ public sealed class ConnectionRequirements
 
 public sealed class ConnectionProbeEvidence
 {
-    public ConnectionProbeEvidence(string databaseIdentity, string providerVersion,
-        IEnumerable<ConnectionCapability> available, string? cleanupFailureCode)
+    public ConnectionProbeEvidence(
+        string databaseIdentity,
+        string providerVersion,
+        IEnumerable<ConnectionCapability> available,
+        string? cleanupFailureCode
+    )
     {
         DatabaseIdentity = databaseIdentity;
         ProviderVersion = providerVersion;
@@ -101,9 +150,15 @@ public sealed class ConnectionProbeEvidence
 
 public sealed class ConnectionAssessment
 {
-    public ConnectionAssessment(ConnectionHealthState state, string databaseIdentity, string providerVersion,
-        IEnumerable<ConnectionCapability> available, IEnumerable<ConnectionCapability> missingRequired,
-        IEnumerable<ConnectionCapability> missingOptional, string? cleanupFailureCode)
+    public ConnectionAssessment(
+        ConnectionHealthState state,
+        string databaseIdentity,
+        string providerVersion,
+        IEnumerable<ConnectionCapability> available,
+        IEnumerable<ConnectionCapability> missingRequired,
+        IEnumerable<ConnectionCapability> missingOptional,
+        string? cleanupFailureCode
+    )
     {
         State = state;
         DatabaseIdentity = databaseIdentity;
@@ -127,12 +182,24 @@ public static class ConnectionHealthClassifier
 {
     public static ConnectionAssessment Classify(ConnectionRequirements requirements, ConnectionProbeEvidence evidence)
     {
-        var missingRequired = requirements.Required.Where(capability => !evidence.Available.Contains(capability)).ToHashSet();
-        var missingOptional = requirements.Optional.Where(capability => !evidence.Available.Contains(capability)).ToHashSet();
-        var state = evidence.CleanupFailureCode is not null || missingRequired.Count != 0
-            ? ConnectionHealthState.Unhealthy
-            : missingOptional.Count != 0 ? ConnectionHealthState.Degraded : ConnectionHealthState.Healthy;
-        return new ConnectionAssessment(state, evidence.DatabaseIdentity, evidence.ProviderVersion,
-            evidence.Available, missingRequired, missingOptional, evidence.CleanupFailureCode);
+        var missingRequired = requirements
+            .Required.Where(capability => !evidence.Available.Contains(capability))
+            .ToHashSet();
+        var missingOptional = requirements
+            .Optional.Where(capability => !evidence.Available.Contains(capability))
+            .ToHashSet();
+        var state =
+            evidence.CleanupFailureCode is not null || missingRequired.Count != 0 ? ConnectionHealthState.Unhealthy
+            : missingOptional.Count != 0 ? ConnectionHealthState.Degraded
+            : ConnectionHealthState.Healthy;
+        return new ConnectionAssessment(
+            state,
+            evidence.DatabaseIdentity,
+            evidence.ProviderVersion,
+            evidence.Available,
+            missingRequired,
+            missingOptional,
+            evidence.CleanupFailureCode
+        );
     }
 }

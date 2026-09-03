@@ -7,7 +7,9 @@ public sealed class PermissionSet : IEquatable<PermissionSet>
     public PermissionSet(IEnumerable<Permission> permissions)
     {
         this.permissions = [.. permissions];
-        Permissions = Array.AsReadOnly(this.permissions.OrderBy(permission => permission.Value, StringComparer.Ordinal).ToArray());
+        Permissions = Array.AsReadOnly(
+            this.permissions.OrderBy(permission => permission.Value, StringComparer.Ordinal).ToArray()
+        );
     }
 
     public static PermissionSet Empty { get; } = new([]);
@@ -26,5 +28,6 @@ public sealed class PermissionSet : IEquatable<PermissionSet>
 
     public override bool Equals(object? obj) => obj is PermissionSet other && Equals(other);
 
-    public override int GetHashCode() => permissions.Aggregate(0, (hash, permission) => hash ^ permission.GetHashCode());
+    public override int GetHashCode() =>
+        permissions.Aggregate(0, (hash, permission) => hash ^ permission.GetHashCode());
 }

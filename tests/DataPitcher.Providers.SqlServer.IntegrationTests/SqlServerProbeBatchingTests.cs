@@ -9,7 +9,10 @@ public sealed class SqlServerProbeBatchingTests(SqlServerClosureFixture fixture)
     public async Task ComputeAsync_SendsOneTargetProbePerFrontierTableNotPerKey()
     {
         await using var scenario = await SqlServerClosureScenario.CreateAsync(fixture);
-        await using var wire = await SqlServerWireCommandRecorder.StartAsync(scenario.TargetAdminConnectionString, "DataPitcher.ProbeTarget");
+        await using var wire = await SqlServerWireCommandRecorder.StartAsync(
+            scenario.TargetAdminConnectionString,
+            "DataPitcher.ProbeTarget"
+        );
         await scenario.CreateBatchChainAsync(40);
         await scenario.RunBatchAsync();
         Assert.Equal(1, await wire.Count("DataPitcher.ProbeTarget", "batch_child"));

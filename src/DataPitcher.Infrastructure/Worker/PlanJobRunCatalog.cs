@@ -10,6 +10,15 @@ public sealed class PlanJobRunCatalog(PlanStore plans) : IJobRunCatalog
     {
         var plan = (await plans.FindAsync(job.PlanId, cancellationToken))!;
         var content = (await plans.LoadContentAsync(job.PlanId, cancellationToken))!;
-        return new(job.JobId, job.RunId, plan.CanonicalHash!, content.TransferMode is TransferMode.ResumableStaged, content.Source.ConnectionId, content.Target.ConnectionId, content.TransferMode, job.PlanId);
+        return new(
+            job.JobId,
+            job.RunId,
+            plan.CanonicalHash!,
+            content.TransferMode is TransferMode.ResumableStaged,
+            content.Source.ConnectionId,
+            content.Target.ConnectionId,
+            content.TransferMode,
+            job.PlanId
+        );
     }
 }

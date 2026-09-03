@@ -25,8 +25,12 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     public async Task Transfer_WhenPlanIsSealedAndJobStarts_CopiesReferentiallyRequiredRows()
     {
         await using var scope = await fixture.CreateScopeAsync();
-        await scope.ExecuteAsync("CREATE TABLE dbo.worker_parents (id int NOT NULL CONSTRAINT PK_worker_parents PRIMARY KEY); CREATE TABLE dbo.worker_children (id int NOT NULL CONSTRAINT PK_worker_children PRIMARY KEY, parent_id int NOT NULL CONSTRAINT FK_worker_children_parents FOREIGN KEY REFERENCES dbo.worker_parents(id)); INSERT dbo.worker_parents VALUES (2); INSERT dbo.worker_children VALUES (1,2);");
-        await scope.ExecuteTargetAsync("CREATE TABLE dbo.worker_parents (id int NOT NULL CONSTRAINT PK_worker_parents PRIMARY KEY); CREATE TABLE dbo.worker_children (id int NOT NULL CONSTRAINT PK_worker_children PRIMARY KEY, parent_id int NOT NULL CONSTRAINT FK_worker_children_parents FOREIGN KEY REFERENCES dbo.worker_parents(id));");
+        await scope.ExecuteAsync(
+            "CREATE TABLE dbo.worker_parents (id int NOT NULL CONSTRAINT PK_worker_parents PRIMARY KEY); CREATE TABLE dbo.worker_children (id int NOT NULL CONSTRAINT PK_worker_children PRIMARY KEY, parent_id int NOT NULL CONSTRAINT FK_worker_children_parents FOREIGN KEY REFERENCES dbo.worker_parents(id)); INSERT dbo.worker_parents VALUES (2); INSERT dbo.worker_children VALUES (1,2);"
+        );
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE dbo.worker_parents (id int NOT NULL CONSTRAINT PK_worker_parents PRIMARY KEY); CREATE TABLE dbo.worker_children (id int NOT NULL CONSTRAINT PK_worker_children PRIMARY KEY, parent_id int NOT NULL CONSTRAINT FK_worker_children_parents FOREIGN KEY REFERENCES dbo.worker_parents(id));"
+        );
         await EnableSnapshotIsolationAsync(scope.SourceAdminConnectionString, scope.Database);
         await EnableSnapshotIsolationAsync(scope.TargetAdminConnectionString, scope.Database);
         var directory = Path.Combine(Path.GetTempPath(), "datapitcher-job-worker-" + Guid.NewGuid().ToString("N"));
@@ -37,44 +41,121 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
             var targetSecret = Path.Combine(directory, "target");
             await File.WriteAllTextAsync(sourceSecret, scope.SourceConnectionString);
             await File.WriteAllTextAsync(targetSecret, scope.TargetConnectionString);
-            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["ControlDatabase:Path"] = Path.Combine(directory, "control.db"),
-                ["Secrets:Root"] = directory,
-                ["Worker:LeaseTtl"] = "00:00:30",
-                ["Worker:PollInterval"] = "00:00:00.050",
-            }).Build();
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ControlDatabase:Path"] = Path.Combine(directory, "control.db"),
+                        ["Secrets:Root"] = directory,
+                        ["Worker:LeaseTtl"] = "00:00:30",
+                        ["Worker:PollInterval"] = "00:00:00.050",
+                    }
+                )
+                .Build();
             var services = new ServiceCollection();
             services.AddDataPitcherComposition(configuration);
             using var provider = services.BuildServiceProvider();
             provider.ApplyControlDatabaseMigrations();
             var profiles = provider.GetRequiredService<ConnectionProfileStore>();
-            var source = await profiles.CreateAsync(new ConnectionProfileDraft("source", "sqlserver", new SecretReference(SecretReferenceKind.FileMounted, sourceSecret), "dbo", "dbo"), "source", CancellationToken.None);
-            var target = await profiles.CreateAsync(new ConnectionProfileDraft("target", "sqlserver", new SecretReference(SecretReferenceKind.FileMounted, targetSecret), "dbo", "dbo"), "target", CancellationToken.None);
+            var source = await profiles.CreateAsync(
+                new ConnectionProfileDraft(
+                    "source",
+                    "sqlserver",
+                    new SecretReference(SecretReferenceKind.FileMounted, sourceSecret),
+                    "dbo",
+                    "dbo"
+                ),
+                "source",
+                CancellationToken.None
+            );
+            var target = await profiles.CreateAsync(
+                new ConnectionProfileDraft(
+                    "target",
+                    "sqlserver",
+                    new SecretReference(SecretReferenceKind.FileMounted, targetSecret),
+                    "dbo",
+                    "dbo"
+                ),
+                "target",
+                CancellationToken.None
+            );
             var snapshots = provider.GetRequiredService<SchemaSnapshotStore>();
             var scan = await snapshots.QueueAsync(source.ConnectionId, "source-scan", CancellationToken.None);
             var scanner = provider.GetServices<IHostedService>().OfType<SchemaScanWorker>().Single();
             await scanner.ProcessNextAsync(CancellationToken.None);
             var completedScan = await snapshots.GetScanAsync(source.ConnectionId, scan.ScanId, CancellationToken.None);
             Assert.Equal(SchemaScanState.Completed, completedScan.State);
-            var snapshotId = completedScan.SnapshotId ?? throw new InvalidOperationException("Source schema scan did not create a snapshot.");
+            var snapshotId =
+                completedScan.SnapshotId
+                ?? throw new InvalidOperationException("Source schema scan did not create a snapshot.");
             var selectionId = Guid.NewGuid();
-            await provider.GetRequiredService<SelectionStore>().SaveAsync(selectionId, "children", JsonSerializer.Serialize(new { Mode = "raw", RawSql = "SELECT id AS [__datapitcher_key_0] FROM dbo.worker_children", Parameters = Array.Empty<object>() }), "\"0\"", CancellationToken.None, source.ConnectionId, snapshotId, "dbo", "worker_children", "PK_worker_children", ["id"]);
+            await provider
+                .GetRequiredService<SelectionStore>()
+                .SaveAsync(
+                    selectionId,
+                    "children",
+                    JsonSerializer.Serialize(
+                        new
+                        {
+                            Mode = "raw",
+                            RawSql = "SELECT id AS [__datapitcher_key_0] FROM dbo.worker_children",
+                            Parameters = Array.Empty<object>(),
+                        }
+                    ),
+                    "\"0\"",
+                    CancellationToken.None,
+                    source.ConnectionId,
+                    snapshotId,
+                    "dbo",
+                    "worker_children",
+                    "PK_worker_children",
+                    ["id"]
+                );
             var application = provider.GetRequiredService<IDataPitcherApplication>();
             var planId = Guid.NewGuid();
-            await application.SavePlanAsync(planId, new SavePlanRequest("worker plan", null, "\"0\"", selectionId, source.ConnectionId, target.ConnectionId), CancellationToken.None);
+            await application.SavePlanAsync(
+                planId,
+                new SavePlanRequest(
+                    "worker plan",
+                    null,
+                    "\"0\"",
+                    selectionId,
+                    source.ConnectionId,
+                    target.ConnectionId
+                ),
+                CancellationToken.None
+            );
             await application.QueuePlanSealAsync(planId, CancellationToken.None);
             var worker = provider.GetServices<IHostedService>().OfType<JobWorker>().Single();
             await worker.StartAsync(CancellationToken.None);
             try
             {
                 var started = await application.StartJobAsync(planId, "worker-job", CancellationToken.None);
-                var job = await WaitForTerminalAsync(provider.GetRequiredService<JobStore>(), started.JobId ?? throw new InvalidOperationException("Job start did not return a job identifier."));
+                var job = await WaitForTerminalAsync(
+                    provider.GetRequiredService<JobStore>(),
+                    started.JobId ?? throw new InvalidOperationException("Job start did not return a job identifier.")
+                );
 
-                var events = await provider.GetRequiredService<IJobEventReader>().ReadAfterAsync(job.JobId, null, CancellationToken.None);
-                Assert.True(job.State is JobState.Succeeded, "Expected job state Succeeded but was " + job.State + ". Events: " + string.Join(", ", events.Events.Select(jobEvent => jobEvent.Payload.State)));
-                Assert.Equal(1, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_children WHERE id = 1 AND parent_id = 2"));
-                Assert.Equal(1, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_parents WHERE id = 2"));
+                var events = await provider
+                    .GetRequiredService<IJobEventReader>()
+                    .ReadAfterAsync(job.JobId, null, CancellationToken.None);
+                Assert.True(
+                    job.State is JobState.Succeeded,
+                    "Expected job state Succeeded but was "
+                        + job.State
+                        + ". Events: "
+                        + string.Join(", ", events.Events.Select(jobEvent => jobEvent.Payload.State))
+                );
+                Assert.Equal(
+                    1,
+                    await scope.ScalarTargetAsync<int>(
+                        "SELECT COUNT(*) FROM dbo.worker_children WHERE id = 1 AND parent_id = 2"
+                    )
+                );
+                Assert.Equal(
+                    1,
+                    await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_parents WHERE id = 2")
+                );
             }
             finally
             {
@@ -94,7 +175,10 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
         while (DateTime.UtcNow < deadline)
         {
             last = jobs.Get(jobId);
-            if (last.State is JobState.Cancelled or JobState.Succeeded or JobState.Failed or JobState.VerificationFailed) return last;
+            if (
+                last.State is JobState.Cancelled or JobState.Succeeded or JobState.Failed or JobState.VerificationFailed
+            )
+                return last;
             await Task.Delay(100);
         }
         throw new TimeoutException("Job did not reach a terminal state. Last observed state: " + last.State + ".");
@@ -104,7 +188,10 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync();
-        await using var command = new SqlCommand("ALTER DATABASE [" + database + "] SET ALLOW_SNAPSHOT_ISOLATION ON;", connection);
+        await using var command = new SqlCommand(
+            "ALTER DATABASE [" + database + "] SET ALLOW_SNAPSHOT_ISOLATION ON;",
+            connection
+        );
         await command.ExecuteNonQueryAsync();
     }
 }

@@ -18,7 +18,17 @@ public sealed class PostgreSqlTargetCheckpointStoreTests : IClassFixture<Postgre
         await store.InitializeAsync(context, CancellationToken.None);
         await using var connection = await scope.Target.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
-        await store.AdvanceAsync(connection, transaction, context, PostgreSqlTransferTestData.Table(scope.Schema), PostgreSqlTransferTestData.Batch(0, (1, "a")), 1, 1, 0, CancellationToken.None);
+        await store.AdvanceAsync(
+            connection,
+            transaction,
+            context,
+            PostgreSqlTransferTestData.Table(scope.Schema),
+            PostgreSqlTransferTestData.Batch(0, (1, "a")),
+            1,
+            1,
+            0,
+            CancellationToken.None
+        );
         await transaction.CommitAsync();
         var checkpoint = await store.ReadAsync(context.JobId, context.RunId, CancellationToken.None);
         Assert.NotNull(checkpoint);
@@ -38,7 +48,19 @@ public sealed class PostgreSqlTargetCheckpointStoreTests : IClassFixture<Postgre
         await store.InitializeAsync(current, CancellationToken.None);
         await using var connection = await scope.Target.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
-        await Assert.ThrowsAsync<PostgreSqlFenceLostException>(() => store.AdvanceAsync(connection, transaction, stale, PostgreSqlTransferTestData.Table(scope.Schema), PostgreSqlTransferTestData.Batch(0, (1, "a")), 1, 1, 0, CancellationToken.None));
+        await Assert.ThrowsAsync<PostgreSqlFenceLostException>(() =>
+            store.AdvanceAsync(
+                connection,
+                transaction,
+                stale,
+                PostgreSqlTransferTestData.Table(scope.Schema),
+                PostgreSqlTransferTestData.Batch(0, (1, "a")),
+                1,
+                1,
+                0,
+                CancellationToken.None
+            )
+        );
         await transaction.RollbackAsync();
         Assert.Equal(2, (await store.ReadAsync(stale.JobId, stale.RunId, CancellationToken.None))!.FenceToken);
     }
@@ -51,8 +73,13 @@ public sealed class PostgreSqlTargetCheckpointStoreTests : IClassFixture<Postgre
         var context = PostgreSqlTransferTestData.Context();
         await store.InitializeAsync(context, CancellationToken.None);
         var resealed = context with { ManifestHash = "different-manifest-hash" };
-        await Assert.ThrowsAsync<PostgreSqlManifestMismatchException>(() => store.InitializeAsync(resealed, CancellationToken.None));
-        Assert.Equal("sealed-manifest-hash", (await store.ReadAsync(context.JobId, context.RunId, CancellationToken.None))!.ManifestHash);
+        await Assert.ThrowsAsync<PostgreSqlManifestMismatchException>(() =>
+            store.InitializeAsync(resealed, CancellationToken.None)
+        );
+        Assert.Equal(
+            "sealed-manifest-hash",
+            (await store.ReadAsync(context.JobId, context.RunId, CancellationToken.None))!.ManifestHash
+        );
     }
 
     [Fact]

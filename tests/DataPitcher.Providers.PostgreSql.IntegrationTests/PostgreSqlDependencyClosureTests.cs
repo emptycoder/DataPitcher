@@ -29,7 +29,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var c = source.Table("c").Definition;
         var p = source.Table("p").Definition;
         var relationship = new ClosureRelationship(Fk(source, c, p));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
         var r = await RunAsync(store, [relationship], Selections(c, p), Root(c, Key("id", 1)));
         Assert.True(r.Contains(p, Key("id", 2)));
     }
@@ -45,7 +51,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var c = source.Table("c").Definition;
         var p = source.Table("p").Definition;
         var relationship = new ClosureRelationship(Fk(source, c, p));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
         var r = await RunAsync(store, [relationship], Selections(c, p), Root(p, Key("id", 2)));
         Assert.False(r.Contains(c, Key("id", 1)));
     }
@@ -61,7 +73,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var c = source.Table("c").Definition;
         var p = source.Table("p").Definition;
         var relationship = new ClosureRelationship(Fk(source, c, p), isInbound: true);
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
         var r = await RunAsync(store, [relationship], Selections(c, p), Root(p, Key("id", 2)));
         Assert.True(r.Contains(c, Key("id", 1)));
     }
@@ -75,7 +93,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var c = source.Table("optional_orders").Definition;
         var p = source.Table("customers").Definition;
         var relationship = new ClosureRelationship(Fk(source, c, p));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
         var r = await RunAsync(store, [relationship], Selections(c, p), Root(c, Key("id", 1)));
         Assert.False(r.Contains(p, Key("customer_id", 2)));
     }
@@ -84,12 +108,20 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
     public async Task Closure_WhenForeignKeyIsComposite_ResolvesParentByConstraintNativePosition()
     {
         await using var scope = await _fixture.CreateScopeAsync();
-        await scope.ExecuteAsync("INSERT INTO composite_parent VALUES (7,8); INSERT INTO composite_child VALUES (1,8,7);");
+        await scope.ExecuteAsync(
+            "INSERT INTO composite_parent VALUES (7,8); INSERT INTO composite_child VALUES (1,8,7);"
+        );
         var (source, target) = await ReadAsync(scope);
         var c = source.Table("composite_child").Definition;
         var p = source.Table("composite_parent").Definition;
         var relationship = new ClosureRelationship(source.ForeignKey("fk_composite_child_parent"));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
         var r = await RunAsync(store, [relationship], Selections(c, p), Root(c, Key("id", 1)));
         Assert.True(r.Contains(p, new StableKey([new("left_value", 7), new("right_value", 8)])));
     }
@@ -98,12 +130,20 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
     public async Task Closure_WhenForeignKeyReferencesUniqueConstraint_ResolvesByThatKeyRatherThanPrimaryKey()
     {
         await using var scope = await _fixture.CreateScopeAsync();
-        await scope.ExecuteAsync("INSERT INTO external_parents VALUES (9,'external'); INSERT INTO external_children VALUES (1,'external');");
+        await scope.ExecuteAsync(
+            "INSERT INTO external_parents VALUES (9,'external'); INSERT INTO external_children VALUES (1,'external');"
+        );
         var (source, target) = await ReadAsync(scope);
         var c = source.Table("external_children").Definition;
         var p = source.Table("external_parents").Definition;
         var relationship = new ClosureRelationship(Fk(source, c, p));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
         var r = await RunAsync(store, [relationship], Selections(c, p), Root(c, Key("id", 1)));
         Assert.True(r.Contains(p, Key("id", 9)));
     }
@@ -113,16 +153,33 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
     {
         await using var scope = await _fixture.CreateScopeAsync();
         await BothAsync(scope, "CREATE TABLE dual_parent (code text PRIMARY KEY)");
-        await BothAsync(scope, "CREATE TABLE dual_child (id integer PRIMARY KEY, bill_code text NOT NULL, ship_code text NOT NULL)");
-        await BothAsync(scope, "ALTER TABLE dual_child ADD CONSTRAINT fk_dual_bill FOREIGN KEY (bill_code) REFERENCES dual_parent(code)");
-        await BothAsync(scope, "ALTER TABLE dual_child ADD CONSTRAINT fk_dual_ship FOREIGN KEY (ship_code) REFERENCES dual_parent(code)");
-        await scope.ExecuteAsync("INSERT INTO dual_parent VALUES ('B'),('S'); INSERT INTO dual_child VALUES (1,'B','S');");
+        await BothAsync(
+            scope,
+            "CREATE TABLE dual_child (id integer PRIMARY KEY, bill_code text NOT NULL, ship_code text NOT NULL)"
+        );
+        await BothAsync(
+            scope,
+            "ALTER TABLE dual_child ADD CONSTRAINT fk_dual_bill FOREIGN KEY (bill_code) REFERENCES dual_parent(code)"
+        );
+        await BothAsync(
+            scope,
+            "ALTER TABLE dual_child ADD CONSTRAINT fk_dual_ship FOREIGN KEY (ship_code) REFERENCES dual_parent(code)"
+        );
+        await scope.ExecuteAsync(
+            "INSERT INTO dual_parent VALUES ('B'),('S'); INSERT INTO dual_child VALUES (1,'B','S');"
+        );
         var (source, target) = await ReadAsync(scope);
         var c = source.Table("dual_child").Definition;
         var p = source.Table("dual_parent").Definition;
         var billTo = new ClosureRelationship(source.ForeignKey("fk_dual_bill"));
         var shipTo = new ClosureRelationship(source.ForeignKey("fk_dual_ship"));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
         var r = await RunAsync(store, [billTo, shipTo], Selections(c, p), Root(c, Key("id", 1)));
         Assert.True(r.Contains(p, Key("code", "B")));
         Assert.True(r.Contains(p, Key("code", "S")));
@@ -144,7 +201,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var c = source.Table("c").Definition;
         var p = source.Table("p").Definition;
         var relationship = ClosureRelationship.Manual("Manual_C_P", c, p, ["pid"], ["id"]);
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
         var r = await RunAsync(store, [relationship], Selections(c, p), Root(c, Key("id", 1)));
         Assert.True(r.Contains(p, Key("id", 2)));
     }
@@ -161,7 +224,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var c = source.Table("c").Definition;
         var p = source.Table("p").Definition;
         var relationship = new ClosureRelationship(Fk(source, c, p));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
         var r = await RunAsync(store, [relationship], Selections(c, p), Root(c, Key("id", 1)));
         Assert.True(r.Contains(c, Key("id", 1)));
         Assert.False(r.Contains(p, Key("id", 999)));
@@ -178,8 +247,19 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var c = source.Table("c").Definition;
         var p = source.Table("p").Definition;
         var relationship = new ClosureRelationship(Fk(source, c, p));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
-        var r = await RunAsync(store, [relationship], Selections(c, p), new ClosureRoot(c, [Key("id", 1), Key("id", 2)], RootConflictPolicy.FailOnConflict));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
+        var r = await RunAsync(
+            store,
+            [relationship],
+            Selections(c, p),
+            new ClosureRoot(c, [Key("id", 1), Key("id", 2)], RootConflictPolicy.FailOnConflict)
+        );
         Assert.Single(r.Rows, x => x.Table == p && x.Key == Key("id", 9));
     }
 
@@ -192,7 +272,9 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var (source, target) = await ReadAsync(scope);
         var c = source.Table("c").Definition;
         await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c));
-        await Assert.ThrowsAsync<RootConflictException>(() => RunAsync(store, [], Selections(c), Root(c, Key("id", 1))));
+        await Assert.ThrowsAsync<RootConflictException>(() =>
+            RunAsync(store, [], Selections(c), Root(c, Key("id", 1)))
+        );
     }
 
     [Fact]
@@ -207,8 +289,19 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var c = source.Table("c").Definition;
         var p = source.Table("p").Definition;
         var relationship = new ClosureRelationship(Fk(source, c, p));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
-        var r = await RunAsync(store, [relationship], Selections(c, p), Root(c, Key("id", 1), RootConflictPolicy.SkipExisting));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
+        var r = await RunAsync(
+            store,
+            [relationship],
+            Selections(c, p),
+            Root(c, Key("id", 1), RootConflictPolicy.SkipExisting)
+        );
         Assert.False(r.Contains(c, Key("id", 1)));
         Assert.False(r.Contains(p, Key("id", 2)));
     }
@@ -226,8 +319,19 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var c = source.Table("c").Definition;
         var p = source.Table("p").Definition;
         var relationship = new ClosureRelationship(Fk(source, c, p));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p));
-        var r = await RunAsync(store, [relationship], Selections(c, p), Root(c, Key("id", 1), RootConflictPolicy.Upsert));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p)
+        );
+        var r = await RunAsync(
+            store,
+            [relationship],
+            Selections(c, p),
+            Root(c, Key("id", 1), RootConflictPolicy.Upsert)
+        );
         Assert.True(r.Contains(c, Key("id", 1)));
         Assert.True(r.Contains(p, Key("id", 2)));
     }
@@ -247,7 +351,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var g = source.Table("g").Definition;
         var cp = new ClosureRelationship(Fk(source, c, p));
         var pg = new ClosureRelationship(Fk(source, p, g));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p, g));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p, g)
+        );
         var r = await RunAsync(store, [cp, pg], Selections(c, p, g), Root(c, Key("id", 1)));
         Assert.False(r.Contains(p, Key("id", 2)));
         Assert.False(r.Contains(g, Key("id", 3)));
@@ -268,7 +378,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var g = source.Table("g").Definition;
         var cp = new ClosureRelationship(Fk(source, c, p));
         var pg = new ClosureRelationship(Fk(source, p, g));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p, g));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p, g)
+        );
         var r = await RunAsync(store, [cp, pg], Selections(c, p, g), Root(c, Key("id", 1)));
         Assert.True(r.Contains(p, Key("id", 2)));
         Assert.True(r.Contains(g, Key("id", 3)));
@@ -291,7 +407,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var g = source.Table("g").Definition;
         var cp = new ClosureRelationship(Fk(source, c, p));
         var pg = new ClosureRelationship(new ForeignKeyDefinition("FK_P_G", p, g, ["gid"], ["id"], true, true));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p, g));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p, g)
+        );
         var r = await RunAsync(store, [cp, pg], Selections(c, p, g), Root(c, Key("id", 1)));
         Assert.True(r.Contains(p, Key("id", 2)));
         Assert.True(r.Contains(g, Key("id", 3)));
@@ -304,15 +426,26 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
     public async Task Closure_WhenParentTargetConstraintIsUntrusted_TransfersParentAndNamesTheConstraint()
     {
         await using var scope = await _fixture.CreateScopeAsync();
-        await BothAsync(scope, "CREATE TABLE c (id integer PRIMARY KEY, pid integer NOT NULL REFERENCES untrusted_parents(id))");
-        await scope.ExecuteAsync("INSERT INTO untrusted_grandparents VALUES (3); INSERT INTO untrusted_parents VALUES (2,3); INSERT INTO c VALUES (1,2);");
+        await BothAsync(
+            scope,
+            "CREATE TABLE c (id integer PRIMARY KEY, pid integer NOT NULL REFERENCES untrusted_parents(id))"
+        );
+        await scope.ExecuteAsync(
+            "INSERT INTO untrusted_grandparents VALUES (3); INSERT INTO untrusted_parents VALUES (2,3); INSERT INTO c VALUES (1,2);"
+        );
         var (source, target) = await ReadAsync(scope);
         var c = source.Table("c").Definition;
         var p = source.Table("untrusted_parents").Definition;
         var g = source.Table("untrusted_grandparents").Definition;
         var cp = new ClosureRelationship(Fk(source, c, p));
         var pg = new ClosureRelationship(source.ForeignKey("FK_P_G"));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p, g));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p, g)
+        );
         var r = await RunAsync(store, [cp, pg], Selections(c, p, g), Root(c, Key("id", 1)));
         Assert.True(r.Contains(p, Key("id", 2)));
         Assert.True(r.Contains(g, Key("id", 3)));
@@ -334,7 +467,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var g = source.Table("g").Definition;
         var cp = new ClosureRelationship(Fk(source, c, p));
         var pg = new ClosureRelationship(Fk(source, p, g));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p, g));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p, g)
+        );
         var r = await RunAsync(store, [cp, pg], Selections(c, p, g), Root(c, Key("id", 1)));
         Assert.True(r.Contains(p, Key("id", 2)));
         Assert.True(r.Contains(g, Key("id", 3)));
@@ -347,7 +486,9 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         await BothAsync(scope, "CREATE TABLE g (id integer PRIMARY KEY)");
         await BothAsync(scope, "CREATE TABLE p (id integer PRIMARY KEY, gid integer NOT NULL)");
         await BothAsync(scope, "CREATE TABLE c (id integer PRIMARY KEY, pid integer NOT NULL REFERENCES p(id))");
-        await scope.ExecuteAsync("ALTER TABLE p ADD CONSTRAINT fk_p_g FOREIGN KEY (gid) REFERENCES g(id) NOT VALID; ALTER TABLE p DISABLE TRIGGER ALL;");
+        await scope.ExecuteAsync(
+            "ALTER TABLE p ADD CONSTRAINT fk_p_g FOREIGN KEY (gid) REFERENCES g(id) NOT VALID; ALTER TABLE p DISABLE TRIGGER ALL;"
+        );
         await scope.ExecuteTargetAsync("ALTER TABLE p ADD CONSTRAINT fk_p_g FOREIGN KEY (gid) REFERENCES g(id)"); // validated, enforced on target
         await scope.ExecuteAsync("INSERT INTO g VALUES (3); INSERT INTO p VALUES (2,3); INSERT INTO c VALUES (1,2);"); // source's own FK is disabled+unvalidated
         await scope.ExecuteTargetAsync("INSERT INTO g VALUES (3); INSERT INTO p VALUES (2,3);");
@@ -359,7 +500,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var pg = new ClosureRelationship(Fk(source, p, g)); // source metadata reports IsEnforced=false, IsTrusted=false
         Assert.False(pg.ForeignKey!.IsEnforced);
         Assert.False(pg.ForeignKey!.IsTrusted);
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p, g));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p, g)
+        );
         var r = await RunAsync(store, [cp, pg], Selections(c, p, g), Root(c, Key("id", 1)));
         Assert.False(r.Contains(p, Key("id", 2)));
         Assert.False(r.Contains(g, Key("id", 3)));
@@ -379,7 +526,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var x = source.Table("x").Definition;
         var rp = new ClosureRelationship(Fk(source, root, p));
         var px = new ClosureRelationship(Fk(source, p, x), isInbound: false, isEnabled: false);
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(root, p, x));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(root, p, x)
+        );
         var result = await RunAsync(store, [rp, px], Selections(root, p, x), Root(root, Key("id", 1)));
         Assert.True(result.Contains(p, Key("id", 2)));
         Assert.False(result.Contains(x, Key("id", 3)));
@@ -391,13 +544,21 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         await using var scope = await _fixture.CreateScopeAsync();
         // cycle_a.b_id is validated by an immediate (non-NOT VALID) constraint, so the cyclic pair
         // must be inserted with the forward reference null first, then closed with an UPDATE.
-        await scope.ExecuteAsync("INSERT INTO cycle_a VALUES (1,NULL); INSERT INTO cycle_b VALUES (2,1); UPDATE cycle_a SET b_id = 2 WHERE id = 1;");
+        await scope.ExecuteAsync(
+            "INSERT INTO cycle_a VALUES (1,NULL); INSERT INTO cycle_b VALUES (2,1); UPDATE cycle_a SET b_id = 2 WHERE id = 1;"
+        );
         var (source, target) = await ReadAsync(scope);
         var a = source.Table("cycle_a").Definition;
         var b = source.Table("cycle_b").Definition;
         var ab = new ClosureRelationship(Fk(source, a, b));
         var ba = new ClosureRelationship(Fk(source, b, a));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(a, b));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(a, b)
+        );
         var r = await RunAsync(store, [ab, ba], Selections(a, b), Root(a, Key("id", 1)));
         Assert.Equal(2, r.Rows.Count);
     }
@@ -430,7 +591,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var g = source.Table("g").Definition;
         var cp = new ClosureRelationship(Fk(source, c, p));
         var pg = new ClosureRelationship(Fk(source, p, g));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(c, p, g));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(c, p, g)
+        );
         var r = await RunAsync(store, [cp, pg], Selections(c, p, g), Root(c, Key("id", 1)));
         Assert.Equal(0, Assert.Single(r.Rows, row => row.Table == c).Generation);
         Assert.Equal(1, Assert.Single(r.Rows, row => row.Table == p).Generation);
@@ -444,9 +611,27 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var c = T("C");
         var blocked = new TableDefinition("dbo", "Blocked", [], null, []);
         var e = new ClosureRelationship(F(c, blocked));
-        await using var store = new CountingClosureStore(new PostgreSqlClosureStore(scope.Source, scope.Target, new PostgreSqlSchemaSnapshot([], []), new PostgreSqlSchemaSnapshot([], []), new Dictionary<TableDefinition, StableKeySelection>()));
-        var request = new ClosureRequest([Root(c, K(1))], [e], new Dictionary<TableDefinition, StableKeySelection> { [c] = StableKeySelector.Select(c, null), [blocked] = StableKeySelection.NoStableKey });
-        await Assert.ThrowsAsync<BlockedTableException>(() => new DependencyClosure(store).ComputeAsync(request, CancellationToken.None));
+        await using var store = new CountingClosureStore(
+            new PostgreSqlClosureStore(
+                scope.Source,
+                scope.Target,
+                new PostgreSqlSchemaSnapshot([], []),
+                new PostgreSqlSchemaSnapshot([], []),
+                new Dictionary<TableDefinition, StableKeySelection>()
+            )
+        );
+        var request = new ClosureRequest(
+            [Root(c, K(1))],
+            [e],
+            new Dictionary<TableDefinition, StableKeySelection>
+            {
+                [c] = StableKeySelector.Select(c, null),
+                [blocked] = StableKeySelection.NoStableKey,
+            }
+        );
+        await Assert.ThrowsAsync<BlockedTableException>(() =>
+            new DependencyClosure(store).ComputeAsync(request, CancellationToken.None)
+        );
         Assert.Equal(0, store.SeedCalls);
     }
 
@@ -455,9 +640,19 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
     {
         await using var scope = await _fixture.CreateScopeAsync();
         var c = T("C");
-        await using var store = new CountingClosureStore(new PostgreSqlClosureStore(scope.Source, scope.Target, new PostgreSqlSchemaSnapshot([], []), new PostgreSqlSchemaSnapshot([], []), new Dictionary<TableDefinition, StableKeySelection>()));
+        await using var store = new CountingClosureStore(
+            new PostgreSqlClosureStore(
+                scope.Source,
+                scope.Target,
+                new PostgreSqlSchemaSnapshot([], []),
+                new PostgreSqlSchemaSnapshot([], []),
+                new Dictionary<TableDefinition, StableKeySelection>()
+            )
+        );
         var request = new ClosureRequest([Root(c, K(1))], [], new Dictionary<TableDefinition, StableKeySelection>());
-        await Assert.ThrowsAsync<BlockedTableException>(() => new DependencyClosure(store).ComputeAsync(request, CancellationToken.None));
+        await Assert.ThrowsAsync<BlockedTableException>(() =>
+            new DependencyClosure(store).ComputeAsync(request, CancellationToken.None)
+        );
         Assert.Equal(0, store.SeedCalls);
     }
 
@@ -469,7 +664,10 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var (source, target) = await ReadAsync(scope);
         var c = source.Table("unique_only").Definition;
         var constraintName = Assert.Single(c.UniqueConstraints).Name;
-        var selections = new Dictionary<TableDefinition, StableKeySelection> { [c] = StableKeySelector.Select(c, constraintName) };
+        var selections = new Dictionary<TableDefinition, StableKeySelection>
+        {
+            [c] = StableKeySelector.Select(c, constraintName),
+        };
         await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, selections);
         var request = new ClosureRequest([Root(c, Key("code", "abc"))], [], selections);
         var r = await new DependencyClosure(store).ComputeAsync(request, CancellationToken.None);
@@ -482,9 +680,23 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         await using var scope = await _fixture.CreateScopeAsync();
         var unique = new UniqueConstraint("UQ_Code", ["Code"]);
         var c = new TableDefinition("dbo", "C", [new ColumnDefinition("Code", typeof(string), true)], null, [unique]);
-        await using var store = new CountingClosureStore(new PostgreSqlClosureStore(scope.Source, scope.Target, new PostgreSqlSchemaSnapshot([], []), new PostgreSqlSchemaSnapshot([], []), new Dictionary<TableDefinition, StableKeySelection>()));
-        var request = new ClosureRequest([Root(c, K(1))], [], new Dictionary<TableDefinition, StableKeySelection> { [c] = StableKeySelector.Select(c, "UQ_Code") });
-        await Assert.ThrowsAsync<BlockedTableException>(() => new DependencyClosure(store).ComputeAsync(request, CancellationToken.None));
+        await using var store = new CountingClosureStore(
+            new PostgreSqlClosureStore(
+                scope.Source,
+                scope.Target,
+                new PostgreSqlSchemaSnapshot([], []),
+                new PostgreSqlSchemaSnapshot([], []),
+                new Dictionary<TableDefinition, StableKeySelection>()
+            )
+        );
+        var request = new ClosureRequest(
+            [Root(c, K(1))],
+            [],
+            new Dictionary<TableDefinition, StableKeySelection> { [c] = StableKeySelector.Select(c, "UQ_Code") }
+        );
+        await Assert.ThrowsAsync<BlockedTableException>(() =>
+            new DependencyClosure(store).ComputeAsync(request, CancellationToken.None)
+        );
         Assert.Equal(0, store.SeedCalls);
     }
 
@@ -493,10 +705,30 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
     {
         await using var scope = await _fixture.CreateScopeAsync();
         var nonPrimaryConstraint = new UniqueConstraint("UQ_Other", ["Code"]);
-        var c = new TableDefinition("dbo", "C", [new ColumnDefinition("Code", typeof(string), true)], null, [nonPrimaryConstraint]);
-        await using var store = new CountingClosureStore(new PostgreSqlClosureStore(scope.Source, scope.Target, new PostgreSqlSchemaSnapshot([], []), new PostgreSqlSchemaSnapshot([], []), new Dictionary<TableDefinition, StableKeySelection>()));
-        var request = new ClosureRequest([Root(c, K(1))], [], new Dictionary<TableDefinition, StableKeySelection> { [c] = new StableKeySelection(nonPrimaryConstraint) });
-        await Assert.ThrowsAsync<BlockedTableException>(() => new DependencyClosure(store).ComputeAsync(request, CancellationToken.None));
+        var c = new TableDefinition(
+            "dbo",
+            "C",
+            [new ColumnDefinition("Code", typeof(string), true)],
+            null,
+            [nonPrimaryConstraint]
+        );
+        await using var store = new CountingClosureStore(
+            new PostgreSqlClosureStore(
+                scope.Source,
+                scope.Target,
+                new PostgreSqlSchemaSnapshot([], []),
+                new PostgreSqlSchemaSnapshot([], []),
+                new Dictionary<TableDefinition, StableKeySelection>()
+            )
+        );
+        var request = new ClosureRequest(
+            [Root(c, K(1))],
+            [],
+            new Dictionary<TableDefinition, StableKeySelection> { [c] = new StableKeySelection(nonPrimaryConstraint) }
+        );
+        await Assert.ThrowsAsync<BlockedTableException>(() =>
+            new DependencyClosure(store).ComputeAsync(request, CancellationToken.None)
+        );
         Assert.Equal(0, store.SeedCalls);
     }
 
@@ -505,10 +737,30 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
     {
         await using var scope = await _fixture.CreateScopeAsync();
         var constraint = new UniqueConstraint("UQ_Missing", ["MissingColumn"]);
-        var c = new TableDefinition("dbo", "C", [new ColumnDefinition("Code", typeof(string), false)], null, [constraint]);
-        await using var store = new CountingClosureStore(new PostgreSqlClosureStore(scope.Source, scope.Target, new PostgreSqlSchemaSnapshot([], []), new PostgreSqlSchemaSnapshot([], []), new Dictionary<TableDefinition, StableKeySelection>()));
-        var request = new ClosureRequest([Root(c, K(1))], [], new Dictionary<TableDefinition, StableKeySelection> { [c] = new StableKeySelection(constraint) });
-        await Assert.ThrowsAsync<BlockedTableException>(() => new DependencyClosure(store).ComputeAsync(request, CancellationToken.None));
+        var c = new TableDefinition(
+            "dbo",
+            "C",
+            [new ColumnDefinition("Code", typeof(string), false)],
+            null,
+            [constraint]
+        );
+        await using var store = new CountingClosureStore(
+            new PostgreSqlClosureStore(
+                scope.Source,
+                scope.Target,
+                new PostgreSqlSchemaSnapshot([], []),
+                new PostgreSqlSchemaSnapshot([], []),
+                new Dictionary<TableDefinition, StableKeySelection>()
+            )
+        );
+        var request = new ClosureRequest(
+            [Root(c, K(1))],
+            [],
+            new Dictionary<TableDefinition, StableKeySelection> { [c] = new StableKeySelection(constraint) }
+        );
+        await Assert.ThrowsAsync<BlockedTableException>(() =>
+            new DependencyClosure(store).ComputeAsync(request, CancellationToken.None)
+        );
         Assert.Equal(0, store.SeedCalls);
     }
 
@@ -525,8 +777,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         await BothAsync(scope, "CREATE TABLE x (id integer PRIMARY KEY)");
         await BothAsync(scope, "CREATE TABLE a (id integer PRIMARY KEY, xid integer NULL REFERENCES x(id))");
         await BothAsync(scope, "CREATE TABLE b (id integer PRIMARY KEY, xid integer NOT NULL REFERENCES x(id))");
-        await BothAsync(scope, "CREATE TABLE r (id integer PRIMARY KEY, aid integer NOT NULL REFERENCES a(id), bid integer NOT NULL REFERENCES b(id))");
-        await scope.ExecuteAsync("INSERT INTO x VALUES (4); INSERT INTO a VALUES (2,4); INSERT INTO b VALUES (3,4); INSERT INTO r VALUES (1,2,3);");
+        await BothAsync(
+            scope,
+            "CREATE TABLE r (id integer PRIMARY KEY, aid integer NOT NULL REFERENCES a(id), bid integer NOT NULL REFERENCES b(id))"
+        );
+        await scope.ExecuteAsync(
+            "INSERT INTO x VALUES (4); INSERT INTO a VALUES (2,4); INSERT INTO b VALUES (3,4); INSERT INTO r VALUES (1,2,3);"
+        );
         await scope.ExecuteTargetAsync("INSERT INTO a VALUES (2,NULL);"); // a present and its (validated) constraint is satisfied without needing x to exist in target
         var (source, target) = await ReadAsync(scope);
         var root = source.Table("r").Definition;
@@ -537,7 +794,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var rb = new ClosureRelationship(Fk(source, root, b));
         var ax = new ClosureRelationship(Fk(source, a, x));
         var bx = new ClosureRelationship(Fk(source, b, x));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(root, a, b, x));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(root, a, b, x)
+        );
         var result = await RunAsync(store, [ra, rb, ax, bx], Selections(root, a, b, x), Root(root, Key("id", 1)));
         Assert.True(result.Contains(x, Key("id", 4)));
     }
@@ -551,8 +814,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         await BothAsync(scope, "CREATE TABLE x (id integer PRIMARY KEY)");
         await BothAsync(scope, "CREATE TABLE a (id integer PRIMARY KEY, xid integer NOT NULL REFERENCES x(id))");
         await BothAsync(scope, "CREATE TABLE b (id integer PRIMARY KEY, xid integer NOT NULL REFERENCES x(id))");
-        await BothAsync(scope, "CREATE TABLE r (id integer PRIMARY KEY, aid integer NOT NULL REFERENCES a(id), bid integer NOT NULL REFERENCES b(id))");
-        await scope.ExecuteAsync("INSERT INTO x VALUES (4); INSERT INTO a VALUES (2,4); INSERT INTO b VALUES (3,4); INSERT INTO r VALUES (1,2,3);");
+        await BothAsync(
+            scope,
+            "CREATE TABLE r (id integer PRIMARY KEY, aid integer NOT NULL REFERENCES a(id), bid integer NOT NULL REFERENCES b(id))"
+        );
+        await scope.ExecuteAsync(
+            "INSERT INTO x VALUES (4); INSERT INTO a VALUES (2,4); INSERT INTO b VALUES (3,4); INSERT INTO r VALUES (1,2,3);"
+        );
         var (source, target) = await ReadAsync(scope);
         var root = source.Table("r").Definition;
         var a = source.Table("a").Definition;
@@ -562,7 +830,13 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var rb = new ClosureRelationship(Fk(source, root, b));
         var ax = new ClosureRelationship(Fk(source, a, x));
         var bx = new ClosureRelationship(Fk(source, b, x));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, Selections(root, a, b, x));
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            Selections(root, a, b, x)
+        );
         var result = await RunAsync(store, [ra, rb, ax, bx], Selections(root, a, b, x), Root(root, Key("id", 1)));
         Assert.Single(result.Rows, row => row.Table == x && row.Key == Key("id", 4));
     }
@@ -573,30 +847,53 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         await scope.ExecuteTargetAsync(sql);
     }
 
-    private static async Task<(PostgreSqlSchemaSnapshot Source, PostgreSqlSchemaSnapshot Target)> ReadAsync(PostgreSqlClosureScope scope)
+    private static async Task<(PostgreSqlSchemaSnapshot Source, PostgreSqlSchemaSnapshot Target)> ReadAsync(
+        PostgreSqlClosureScope scope
+    )
     {
         var source = await new PostgreSqlCatalogReader(scope.Source).ReadAsync(scope.Schema, CancellationToken.None);
         var target = await new PostgreSqlCatalogReader(scope.Target).ReadAsync(scope.Schema, CancellationToken.None);
         return (source, target);
     }
 
-    private static ForeignKeyDefinition Fk(PostgreSqlSchemaSnapshot catalog, TableDefinition child, TableDefinition parent) =>
-        catalog.ForeignKeys.Single(x => x.ChildTable == child && x.ParentTable == parent);
+    private static ForeignKeyDefinition Fk(
+        PostgreSqlSchemaSnapshot catalog,
+        TableDefinition child,
+        TableDefinition parent
+    ) => catalog.ForeignKeys.Single(x => x.ChildTable == child && x.ParentTable == parent);
 
-    private static IReadOnlyDictionary<TableDefinition, StableKeySelection> Selections(params TableDefinition[] tables) =>
-        tables.Distinct().ToDictionary(t => t, t => StableKeySelector.Select(t, null));
+    private static IReadOnlyDictionary<TableDefinition, StableKeySelection> Selections(
+        params TableDefinition[] tables
+    ) => tables.Distinct().ToDictionary(t => t, t => StableKeySelector.Select(t, null));
 
-    private static ClosureRoot Root(TableDefinition table, StableKey key, RootConflictPolicy policy = RootConflictPolicy.FailOnConflict) =>
-        new(table, [key], policy);
+    private static ClosureRoot Root(
+        TableDefinition table,
+        StableKey key,
+        RootConflictPolicy policy = RootConflictPolicy.FailOnConflict
+    ) => new(table, [key], policy);
 
     private static StableKey Key(string column, object? value) => new([new KeyComponent(column, value)]);
 
-    private static Task<ClosureResult> RunAsync(IClosureStore store, IReadOnlyCollection<ClosureRelationship> relationships, IReadOnlyDictionary<TableDefinition, StableKeySelection> selections, params ClosureRoot[] roots) =>
-        new DependencyClosure(store).ComputeAsync(new ClosureRequest(roots, relationships, selections), CancellationToken.None);
+    private static Task<ClosureResult> RunAsync(
+        IClosureStore store,
+        IReadOnlyCollection<ClosureRelationship> relationships,
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> selections,
+        params ClosureRoot[] roots
+    ) =>
+        new DependencyClosure(store).ComputeAsync(
+            new ClosureRequest(roots, relationships, selections),
+            CancellationToken.None
+        );
 
     // Verbatim from the fake's synthetic fixtures — these tests never reach a store, real or fake.
     private static TableDefinition T(string name, string[]? uniqueColumns = null) =>
-        new("dbo", name, [], new UniqueConstraint($"PK_{name}", ["K1"]), uniqueColumns is null ? [] : [new UniqueConstraint($"UQ_{name}", uniqueColumns)]);
+        new(
+            "dbo",
+            name,
+            [],
+            new UniqueConstraint($"PK_{name}", ["K1"]),
+            uniqueColumns is null ? [] : [new UniqueConstraint($"UQ_{name}", uniqueColumns)]
+        );
 
     private static StableKey K(params object?[] values) =>
         new(values.Select((value, index) => new KeyComponent($"K{index + 1}", value)));
@@ -608,21 +905,37 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
     {
         public int SeedCalls { get; private set; }
 
-        public Task<IReadOnlyCollection<StableKey>> SeedRootKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken)
+        public Task<IReadOnlyCollection<StableKey>> SeedRootKeysAsync(
+            TableDefinition table,
+            IReadOnlyCollection<StableKey> keys,
+            CancellationToken cancellationToken
+        )
         {
             SeedCalls++;
             return inner.SeedRootKeysAsync(table, keys, cancellationToken);
         }
 
-        public Task<IReadOnlyDictionary<StableKey, TargetProbe>> ProbeTargetAsync(TableDefinition table, IReadOnlyCollection<ClosureRelationship> outgoingRelationships, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken) =>
-            inner.ProbeTargetAsync(table, outgoingRelationships, keys, cancellationToken);
+        public Task<IReadOnlyDictionary<StableKey, TargetProbe>> ProbeTargetAsync(
+            TableDefinition table,
+            IReadOnlyCollection<ClosureRelationship> outgoingRelationships,
+            IReadOnlyCollection<StableKey> keys,
+            CancellationToken cancellationToken
+        ) => inner.ProbeTargetAsync(table, outgoingRelationships, keys, cancellationToken);
 
-        public Task<IReadOnlyCollection<StableKey>> ExpandAsync(ClosureRelationship relationship, IReadOnlyCollection<StableKey> fromKeys, CancellationToken cancellationToken) =>
-            inner.ExpandAsync(relationship, fromKeys, cancellationToken);
+        public Task<IReadOnlyCollection<StableKey>> ExpandAsync(
+            ClosureRelationship relationship,
+            IReadOnlyCollection<StableKey> fromKeys,
+            CancellationToken cancellationToken
+        ) => inner.ExpandAsync(relationship, fromKeys, cancellationToken);
 
-        public Task<IReadOnlyCollection<StableKey>> InsertNewKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, int generation, CancellationToken cancellationToken) =>
-            inner.InsertNewKeysAsync(table, keys, generation, cancellationToken);
+        public Task<IReadOnlyCollection<StableKey>> InsertNewKeysAsync(
+            TableDefinition table,
+            IReadOnlyCollection<StableKey> keys,
+            int generation,
+            CancellationToken cancellationToken
+        ) => inner.InsertNewKeysAsync(table, keys, generation, cancellationToken);
 
-        public ValueTask DisposeAsync() => inner is IAsyncDisposable disposable ? disposable.DisposeAsync() : ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() =>
+            inner is IAsyncDisposable disposable ? disposable.DisposeAsync() : ValueTask.CompletedTask;
     }
 }

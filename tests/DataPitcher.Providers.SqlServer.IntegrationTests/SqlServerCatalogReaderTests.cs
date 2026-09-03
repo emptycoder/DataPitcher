@@ -10,10 +10,22 @@ public sealed class SqlServerCatalogReaderTests(SqlServerClosureFixture fixture)
     public async Task ReadAsync_UsesConstraintOrderAndReadsTrustInThreeCommands()
     {
         await using var scope = await fixture.CreateScopeAsync();
-        await using var wire = await SqlServerWireCommandRecorder.StartAsync(scope.SourceAdminConnectionString, "DataPitcher.Catalog");
-        var source = await new SqlServerCatalogReader(scope.SourceConnectionString).ReadAsync("dbo", CancellationToken.None);
-        var target = await new SqlServerCatalogReader(scope.TargetConnectionString).ReadAsync("dbo", CancellationToken.None);
-        Assert.Equal(["physical_second", "physical_first"], source.Table("declared_key").Definition.PrimaryKey!.Columns);
+        await using var wire = await SqlServerWireCommandRecorder.StartAsync(
+            scope.SourceAdminConnectionString,
+            "DataPitcher.Catalog"
+        );
+        var source = await new SqlServerCatalogReader(scope.SourceConnectionString).ReadAsync(
+            "dbo",
+            CancellationToken.None
+        );
+        var target = await new SqlServerCatalogReader(scope.TargetConnectionString).ReadAsync(
+            "dbo",
+            CancellationToken.None
+        );
+        Assert.Equal(
+            ["physical_second", "physical_first"],
+            source.Table("declared_key").Definition.PrimaryKey!.Columns
+        );
         Assert.Equal(typeof(int), source.Table("optional_orders").Column("customer_id").ClrType);
         Assert.True(source.Table("optional_orders").Column("customer_id").IsNullable);
         Assert.Null(source.Table("unique_only").Definition.PrimaryKey);
@@ -29,7 +41,9 @@ public sealed class SqlServerCatalogReaderTests(SqlServerClosureFixture fixture)
     public async Task ReadAsync_WhenColumnTypeIsUnmapped_ThrowsNotSupportedException()
     {
         await using var scope = await fixture.CreateScopeAsync();
-        await scope.ExecuteAsync("CREATE TABLE dbo.unmapped_type (id int NOT NULL PRIMARY KEY, amount decimal(18,2) NOT NULL)");
+        await scope.ExecuteAsync(
+            "CREATE TABLE dbo.unmapped_type (id int NOT NULL PRIMARY KEY, amount decimal(18,2) NOT NULL)"
+        );
         var reader = new SqlServerCatalogReader(scope.SourceConnectionString);
 
         await Assert.ThrowsAsync<NotSupportedException>(() => reader.ReadAsync("dbo", CancellationToken.None));
@@ -39,9 +53,13 @@ public sealed class SqlServerCatalogReaderTests(SqlServerClosureFixture fixture)
     public async Task ReadAsync_ReportsGeneratedAndBinaryColumns()
     {
         await using var scope = await fixture.CreateScopeAsync();
-        await scope.ExecuteAsync("CREATE TABLE dbo.preview_metadata (id int PRIMARY KEY, payload varbinary(max) NOT NULL, calculated AS id + 1)");
+        await scope.ExecuteAsync(
+            "CREATE TABLE dbo.preview_metadata (id int PRIMARY KEY, payload varbinary(max) NOT NULL, calculated AS id + 1)"
+        );
 
-        var table = (await new SqlServerCatalogReader(scope.SourceConnectionString).ReadAsync("dbo", CancellationToken.None)).Table("preview_metadata");
+        var table = (
+            await new SqlServerCatalogReader(scope.SourceConnectionString).ReadAsync("dbo", CancellationToken.None)
+        ).Table("preview_metadata");
 
         Assert.Equal(typeof(byte[]), table.Column("payload").ClrType);
         Assert.True(table.Column("calculated").IsGenerated);
@@ -51,7 +69,10 @@ public sealed class SqlServerCatalogReaderTests(SqlServerClosureFixture fixture)
     public async Task ReadAsync_UsesThreeTaggedMetadataCommandsRegardlessOfAddedTableCount()
     {
         await using var scope = await fixture.CreateScopeAsync();
-        await using var wire = await SqlServerWireCommandRecorder.StartAsync(scope.SourceAdminConnectionString, "DataPitcher.Catalog");
+        await using var wire = await SqlServerWireCommandRecorder.StartAsync(
+            scope.SourceAdminConnectionString,
+            "DataPitcher.Catalog"
+        );
 
         await new SqlServerCatalogReader(scope.SourceConnectionString).ReadAsync("dbo", CancellationToken.None);
         var initialCommandCount = await wire.Count("DataPitcher.Catalog");

@@ -16,7 +16,16 @@ public sealed class PlanStoreTests
         var sourceConnectionId = Guid.NewGuid();
         var targetConnectionId = Guid.NewGuid();
 
-        _ = await store.SaveAsync(planId, "Plan", null, "\"0\"", CancellationToken.None, selectionId, sourceConnectionId, targetConnectionId);
+        _ = await store.SaveAsync(
+            planId,
+            "Plan",
+            null,
+            "\"0\"",
+            CancellationToken.None,
+            selectionId,
+            sourceConnectionId,
+            targetConnectionId
+        );
         var plan = await store.FindAsync(planId, CancellationToken.None);
 
         Assert.Equal(selectionId, plan!.SelectionId);
@@ -36,7 +45,16 @@ public sealed class PlanStoreTests
         var targetConnectionId = Guid.NewGuid();
         _ = await store.SaveAsync(planId, "Plan", null, "\"0\"", CancellationToken.None);
 
-        _ = await store.SaveAsync(planId, "Plan", null, "\"1\"", CancellationToken.None, selectionId, sourceConnectionId, targetConnectionId);
+        _ = await store.SaveAsync(
+            planId,
+            "Plan",
+            null,
+            "\"1\"",
+            CancellationToken.None,
+            selectionId,
+            sourceConnectionId,
+            targetConnectionId
+        );
         var plan = await store.FindAsync(planId, CancellationToken.None);
 
         Assert.Equal(selectionId, plan!.SelectionId);

@@ -4,7 +4,12 @@ namespace DataPitcher.Infrastructure.Worker;
 
 public sealed class LeaseRenewer(LeaseStore leases, IWorkerDelay delay)
 {
-    public async Task RunAsync(LeaseGrant lease, TimeSpan ttl, CancellationTokenSource leaseLost, CancellationToken stopToken)
+    public async Task RunAsync(
+        LeaseGrant lease,
+        TimeSpan ttl,
+        CancellationTokenSource leaseLost,
+        CancellationToken stopToken
+    )
     {
         var current = lease;
         try
@@ -13,7 +18,11 @@ public sealed class LeaseRenewer(LeaseStore leases, IWorkerDelay delay)
             {
                 await delay.UntilAsync(current.RenewAfterUtc, stopToken);
                 var renewed = leases.RenewIfDue(current, ttl);
-                if (renewed is null) { leaseLost.Cancel(); return; }
+                if (renewed is null)
+                {
+                    leaseLost.Cancel();
+                    return;
+                }
                 current = renewed;
             }
         }

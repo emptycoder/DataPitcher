@@ -16,12 +16,24 @@ public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosur
     public async Task ExpandAsync_UsesForeignKeyPositionRatherThanPhysicalColumnOrder()
     {
         await using var scope = await _fixture.CreateScopeAsync();
-        await scope.ExecuteAsync("INSERT INTO composite_parent VALUES (7,8); INSERT INTO composite_child VALUES (1,8,7);");
+        await scope.ExecuteAsync(
+            "INSERT INTO composite_parent VALUES (7,8); INSERT INTO composite_child VALUES (1,8,7);"
+        );
         var catalog = await new PostgreSqlCatalogReader(scope.Source).ReadAsync(scope.Schema, CancellationToken.None);
         var child = catalog.Table("composite_child").Definition;
         var parent = catalog.Table("composite_parent").Definition;
         var relationship = new ClosureRelationship(catalog.ForeignKey("fk_composite_child_parent"));
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, catalog, catalog, new Dictionary<TableDefinition, StableKeySelection> { [child] = StableKeySelector.Select(child, null), [parent] = StableKeySelector.Select(parent, null) });
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            catalog,
+            catalog,
+            new Dictionary<TableDefinition, StableKeySelection>
+            {
+                [child] = StableKeySelector.Select(child, null),
+                [parent] = StableKeySelector.Select(parent, null),
+            }
+        );
         var result = await store.ExpandAsync(relationship, [new StableKey([new("id", 1)])], CancellationToken.None);
         Assert.Contains(result, key => key == new StableKey([new("left_value", 7), new("right_value", 8)]));
     }
@@ -36,9 +48,17 @@ public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosur
         var orders = catalog.Table("orders").Definition;
         var foreignKey = catalog.ForeignKeys.Single(fk => fk.ChildTable == orders && fk.ParentTable == customers);
         var relationship = new ClosureRelationship(foreignKey, isInbound: true);
-        var selections = new Dictionary<TableDefinition, StableKeySelection> { [customers] = StableKeySelector.Select(customers, null), [orders] = StableKeySelector.Select(orders, null) };
+        var selections = new Dictionary<TableDefinition, StableKeySelection>
+        {
+            [customers] = StableKeySelector.Select(customers, null),
+            [orders] = StableKeySelector.Select(orders, null),
+        };
         await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, catalog, catalog, selections);
-        var result = await store.ExpandAsync(relationship, [new StableKey([new("customer_id", 1)])], CancellationToken.None);
+        var result = await store.ExpandAsync(
+            relationship,
+            [new StableKey([new("customer_id", 1)])],
+            CancellationToken.None
+        );
         Assert.Contains(result, key => key == new StableKey([new("order_id", 10)]));
     }
 
@@ -48,7 +68,10 @@ public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosur
         await using var scope = await _fixture.CreateScopeAsync();
         var source = await new PostgreSqlCatalogReader(scope.Source).ReadAsync(scope.Schema, CancellationToken.None);
         var customers = source.Table("customers").Definition;
-        var selections = new Dictionary<TableDefinition, StableKeySelection> { [customers] = StableKeySelector.Select(customers, null) };
+        var selections = new Dictionary<TableDefinition, StableKeySelection>
+        {
+            [customers] = StableKeySelector.Select(customers, null),
+        };
         await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, source, selections);
         var key = new StableKey([new("customer_id", 1)]);
         Assert.Single(await store.SeedRootKeysAsync(customers, [key], CancellationToken.None));
@@ -64,12 +87,27 @@ public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosur
         var parents = source.Table("untrusted_parents").Definition;
         var grandparents = source.Table("untrusted_grandparents").Definition;
         var relationship = new ClosureRelationship(source.ForeignKey("FK_P_G"));
-        var manual = ClosureRelationship.Manual("manual-relationship", parents, grandparents, ["grandparent_id"], ["id"]);
-        var selections = new Dictionary<TableDefinition, StableKeySelection> { [parents] = StableKeySelector.Select(parents, null), [grandparents] = StableKeySelector.Select(grandparents, null) };
+        var manual = ClosureRelationship.Manual(
+            "manual-relationship",
+            parents,
+            grandparents,
+            ["grandparent_id"],
+            ["id"]
+        );
+        var selections = new Dictionary<TableDefinition, StableKeySelection>
+        {
+            [parents] = StableKeySelector.Select(parents, null),
+            [grandparents] = StableKeySelector.Select(grandparents, null),
+        };
         await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, target, selections);
         var present = new StableKey([new("id", 2)]);
         var absent = new StableKey([new("id", 999)]);
-        var probes = await store.ProbeTargetAsync(parents, [relationship, manual], [present, absent], CancellationToken.None);
+        var probes = await store.ProbeTargetAsync(
+            parents,
+            [relationship, manual],
+            [present, absent],
+            CancellationToken.None
+        );
         Assert.True(probes[present].Exists);
         Assert.False(probes[absent].Exists);
         var state = probes[present].Constraints[relationship];
@@ -91,8 +129,18 @@ public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosur
         var customers = source.Table("customers").Definition;
         var foreignKey = source.ForeignKeys.Single(fk => fk.ChildTable == orders && fk.ParentTable == customers);
         var relationship = new ClosureRelationship(foreignKey);
-        var selections = new Dictionary<TableDefinition, StableKeySelection> { [orders] = StableKeySelector.Select(orders, null), [customers] = StableKeySelector.Select(customers, null) };
-        await using var store = new PostgreSqlClosureStore(scope.Source, scope.Target, source, strippedTarget, selections);
+        var selections = new Dictionary<TableDefinition, StableKeySelection>
+        {
+            [orders] = StableKeySelector.Select(orders, null),
+            [customers] = StableKeySelector.Select(customers, null),
+        };
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            strippedTarget,
+            selections
+        );
         var key = new StableKey([new("order_id", 1)]);
         var probes = await store.ProbeTargetAsync(orders, [relationship], [key], CancellationToken.None);
         Assert.False(probes[key].Constraints[relationship].IsPresent);

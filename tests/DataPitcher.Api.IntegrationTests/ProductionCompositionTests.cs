@@ -51,7 +51,8 @@ public sealed class ProductionCompositionTests
         }
         finally
         {
-            if (File.Exists(databasePath)) File.Delete(databasePath);
+            if (File.Exists(databasePath))
+                File.Delete(databasePath);
         }
     }
 
@@ -60,17 +61,26 @@ public sealed class ProductionCompositionTests
     {
         var services = new ServiceCollection();
 
-        Assert.Throws<InvalidOperationException>(() => services.AddDataPitcherComposition(new ConfigurationBuilder().Build()));
+        Assert.Throws<InvalidOperationException>(() =>
+            services.AddDataPitcherComposition(new ConfigurationBuilder().Build())
+        );
     }
 
     [Fact]
     public void AddDataPitcherComposition_RequiresTheSecretsRoot()
     {
         var services = new ServiceCollection();
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["ControlDatabase:Path"] = Path.Combine(Path.GetTempPath(), $"datapitcher-missing-secret-{Guid.NewGuid():N}.db"),
-        }).Build();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["ControlDatabase:Path"] = Path.Combine(
+                        Path.GetTempPath(),
+                        $"datapitcher-missing-secret-{Guid.NewGuid():N}.db"
+                    ),
+                }
+            )
+            .Build();
 
         Assert.Throws<InvalidOperationException>(() => services.AddDataPitcherComposition(configuration));
     }
@@ -81,7 +91,9 @@ public sealed class ProductionCompositionTests
         var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("exp", "0")]));
         var grants = new DevelopmentResourceAccessGrantReader();
 
-        Assert.True(await grants.IsGrantedAsync(principal, new ConnectionResource(Guid.NewGuid()), CancellationToken.None));
+        Assert.True(
+            await grants.IsGrantedAsync(principal, new ConnectionResource(Guid.NewGuid()), CancellationToken.None)
+        );
         Assert.Equal(DateTimeOffset.UnixEpoch, new DevelopmentValidatedAccessTokenLifetime().GetExpiryUtc(principal));
     }
 
@@ -89,7 +101,9 @@ public sealed class ProductionCompositionTests
     public void DevelopmentAccessDefaults_UseAShortExpiryWhenTheExpiryClaimIsInvalid()
     {
         var before = DateTimeOffset.UtcNow;
-        var expiry = new DevelopmentValidatedAccessTokenLifetime().GetExpiryUtc(new ClaimsPrincipal(new ClaimsIdentity([new Claim("exp", "invalid")])));
+        var expiry = new DevelopmentValidatedAccessTokenLifetime().GetExpiryUtc(
+            new ClaimsPrincipal(new ClaimsIdentity([new Claim("exp", "invalid")]))
+        );
         var after = DateTimeOffset.UtcNow;
 
         Assert.InRange(expiry, before.AddMinutes(5), after.AddMinutes(5));
@@ -101,12 +115,19 @@ public sealed class ProductionCompositionTests
         using var fixture = new ProductionApplicationFixture();
         var credentialId = Guid.NewGuid();
 
-        var created = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", credentialId, "connection-create"), CancellationToken.None);
+        var created = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", credentialId, "connection-create"),
+            CancellationToken.None
+        );
         var connections = await fixture.Application.ListConnectionsAsync(CancellationToken.None);
         var check = await fixture.Application.QueueConnectionCheckAsync(created.ConnectionId, CancellationToken.None);
         var scan = await fixture.Application.QueueSchemaScanAsync(created.ConnectionId, CancellationToken.None);
         var snapshotId = fixture.SeedSnapshot(created.ConnectionId);
-        var snapshot = await fixture.Application.GetSnapshotAsync(created.ConnectionId, snapshotId, CancellationToken.None);
+        var snapshot = await fixture.Application.GetSnapshotAsync(
+            created.ConnectionId,
+            snapshotId,
+            CancellationToken.None
+        );
         var profile = await fixture.Profiles.GetProfileAsync(created.ConnectionId, CancellationToken.None);
 
         Assert.Single(connections, connection => connection.ConnectionId == created.ConnectionId);
@@ -120,8 +141,14 @@ public sealed class ProductionCompositionTests
     public async Task DataPitcherApplication_ListsOnlyRequestedConnectionSnapshots()
     {
         using var fixture = new ProductionApplicationFixture();
-        var source = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"), CancellationToken.None);
-        var other = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Other", "postgresql", Guid.NewGuid(), "other-create"), CancellationToken.None);
+        var source = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"),
+            CancellationToken.None
+        );
+        var other = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Other", "postgresql", Guid.NewGuid(), "other-create"),
+            CancellationToken.None
+        );
         var sourceSnapshotId = fixture.SeedSnapshot(source.ConnectionId);
         _ = fixture.SeedSnapshot(other.ConnectionId);
 
@@ -135,11 +162,21 @@ public sealed class ProductionCompositionTests
     public async Task DataPitcherApplication_DoesNotFindSnapshotFromAnotherConnection()
     {
         using var fixture = new ProductionApplicationFixture();
-        var source = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"), CancellationToken.None);
-        var other = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Other", "postgresql", Guid.NewGuid(), "other-create"), CancellationToken.None);
+        var source = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"),
+            CancellationToken.None
+        );
+        var other = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Other", "postgresql", Guid.NewGuid(), "other-create"),
+            CancellationToken.None
+        );
         var otherSnapshotId = fixture.SeedSnapshot(other.ConnectionId);
 
-        var snapshot = await fixture.Application.FindSnapshotAsync(source.ConnectionId, otherSnapshotId, CancellationToken.None);
+        var snapshot = await fixture.Application.FindSnapshotAsync(
+            source.ConnectionId,
+            otherSnapshotId,
+            CancellationToken.None
+        );
 
         Assert.Null(snapshot);
     }
@@ -148,10 +185,20 @@ public sealed class ProductionCompositionTests
     public async Task DataPitcherApplication_ProjectsSchemaSnapshotContent()
     {
         using var fixture = new ProductionApplicationFixture();
-        var source = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"), CancellationToken.None);
-        var snapshotId = fixture.SeedSnapshot(source.ConnectionId, "{\"Tables\":[{\"Schema\":\"app\",\"Name\":\"Customers\",\"Columns\":[],\"PrimaryKey\":null,\"UniqueConstraints\":[]},{\"Schema\":\"app\",\"Name\":\"Orders\",\"Columns\":[{\"Name\":\"CustomerId\",\"StoreType\":\"integer\",\"ClrType\":\"System.Int32\",\"IsNullable\":false}],\"PrimaryKey\":{\"Name\":\"PK_Orders\",\"Columns\":[\"CustomerId\"]},\"UniqueConstraints\":[]}],\"ForeignKeys\":[{\"Name\":\"FK_Orders_Customers\",\"ChildTable\":{\"Schema\":\"app\",\"Name\":\"Orders\"},\"ParentTable\":{\"Schema\":\"app\",\"Name\":\"Customers\"},\"ChildColumns\":[\"CustomerId\"],\"ParentColumns\":[\"Id\"],\"IsEnforced\":true,\"IsTrusted\":true}],\"DatabaseIdentity\":\"database\",\"ProviderVersion\":\"version\"}");
+        var source = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source-create"),
+            CancellationToken.None
+        );
+        var snapshotId = fixture.SeedSnapshot(
+            source.ConnectionId,
+            "{\"Tables\":[{\"Schema\":\"app\",\"Name\":\"Customers\",\"Columns\":[],\"PrimaryKey\":null,\"UniqueConstraints\":[]},{\"Schema\":\"app\",\"Name\":\"Orders\",\"Columns\":[{\"Name\":\"CustomerId\",\"StoreType\":\"integer\",\"ClrType\":\"System.Int32\",\"IsNullable\":false}],\"PrimaryKey\":{\"Name\":\"PK_Orders\",\"Columns\":[\"CustomerId\"]},\"UniqueConstraints\":[]}],\"ForeignKeys\":[{\"Name\":\"FK_Orders_Customers\",\"ChildTable\":{\"Schema\":\"app\",\"Name\":\"Orders\"},\"ParentTable\":{\"Schema\":\"app\",\"Name\":\"Customers\"},\"ChildColumns\":[\"CustomerId\"],\"ParentColumns\":[\"Id\"],\"IsEnforced\":true,\"IsTrusted\":true}],\"DatabaseIdentity\":\"database\",\"ProviderVersion\":\"version\"}"
+        );
 
-        var snapshot = await fixture.Application.GetSnapshotAsync(source.ConnectionId, snapshotId, CancellationToken.None);
+        var snapshot = await fixture.Application.GetSnapshotAsync(
+            source.ConnectionId,
+            snapshotId,
+            CancellationToken.None
+        );
         var orders = Assert.Single(snapshot.Tables, table => table.Name == "Orders");
         var foreignKey = Assert.Single(snapshot.ForeignKeys);
 
@@ -166,9 +213,15 @@ public sealed class ProductionCompositionTests
         using var fixture = new ProductionApplicationFixture();
         var selectionId = Guid.NewGuid();
 
-        var saved = await fixture.Application.SaveSelectionAsync(selectionId, new SaveSelectionRequest("Selection", "{}", "ignored-on-create"), CancellationToken.None);
+        var saved = await fixture.Application.SaveSelectionAsync(
+            selectionId,
+            new SaveSelectionRequest("Selection", "{}", "ignored-on-create"),
+            CancellationToken.None
+        );
         var receipt = await fixture.Application.QueueSelectionEvaluationAsync(selectionId, CancellationToken.None);
-        var missing = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Application.QueueSelectionEvaluationAsync(Guid.NewGuid(), CancellationToken.None));
+        var missing = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Application.QueueSelectionEvaluationAsync(Guid.NewGuid(), CancellationToken.None)
+        );
 
         Assert.Equal(selectionId, saved.SelectionId);
         Assert.Equal("queued", receipt.State);
@@ -181,13 +234,25 @@ public sealed class ProductionCompositionTests
         using var fixture = new ProductionApplicationFixture();
         var planId = Guid.NewGuid();
 
-        var saved = await fixture.Application.SavePlanAsync(planId, new SavePlanRequest("Plan", null, "ignored-on-create"), CancellationToken.None);
+        var saved = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest("Plan", null, "ignored-on-create"),
+            CancellationToken.None
+        );
         var pendingReview = await fixture.Application.GetPlanReviewAsync(planId, CancellationToken.None);
         fixture.SetPlanHash(planId, "plan-hash");
         var review = await fixture.Application.GetPlanReviewAsync(planId, CancellationToken.None);
         var seal = await fixture.Application.QueuePlanSealAsync(planId, CancellationToken.None);
-        var inclusion = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Application.GetPlanInclusionPathAsync(planId, new InclusionPathRequest("app.Orders", "1"), CancellationToken.None));
-        var missing = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Application.QueuePlanSealAsync(Guid.NewGuid(), CancellationToken.None));
+        var inclusion = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Application.GetPlanInclusionPathAsync(
+                planId,
+                new InclusionPathRequest("app.Orders", "1"),
+                CancellationToken.None
+            )
+        );
+        var missing = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Application.QueuePlanSealAsync(Guid.NewGuid(), CancellationToken.None)
+        );
 
         Assert.Equal(1, saved.Version);
         Assert.Equal("", pendingReview.CanonicalHash);
@@ -202,9 +267,15 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
         var planId = Guid.NewGuid();
-        _ = await fixture.Application.SavePlanAsync(planId, new SavePlanRequest("Plan", null, "ignored-on-create"), CancellationToken.None);
+        _ = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest("Plan", null, "ignored-on-create"),
+            CancellationToken.None
+        );
 
-        var exception = await Assert.ThrowsAsync<PlanNotSealedException>(() => fixture.Application.StartJobAsync(planId, "job-start", CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<PlanNotSealedException>(() =>
+            fixture.Application.StartJobAsync(planId, "job-start", CancellationToken.None)
+        );
 
         Assert.Equal("Plan must be sealed before starting a job.", exception.Message);
     }
@@ -214,7 +285,9 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
 
-        var exception = await Assert.ThrowsAsync<PlanNotFoundException>(() => fixture.Application.StartJobAsync(Guid.NewGuid(), "job-start", CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<PlanNotFoundException>(() =>
+            fixture.Application.StartJobAsync(Guid.NewGuid(), "job-start", CancellationToken.None)
+        );
 
         Assert.Equal("Plan was not found.", exception.Message);
     }
@@ -223,13 +296,38 @@ public sealed class ProductionCompositionTests
     public async Task DataPitcherApplication_ReviewIncludesThePlanSelectionAndConnections()
     {
         using var fixture = new ProductionApplicationFixture();
-        var source = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source"), CancellationToken.None);
-        var target = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Target", "postgresql", Guid.NewGuid(), "target"), CancellationToken.None);
+        var source = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "source"),
+            CancellationToken.None
+        );
+        var target = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Target", "postgresql", Guid.NewGuid(), "target"),
+            CancellationToken.None
+        );
         var selectionId = Guid.NewGuid();
         var snapshotId = Guid.NewGuid();
-        _ = await fixture.Selections.SaveAsync(selectionId, "Selection", "{}", "ignored-on-create", CancellationToken.None, source.ConnectionId, snapshotId);
+        _ = await fixture.Selections.SaveAsync(
+            selectionId,
+            "Selection",
+            "{}",
+            "ignored-on-create",
+            CancellationToken.None,
+            source.ConnectionId,
+            snapshotId
+        );
         var planId = Guid.NewGuid();
-        _ = await fixture.Application.SavePlanAsync(planId, new SavePlanRequest("Plan", null, "ignored-on-create", selectionId, source.ConnectionId, target.ConnectionId), CancellationToken.None);
+        _ = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest(
+                "Plan",
+                null,
+                "ignored-on-create",
+                selectionId,
+                source.ConnectionId,
+                target.ConnectionId
+            ),
+            CancellationToken.None
+        );
 
         var review = await fixture.Application.GetPlanReviewAsync(planId, CancellationToken.None);
 
@@ -246,7 +344,13 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
 
-        var exception = await Assert.ThrowsAsync<ArgumentException>(() => fixture.Application.SavePlanAsync(Guid.NewGuid(), new SavePlanRequest("Plan", null, "ignored-on-create", Guid.NewGuid()), CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Application.SavePlanAsync(
+                Guid.NewGuid(),
+                new SavePlanRequest("Plan", null, "ignored-on-create", Guid.NewGuid()),
+                CancellationToken.None
+            )
+        );
 
         Assert.Equal("request", exception.ParamName);
     }
@@ -256,19 +360,40 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
         var planId = Guid.NewGuid();
-        _ = await fixture.Application.SavePlanAsync(planId, new SavePlanRequest("Plan", null, "ignored-on-create"), CancellationToken.None);
+        _ = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest("Plan", null, "ignored-on-create"),
+            CancellationToken.None
+        );
         await fixture.Plans.SealAsync(planId, SealedContent(), CancellationToken.None);
 
         var started = await fixture.Application.StartJobAsync(planId, "job-start", CancellationToken.None);
         var initial = await fixture.Application.GetJobAsync(started.JobId!.Value, CancellationToken.None);
-        await fixture.Events.AppendAsync(new JobEventAppend(started.JobId.Value, "progress", new JobEventPayload("Running", 10, 100)), CancellationToken.None);
+        await fixture.Events.AppendAsync(
+            new JobEventAppend(started.JobId.Value, "progress", new JobEventPayload("Running", 10, 100)),
+            CancellationToken.None
+        );
         var current = await fixture.Application.GetJobAsync(started.JobId.Value, CancellationToken.None);
-        var claim = await fixture.Jobs.TryClaimNextAsync("test-worker", TimeSpan.FromMinutes(1), CancellationToken.None) ?? throw new InvalidOperationException("Job was not claimed.");
+        var claim =
+            await fixture.Jobs.TryClaimNextAsync("test-worker", TimeSpan.FromMinutes(1), CancellationToken.None)
+            ?? throw new InvalidOperationException("Job was not claimed.");
         await fixture.Jobs.PrepareAsync(claim, CancellationToken.None);
         await fixture.Jobs.MarkRunningAsync(claim.Lease, CancellationToken.None);
-        _ = await fixture.Application.QueueJobCommandAsync(started.JobId.Value, JobCommand.Pause, CancellationToken.None);
-        _ = await fixture.Application.QueueJobCommandAsync(started.JobId.Value, JobCommand.Resume, CancellationToken.None);
-        _ = await fixture.Application.QueueJobCommandAsync(started.JobId.Value, JobCommand.Cancel, CancellationToken.None);
+        _ = await fixture.Application.QueueJobCommandAsync(
+            started.JobId.Value,
+            JobCommand.Pause,
+            CancellationToken.None
+        );
+        _ = await fixture.Application.QueueJobCommandAsync(
+            started.JobId.Value,
+            JobCommand.Resume,
+            CancellationToken.None
+        );
+        _ = await fixture.Application.QueueJobCommandAsync(
+            started.JobId.Value,
+            JobCommand.Cancel,
+            CancellationToken.None
+        );
 
         Assert.Equal(0, initial.RowsTransferred);
         Assert.Equal(10, current.RowsTransferred);
@@ -280,13 +405,34 @@ public sealed class ProductionCompositionTests
     [InlineData("Queued", false, false, null)]
     [InlineData("Completed", true, false, null)]
     [InlineData("Failed", true, true, "schema_scan_failed")]
-    public async Task DataPitcherApplication_ProjectsPersistedSchemaScanStatus(string state, bool finished, bool failed, string? failureCode)
+    public async Task DataPitcherApplication_ProjectsPersistedSchemaScanStatus(
+        string state,
+        bool finished,
+        bool failed,
+        string? failureCode
+    )
     {
         using var fixture = new ProductionApplicationFixture();
-        var connection = await fixture.Application.CreateConnectionAsync(new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "status-connection"), CancellationToken.None);
+        var connection = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest("Source", "postgresql", Guid.NewGuid(), "status-connection"),
+            CancellationToken.None
+        );
         var receipt = await fixture.Application.QueueSchemaScanAsync(connection.ConnectionId, CancellationToken.None);
         var snapshotId = Guid.NewGuid();
-        using (var database = fixture.Database.Open()) database.Execute("UPDATE SchemaScans SET State = @state, SnapshotId = @snapshotId, FailureCode = @failureCode WHERE ScanId = @scanId", new DataParameter[] { new("state", state), new("snapshotId", string.Equals(state, "Completed", StringComparison.Ordinal) ? snapshotId.ToString() : null), new("failureCode", failureCode), new("scanId", receipt.OperationId.ToString()) });
+        using (var database = fixture.Database.Open())
+            database.Execute(
+                "UPDATE SchemaScans SET State = @state, SnapshotId = @snapshotId, FailureCode = @failureCode WHERE ScanId = @scanId",
+                new DataParameter[]
+                {
+                    new("state", state),
+                    new(
+                        "snapshotId",
+                        string.Equals(state, "Completed", StringComparison.Ordinal) ? snapshotId.ToString() : null
+                    ),
+                    new("failureCode", failureCode),
+                    new("scanId", receipt.OperationId.ToString()),
+                }
+            );
 
         var status = await fixture.Application.GetOperationStatusAsync(receipt.OperationId, CancellationToken.None);
 
@@ -297,7 +443,10 @@ public sealed class ProductionCompositionTests
         Assert.Equal(finished, status.Finished);
         Assert.Equal(failed, status.Failed);
         Assert.Equal(failureCode, status.FailureCode);
-        Assert.Equal(string.Equals(state, "Completed", StringComparison.Ordinal) ? snapshotId : null, status.SnapshotId);
+        Assert.Equal(
+            string.Equals(state, "Completed", StringComparison.Ordinal) ? snapshotId : null,
+            status.SnapshotId
+        );
         Assert.Equal("/api/operations/" + receipt.OperationId, receipt.StatusUri.AbsolutePath);
     }
 
@@ -307,11 +456,29 @@ public sealed class ProductionCompositionTests
     [InlineData("Succeeded", true, false, null)]
     [InlineData("Failed", true, true, "worker_failed")]
     [InlineData("VerificationFailed", true, true, "verification_failed")]
-    public async Task DataPitcherApplication_ProjectsPersistedJobStatus(string state, bool finished, bool failed, string? failureCode)
+    public async Task DataPitcherApplication_ProjectsPersistedJobStatus(
+        string state,
+        bool finished,
+        bool failed,
+        string? failureCode
+    )
     {
         using var fixture = new ProductionApplicationFixture();
-        var receipt = await fixture.Application.StartJobAsync(Guid.NewGuid(), "status-job-" + state, CancellationToken.None);
-        using (var database = fixture.Database.Open()) database.Execute("UPDATE Jobs SET State = @state, FailureCode = @failureCode WHERE JobId = @jobId", new DataParameter[] { new("state", state), new("failureCode", failureCode), new("jobId", receipt.OperationId.ToString()) });
+        var receipt = await fixture.Application.StartJobAsync(
+            Guid.NewGuid(),
+            "status-job-" + state,
+            CancellationToken.None
+        );
+        using (var database = fixture.Database.Open())
+            database.Execute(
+                "UPDATE Jobs SET State = @state, FailureCode = @failureCode WHERE JobId = @jobId",
+                new DataParameter[]
+                {
+                    new("state", state),
+                    new("failureCode", failureCode),
+                    new("jobId", receipt.OperationId.ToString()),
+                }
+            );
 
         var status = await fixture.Application.GetOperationStatusAsync(receipt.OperationId, CancellationToken.None);
 
@@ -341,7 +508,11 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
         var planId = Guid.NewGuid();
-        _ = await fixture.Application.SavePlanAsync(planId, new SavePlanRequest("Plan", null, "plan-create"), CancellationToken.None);
+        _ = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest("Plan", null, "plan-create"),
+            CancellationToken.None
+        );
 
         var receipt = await fixture.Application.QueuePlanSealAsync(planId, CancellationToken.None);
         var status = await fixture.Application.GetOperationStatusAsync(receipt.OperationId, CancellationToken.None);
@@ -371,39 +542,50 @@ public sealed class ProductionCompositionTests
     {
         using var fixture = new ProductionApplicationFixture();
 
-        var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => fixture.Application.QueueJobCommandAsync(Guid.NewGuid(), (JobCommand)99, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            fixture.Application.QueueJobCommandAsync(Guid.NewGuid(), (JobCommand)99, CancellationToken.None)
+        );
 
         Assert.Equal("command", exception.ParamName);
     }
 
     private static IConfiguration Configuration(string databasePath, string secretsRoot) =>
-        new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["ControlDatabase:Path"] = databasePath,
-            ["Secrets:Root"] = secretsRoot,
-        }).Build();
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["ControlDatabase:Path"] = databasePath,
+                    ["Secrets:Root"] = secretsRoot,
+                }
+            )
+            .Build();
 
-    private static TransferPlanContent SealedContent() => new(
-        new ConnectionFingerprint("postgresql", "source", "source"),
-        new ConnectionFingerprint("postgresql", "target", "target"),
-        new SchemaSnapshotReference("source"),
-        new SchemaSnapshotReference("target"),
-        [],
-        [],
-        [],
-        ConsistencyMode.FrozenKeys,
-        TransferMode.DirectFast,
-        TriggerStrategy.Fire,
-        ConstraintStrategy.Enforce,
-        [],
-        [],
-        new BatchTarget(1, 1),
-        VerificationStrategy.Standard,
-        new ManifestCounts(0, 0, 0, 0));
+    private static TransferPlanContent SealedContent() =>
+        new(
+            new ConnectionFingerprint("postgresql", "source", "source"),
+            new ConnectionFingerprint("postgresql", "target", "target"),
+            new SchemaSnapshotReference("source"),
+            new SchemaSnapshotReference("target"),
+            [],
+            [],
+            [],
+            ConsistencyMode.FrozenKeys,
+            TransferMode.DirectFast,
+            TriggerStrategy.Fire,
+            ConstraintStrategy.Enforce,
+            [],
+            [],
+            new BatchTarget(1, 1),
+            VerificationStrategy.Standard,
+            new ManifestCounts(0, 0, 0, 0)
+        );
 
     private sealed class ProductionApplicationFixture : IDisposable
     {
-        private readonly string _databasePath = Path.Combine(Path.GetTempPath(), $"datapitcher-application-{Guid.NewGuid():N}.db");
+        private readonly string _databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"datapitcher-application-{Guid.NewGuid():N}.db"
+        );
 
         public ProductionApplicationFixture()
         {
@@ -418,12 +600,17 @@ public sealed class ProductionCompositionTests
             Plans = new PlanStore(Database, Clock);
             Application = new DataPitcherApplication(
                 Profiles,
-                new ConnectionHealthService(Profiles, new SecretReferenceResolver(Path.GetTempPath()), new ConnectionProviderRegistry([new PostgreSqlConnectionProvider()])),
+                new ConnectionHealthService(
+                    Profiles,
+                    new SecretReferenceResolver(Path.GetTempPath()),
+                    new ConnectionProviderRegistry([new PostgreSqlConnectionProvider()])
+                ),
                 snapshots,
                 Selections,
                 Plans,
                 Jobs,
-                Events);
+                Events
+            );
         }
 
         public DataPitcherApplication Application { get; }
@@ -446,21 +633,30 @@ public sealed class ProductionCompositionTests
                     new("snapshotId", snapshotId.ToString()),
                     new("connectionId", connectionId.ToString()),
                     new("snapshotHash", "snapshot-hash"),
-                    new("contentJson", content ?? "{\"Tables\":[],\"ForeignKeys\":[],\"DatabaseIdentity\":\"database\",\"ProviderVersion\":\"version\"}"),
+                    new(
+                        "contentJson",
+                        content
+                            ?? "{\"Tables\":[],\"ForeignKeys\":[],\"DatabaseIdentity\":\"database\",\"ProviderVersion\":\"version\"}"
+                    ),
                     new("createdUtc", Clock.UtcNow.ToString("O", CultureInfo.InvariantCulture)),
-                });
+                }
+            );
             return snapshotId;
         }
 
         public void SetPlanHash(Guid planId, string hash)
         {
             using var database = Database.Open();
-            database.Execute("UPDATE Plans SET CanonicalHash = @hash WHERE PlanId = @planId", new DataParameter[] { new("hash", hash), new("planId", planId.ToString()) });
+            database.Execute(
+                "UPDATE Plans SET CanonicalHash = @hash WHERE PlanId = @planId",
+                new DataParameter[] { new("hash", hash), new("planId", planId.ToString()) }
+            );
         }
 
         public void Dispose()
         {
-            if (File.Exists(_databasePath)) File.Delete(_databasePath);
+            if (File.Exists(_databasePath))
+                File.Delete(_databasePath);
         }
     }
 

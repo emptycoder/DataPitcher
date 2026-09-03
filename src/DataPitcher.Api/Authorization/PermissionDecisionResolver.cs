@@ -27,16 +27,31 @@ public sealed class ClaimsPermissionDecisionResolver : IPermissionDecisionResolv
     public AuthorizationDecision Resolve(ClaimsPrincipal principal, Permission permission)
     {
         var normalizedPrincipal = new NormalizedPrincipal(
-            new ExternalPrincipalKey(principal.Identity?.AuthenticationType ?? "unknown", "urn:datapitcher:validated-token", null, PrincipalKind.User, Subject(principal)),
-            new(null, null, null, null));
-        var grants = principal.FindAll(RolesClaimType)
+            new ExternalPrincipalKey(
+                principal.Identity?.AuthenticationType ?? "unknown",
+                "urn:datapitcher:validated-token",
+                null,
+                PrincipalKind.User,
+                Subject(principal)
+            ),
+            new(null, null, null, null)
+        );
+        var grants = principal
+            .FindAll(RolesClaimType)
             .Select(claim => claim.Value)
             .Where(value => Enum.TryParse<Role>(value, out _))
             .Select(value => new RoleGrant(Enum.Parse<Role>(value), RoleGrantSource.OpenIdConnectRole))
             .ToArray();
         var groupResolution = GroupResolution(principal);
-        var indeterminateRoles = groupResolution.State == GroupResolutionState.Indeterminate ? Enum.GetValues<Role>() : [];
-        var input = new AuthorizationInput(normalizedPrincipal, PrincipalAuthorizationState.Active, grants, groupResolution, indeterminateRoles);
+        var indeterminateRoles =
+            groupResolution.State == GroupResolutionState.Indeterminate ? Enum.GetValues<Role>() : [];
+        var input = new AuthorizationInput(
+            normalizedPrincipal,
+            PrincipalAuthorizationState.Active,
+            grants,
+            groupResolution,
+            indeterminateRoles
+        );
         return AuthorizationEvaluator.Evaluate(input, permission);
     }
 
@@ -44,7 +59,10 @@ public sealed class ClaimsPermissionDecisionResolver : IPermissionDecisionResolv
         principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? principal.FindFirst("sub")?.Value ?? "unspecified";
 
     private static GroupResolutionResult GroupResolution(ClaimsPrincipal principal) =>
-        principal.HasClaim(claim => string.Equals(claim.Type, GroupOverageClaimType, StringComparison.Ordinal) && string.Equals(claim.Value, "true", StringComparison.Ordinal))
+        principal.HasClaim(claim =>
+            string.Equals(claim.Type, GroupOverageClaimType, StringComparison.Ordinal)
+            && string.Equals(claim.Value, "true", StringComparison.Ordinal)
+        )
             ? GroupResolutionResult.Indeterminate()
             : GroupResolutionResult.Complete(principal.FindAll(GroupsClaimType).Select(claim => claim.Value));
 }

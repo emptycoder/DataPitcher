@@ -7,7 +7,8 @@ public sealed record TableDefinition
         string name,
         IReadOnlyList<ColumnDefinition> columns,
         UniqueConstraint? primaryKey,
-        IReadOnlyList<UniqueConstraint> uniqueConstraints)
+        IReadOnlyList<UniqueConstraint> uniqueConstraints
+    )
     {
         Schema = schema;
         Name = name;
@@ -22,8 +23,7 @@ public sealed record TableDefinition
     public UniqueConstraint? PrimaryKey { get; }
     public IReadOnlyList<UniqueConstraint> UniqueConstraints { get; }
 
-    public bool Equals(TableDefinition? other) =>
-        other is not null && Schema == other.Schema && Name == other.Name;
+    public bool Equals(TableDefinition? other) => other is not null && Schema == other.Schema && Name == other.Name;
 
     public override int GetHashCode() => HashCode.Combine(Schema, Name);
 }

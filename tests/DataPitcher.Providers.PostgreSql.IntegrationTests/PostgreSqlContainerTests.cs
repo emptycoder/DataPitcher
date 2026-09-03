@@ -9,8 +9,7 @@ public sealed class PostgreSqlContainerTests
     [Fact]
     public async Task PostgreSqlContainer_WhenStarted_AcceptsConnectionAndServesQuery()
     {
-        await using var container = new PostgreSqlBuilder("postgres:17-alpine")
-            .Build();
+        await using var container = new PostgreSqlBuilder("postgres:17-alpine").Build();
 
         await container.StartAsync();
 

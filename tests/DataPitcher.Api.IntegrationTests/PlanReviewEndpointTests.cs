@@ -28,7 +28,11 @@ public sealed class PlanReviewEndpointTests(ApiWebApplicationFactory factory) : 
     {
         var planId = Guid.NewGuid();
 
-        using var response = await _client.PostAsJsonAsync($"/api/plans/{planId}/inclusion-paths", new { table = "sales.Orders", stableKey = "Id=42" }, CancellationToken.None);
+        using var response = await _client.PostAsJsonAsync(
+            $"/api/plans/{planId}/inclusion-paths",
+            new { table = "sales.Orders", stableKey = "Id=42" },
+            CancellationToken.None
+        );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var path = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -72,7 +76,11 @@ public sealed class PlanReviewEndpointTests(ApiWebApplicationFactory factory) : 
     {
         var invocations = _factory.Application.Invocations.Count;
 
-        using var response = await _client.PostAsJsonAsync($"/api/plans/{Guid.NewGuid()}/inclusion-paths", new { table = "sales.Orders", stableKey = " " }, CancellationToken.None);
+        using var response = await _client.PostAsJsonAsync(
+            $"/api/plans/{Guid.NewGuid()}/inclusion-paths",
+            new { table = "sales.Orders", stableKey = " " },
+            CancellationToken.None
+        );
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(invocations, _factory.Application.Invocations.Count);
@@ -83,7 +91,11 @@ public sealed class PlanReviewEndpointTests(ApiWebApplicationFactory factory) : 
     {
         var invocations = _factory.Application.Invocations.Count;
 
-        using var response = await _client.PostAsJsonAsync($"/api/plans/{Guid.NewGuid()}/inclusion-paths", new { table = " ", stableKey = "Id=42" }, CancellationToken.None);
+        using var response = await _client.PostAsJsonAsync(
+            $"/api/plans/{Guid.NewGuid()}/inclusion-paths",
+            new { table = " ", stableKey = "Id=42" },
+            CancellationToken.None
+        );
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(invocations, _factory.Application.Invocations.Count);

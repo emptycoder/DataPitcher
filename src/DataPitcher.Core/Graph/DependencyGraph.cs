@@ -25,20 +25,33 @@ public sealed class DependencyGraph
                 foreignKey.ChildColumns,
                 foreignKey.ParentColumns,
                 foreignKey.IsEnforced,
-                foreignKey.IsTrusted);
+                foreignKey.IsTrusted
+            );
             dependencies[childTable].Add(canonicalForeignKey);
             dependents[parentTable].Add(canonicalForeignKey);
         }
 
         Tables = Array.AsReadOnly(tableList);
-        _dependencies = dependencies.ToDictionary(x => x.Key, x => (IReadOnlyList<ForeignKeyDefinition>)Array.AsReadOnly(x.Value
-            .OrderBy(foreignKey => QualifiedName(foreignKey.ParentTable), StringComparer.Ordinal)
-            .ThenBy(foreignKey => foreignKey.Name, StringComparer.Ordinal)
-            .ToArray()));
-        _dependents = dependents.ToDictionary(x => x.Key, x => (IReadOnlyList<ForeignKeyDefinition>)Array.AsReadOnly(x.Value
-            .OrderBy(foreignKey => QualifiedName(foreignKey.ChildTable), StringComparer.Ordinal)
-            .ThenBy(foreignKey => foreignKey.Name, StringComparer.Ordinal)
-            .ToArray()));
+        _dependencies = dependencies.ToDictionary(
+            x => x.Key,
+            x =>
+                (IReadOnlyList<ForeignKeyDefinition>)
+                    Array.AsReadOnly(
+                        x.Value.OrderBy(foreignKey => QualifiedName(foreignKey.ParentTable), StringComparer.Ordinal)
+                            .ThenBy(foreignKey => foreignKey.Name, StringComparer.Ordinal)
+                            .ToArray()
+                    )
+        );
+        _dependents = dependents.ToDictionary(
+            x => x.Key,
+            x =>
+                (IReadOnlyList<ForeignKeyDefinition>)
+                    Array.AsReadOnly(
+                        x.Value.OrderBy(foreignKey => QualifiedName(foreignKey.ChildTable), StringComparer.Ordinal)
+                            .ThenBy(foreignKey => foreignKey.Name, StringComparer.Ordinal)
+                            .ToArray()
+                    )
+        );
     }
 
     public IReadOnlyList<TableDefinition> Tables { get; }

@@ -5,12 +5,12 @@ using DataPitcher.Infrastructure.Connections;
 using DataPitcher.Infrastructure.Events;
 using DataPitcher.Infrastructure.Leasing;
 using DataPitcher.Infrastructure.Migrations;
+using DataPitcher.Infrastructure.Persistence;
 using DataPitcher.Infrastructure.Plans;
 using DataPitcher.Infrastructure.Schema;
 using DataPitcher.Infrastructure.Selections;
 using DataPitcher.Infrastructure.Storage;
 using DataPitcher.Infrastructure.Time;
-using DataPitcher.Infrastructure.Persistence;
 using DataPitcher.Infrastructure.Worker;
 using DataPitcher.Providers.PostgreSql;
 using DataPitcher.Providers.SqlServer;
@@ -22,10 +22,16 @@ namespace DataPitcher.Api.Composition;
 
 public static class DataPitcherCompositionExtensions
 {
-    public static IServiceCollection AddDataPitcherComposition(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddDataPitcherComposition(
+        this IServiceCollection services,
+        IConfiguration configuration
+    )
     {
-        var controlDatabasePath = configuration["ControlDatabase:Path"] ?? throw new InvalidOperationException("ControlDatabase:Path must be configured.");
-        var secretsRoot = configuration["Secrets:Root"] ?? throw new InvalidOperationException("Secrets:Root must be configured.");
+        var controlDatabasePath =
+            configuration["ControlDatabase:Path"]
+            ?? throw new InvalidOperationException("ControlDatabase:Path must be configured.");
+        var secretsRoot =
+            configuration["Secrets:Root"] ?? throw new InvalidOperationException("Secrets:Root must be configured.");
         var workerLeaseTtl = configuration.GetValue("Worker:LeaseTtl", TimeSpan.FromMinutes(1));
         var workerPollInterval = configuration.GetValue("Worker:PollInterval", TimeSpan.FromSeconds(1));
 
@@ -48,13 +54,19 @@ public static class DataPitcherCompositionExtensions
         services.AddSingleton<ConnectionHealthService>();
         services.AddSingleton<IJobControl>(provider => provider.GetRequiredService<JobStore>());
         services.AddSingleton<IControlCheckpointMirror, CheckpointMirrorStore>();
-        services.AddSingleton<ITransferConnectionRevalidator>(provider => provider.GetRequiredService<ConnectionHealthService>());
+        services.AddSingleton<ITransferConnectionRevalidator>(provider =>
+            provider.GetRequiredService<ConnectionHealthService>()
+        );
         services.AddSingleton<IWorkerFaults, NoOpWorkerFaults>();
         services.AddSingleton<IWorkerDelay, ClockWorkerDelay>();
         services.AddSingleton<IJobRunCatalog, PlanJobRunCatalog>();
         services.AddSingleton<SqlServerRunSessions>();
-        services.AddSingleton<ITransferReadSessionFactory>(provider => provider.GetRequiredService<SqlServerRunSessions>());
-        services.AddSingleton<ITargetRunSessionFactory>(provider => provider.GetRequiredService<SqlServerRunSessions>());
+        services.AddSingleton<ITransferReadSessionFactory>(provider =>
+            provider.GetRequiredService<SqlServerRunSessions>()
+        );
+        services.AddSingleton<ITargetRunSessionFactory>(provider =>
+            provider.GetRequiredService<SqlServerRunSessions>()
+        );
         services.AddSingleton<LeaseStore>();
         services.AddSingleton<LeaseRenewer>();
         services.AddSingleton<RecoveryCoordinator>();
@@ -65,10 +77,22 @@ public static class DataPitcherCompositionExtensions
 
         services.AddHostedService<SchemaScanWorker>();
         services.AddHostedService(provider => new JobWorker(
-            provider.GetRequiredService<IJobControl>(), provider.GetRequiredService<IJobRunCatalog>(), provider.GetRequiredService<ITransferConnectionRevalidator>(), provider.GetRequiredService<ITargetRunSessionFactory>(),
-            provider.GetRequiredService<ITransferReadSessionFactory>(), provider.GetRequiredService<RecoveryCoordinator>(), provider.GetRequiredService<LeaseRenewer>(),
-            provider.GetRequiredService<IControlCheckpointMirror>(), provider.GetRequiredService<IJobEventWriter>(), provider.GetRequiredService<IWorkerFaults>(), provider.GetRequiredService<IWorkerDelay>(), provider.GetRequiredService<IClock>(),
-            Environment.MachineName + "-" + Environment.ProcessId, workerLeaseTtl, workerPollInterval));
+            provider.GetRequiredService<IJobControl>(),
+            provider.GetRequiredService<IJobRunCatalog>(),
+            provider.GetRequiredService<ITransferConnectionRevalidator>(),
+            provider.GetRequiredService<ITargetRunSessionFactory>(),
+            provider.GetRequiredService<ITransferReadSessionFactory>(),
+            provider.GetRequiredService<RecoveryCoordinator>(),
+            provider.GetRequiredService<LeaseRenewer>(),
+            provider.GetRequiredService<IControlCheckpointMirror>(),
+            provider.GetRequiredService<IJobEventWriter>(),
+            provider.GetRequiredService<IWorkerFaults>(),
+            provider.GetRequiredService<IWorkerDelay>(),
+            provider.GetRequiredService<IClock>(),
+            Environment.MachineName + "-" + Environment.ProcessId,
+            workerLeaseTtl,
+            workerPollInterval
+        ));
 
         services.AddSingleton<IDataPitcherApplication, DataPitcherApplication>();
 

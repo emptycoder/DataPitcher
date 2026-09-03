@@ -55,8 +55,7 @@ public static class TarjanScc
                 member = stack.Pop();
                 active.Remove(member);
                 members.Add(member);
-            }
-            while (!ReferenceEquals(member, table));
+            } while (!ReferenceEquals(member, table));
 
             result.Add(new Scc(result.Count, members.OrderBy(QualifiedName, StringComparer.Ordinal)));
         }
@@ -65,10 +64,12 @@ public static class TarjanScc
             if (!indices.ContainsKey(table))
                 Visit(table);
 
-        return Array.AsReadOnly(result
-            .OrderBy(component => QualifiedName(component.Tables[0]), StringComparer.Ordinal)
-            .Select((component, id) => new Scc(id, component.Tables))
-            .ToArray());
+        return Array.AsReadOnly(
+            result
+                .OrderBy(component => QualifiedName(component.Tables[0]), StringComparer.Ordinal)
+                .Select((component, id) => new Scc(id, component.Tables))
+                .ToArray()
+        );
     }
 
     private static string QualifiedName(TableDefinition table) => $"{table.Schema}.{table.Name}";

@@ -25,32 +25,109 @@ public sealed class ProblemDetailsTests(ApiWebApplicationFactory factory) : ICla
     public static IEnumerable<object[]> Expected()
     {
         yield return [ApiErrorClass.Validation, 400, "validation_failed", "The request is not valid."];
-        yield return [ApiErrorClass.Unauthenticated, 401, "unauthenticated", "Authentication is required for this operation."];
-        yield return [ApiErrorClass.Forbidden, 403, "authorization_denied", "You are not allowed to perform this operation."];
-        yield return [ApiErrorClass.IdentityProviderUnavailable, 503, "identity_provider_unavailable", "Authentication cannot be completed now."];
+        yield return
+        [
+            ApiErrorClass.Unauthenticated,
+            401,
+            "unauthenticated",
+            "Authentication is required for this operation.",
+        ];
+        yield return
+        [
+            ApiErrorClass.Forbidden,
+            403,
+            "authorization_denied",
+            "You are not allowed to perform this operation.",
+        ];
+        yield return
+        [
+            ApiErrorClass.IdentityProviderUnavailable,
+            503,
+            "identity_provider_unavailable",
+            "Authentication cannot be completed now.",
+        ];
         yield return [ApiErrorClass.InvalidToken, 401, "invalid_token", "The supplied credentials are not valid."];
         yield return [ApiErrorClass.TenantRejected, 403, "tenant_rejected", "This tenant is not allowed."];
-        yield return [ApiErrorClass.GroupResolutionFailed, 503, "authorization_indeterminate", "Authorization cannot be determined now."];
-        yield return [ApiErrorClass.AuthenticationConfiguration, 500, "authentication_configuration_error", "Authentication is unavailable."];
+        yield return
+        [
+            ApiErrorClass.GroupResolutionFailed,
+            503,
+            "authorization_indeterminate",
+            "Authorization cannot be determined now.",
+        ];
+        yield return
+        [
+            ApiErrorClass.AuthenticationConfiguration,
+            500,
+            "authentication_configuration_error",
+            "Authentication is unavailable.",
+        ];
         yield return [ApiErrorClass.Connection, 502, "connection_failed", "The database connection could not be used."];
         yield return [ApiErrorClass.SchemaDrift, 409, "schema_drift", "The schema changed since it was inspected."];
-        yield return [ApiErrorClass.UnsupportedProviderFeature, 422, "unsupported_provider_feature", "The selected provider capability is unavailable."];
+        yield return
+        [
+            ApiErrorClass.UnsupportedProviderFeature,
+            422,
+            "unsupported_provider_feature",
+            "The selected provider capability is unavailable.",
+        ];
         yield return [ApiErrorClass.QuerySyntax, 400, "query_syntax_invalid", "The selection query is not valid."];
         yield return [ApiErrorClass.QueryTimeout, 504, "query_timeout", "The database query did not finish in time."];
-        yield return [ApiErrorClass.SourceIntegrity, 409, "source_integrity_failed", "The source data no longer meets the plan requirements."];
-        yield return [ApiErrorClass.TargetConflict, 409, "target_conflict", "The target conflicts with the requested transfer."];
-        yield return [ApiErrorClass.TypeConversion, 422, "type_conversion_failed", "A required value conversion is unsafe."];
-        yield return [ApiErrorClass.ConstraintCycle, 422, "constraint_cycle", "The planned relationship cycle cannot be transferred safely."];
+        yield return
+        [
+            ApiErrorClass.SourceIntegrity,
+            409,
+            "source_integrity_failed",
+            "The source data no longer meets the plan requirements.",
+        ];
+        yield return
+        [
+            ApiErrorClass.TargetConflict,
+            409,
+            "target_conflict",
+            "The target conflicts with the requested transfer.",
+        ];
+        yield return
+        [
+            ApiErrorClass.TypeConversion,
+            422,
+            "type_conversion_failed",
+            "A required value conversion is unsafe.",
+        ];
+        yield return
+        [
+            ApiErrorClass.ConstraintCycle,
+            422,
+            "constraint_cycle",
+            "The planned relationship cycle cannot be transferred safely.",
+        ];
         yield return [ApiErrorClass.BulkWrite, 502, "bulk_write_failed", "The target write could not be completed."];
-        yield return [ApiErrorClass.TransientDatabaseFailure, 503, "transient_database_failure", "The database is temporarily unavailable."];
+        yield return
+        [
+            ApiErrorClass.TransientDatabaseFailure,
+            503,
+            "transient_database_failure",
+            "The database is temporarily unavailable.",
+        ];
         yield return [ApiErrorClass.Cancelled, 409, "operation_cancelled", "The operation was cancelled."];
-        yield return [ApiErrorClass.Verification, 422, "verification_failed", "The transfer did not pass verification."];
+        yield return
+        [
+            ApiErrorClass.Verification,
+            422,
+            "verification_failed",
+            "The transfer did not pass verification.",
+        ];
         yield return [ApiErrorClass.Internal, 500, "internal_error", "The operation could not be completed."];
     }
 
     [Theory]
     [MemberData(nameof(Expected))]
-    public void ApiProblemMapper_MapsEveryArchitectureClassToFixedSafeDetails(ApiErrorClass errorClass, int status, string code, string detail)
+    public void ApiProblemMapper_MapsEveryArchitectureClassToFixedSafeDetails(
+        ApiErrorClass errorClass,
+        int status,
+        string code,
+        string detail
+    )
     {
         var resources = new ResourceIdentifiers(Guid.NewGuid(), null, null, Guid.NewGuid(), null);
 
@@ -66,7 +143,10 @@ public sealed class ProblemDetailsTests(ApiWebApplicationFactory factory) : ICla
     [Fact]
     public void ApiProblemMapper_WhenErrorClassIsUnknown_MapsToTheSafeInternalProblem()
     {
-        var problem = ApiProblemMapper.Map(new ApiFault((ApiErrorClass)99, new ResourceIdentifiers(null, null, null, null, null)), "correlation-01");
+        var problem = ApiProblemMapper.Map(
+            new ApiFault((ApiErrorClass)99, new ResourceIdentifiers(null, null, null, null, null)),
+            "correlation-01"
+        );
 
         Assert.Equal(StatusCodes.Status500InternalServerError, problem.Status);
         Assert.Equal("internal_error", problem.Extensions["code"]);
@@ -131,7 +211,8 @@ public sealed class ProblemDetailsTests(ApiWebApplicationFactory factory) : ICla
     [Fact]
     public async Task ExceptionResponse_RedactsCredentialsFromProblemDetailsAndHeaders()
     {
-        _factory.Application.Delay = _ => Task.FromException(new InvalidOperationException(string.Join(' ', ForbiddenSentinels)));
+        _factory.Application.Delay = _ =>
+            Task.FromException(new InvalidOperationException(string.Join(' ', ForbiddenSentinels)));
         try
         {
             using var response = await _client.GetAsync("/api/connections", CancellationToken.None);
@@ -157,7 +238,11 @@ public sealed class ProblemDetailsTests(ApiWebApplicationFactory factory) : ICla
         await using var body = new MemoryStream();
         context.Response.Body = body;
 
-        var handled = await new ApiExceptionHandler().TryHandleAsync(context, new ArgumentException("unsafe input"), CancellationToken.None);
+        var handled = await new ApiExceptionHandler().TryHandleAsync(
+            context,
+            new ArgumentException("unsafe input"),
+            CancellationToken.None
+        );
 
         Assert.True(handled);
         Assert.Equal(StatusCodes.Status400BadRequest, context.Response.StatusCode);
@@ -175,7 +260,11 @@ public sealed class ProblemDetailsTests(ApiWebApplicationFactory factory) : ICla
         await using var body = new MemoryStream();
         context.Response.Body = body;
 
-        var handled = await new ApiExceptionHandler().TryHandleAsync(context, new OperationCanceledException(), CancellationToken.None);
+        var handled = await new ApiExceptionHandler().TryHandleAsync(
+            context,
+            new OperationCanceledException(),
+            CancellationToken.None
+        );
 
         Assert.True(handled);
         Assert.Equal(StatusCodes.Status409Conflict, context.Response.StatusCode);
@@ -191,7 +280,11 @@ public sealed class ProblemDetailsTests(ApiWebApplicationFactory factory) : ICla
         await using var body = new MemoryStream();
         context.Response.Body = body;
 
-        var handled = await new ApiExceptionHandler().TryHandleAsync(context, new OperationCanceledException(), CancellationToken.None);
+        var handled = await new ApiExceptionHandler().TryHandleAsync(
+            context,
+            new OperationCanceledException(),
+            CancellationToken.None
+        );
 
         Assert.True(handled);
         Assert.Equal(StatusCodes.Status500InternalServerError, context.Response.StatusCode);
@@ -209,7 +302,11 @@ public sealed class ProblemDetailsTests(ApiWebApplicationFactory factory) : ICla
         yield return [new BlockedTableException(table), "unsupported_provider_feature"];
         yield return [new TargetFenceLostException(), "target_conflict"];
         yield return [new ManifestSealMismatchException(), "source_integrity_failed"];
-        yield return [new TransferAttemptException(CommitDisposition.NotCommitted, new InvalidOperationException()), "internal_error"];
+        yield return
+        [
+            new TransferAttemptException(CommitDisposition.NotCommitted, new InvalidOperationException()),
+            "internal_error",
+        ];
         yield return [new NonResumableInterruptedException(), "internal_error"];
         yield return [new SimulatedWorkerFaultException(TransferFaultPoint.PermanentFailure), "internal_error"];
     }
@@ -234,14 +331,18 @@ public sealed class ProblemDetailsTests(ApiWebApplicationFactory factory) : ICla
     public void RoutedEndpoints_DeclareProblemDetailsMetadata()
     {
         using var scope = _factory.Services.CreateScope();
-        var endpoints = scope.ServiceProvider.GetRequiredService<EndpointDataSource>().Endpoints
-            .Where(endpoint => endpoint.Metadata.GetMetadata<HttpMethodMetadata>() is not null);
+        var endpoints = scope
+            .ServiceProvider.GetRequiredService<EndpointDataSource>()
+            .Endpoints.Where(endpoint => endpoint.Metadata.GetMetadata<HttpMethodMetadata>() is not null);
 
         foreach (var endpoint in endpoints)
         {
-            var hasProblemMetadata = endpoint.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>()
+            var hasProblemMetadata = endpoint
+                .Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>()
                 .Any(metadata => metadata.ContentTypes.Contains("application/problem+json", StringComparer.Ordinal));
-            var route = endpoint is RouteEndpoint routeEndpoint ? routeEndpoint.RoutePattern.RawText : "(no route pattern)";
+            var route = endpoint is RouteEndpoint routeEndpoint
+                ? routeEndpoint.RoutePattern.RawText
+                : "(no route pattern)";
             Assert.True(hasProblemMetadata, $"{endpoint.DisplayName} ({route}) must declare Problem Details metadata.");
         }
     }
@@ -264,7 +365,12 @@ public sealed class ProblemDetailsTests(ApiWebApplicationFactory factory) : ICla
     }
 
     private static string ResponseHeaders(HttpResponseMessage response) =>
-        string.Join('\n', response.Headers.Concat(response.Content.Headers).Select(header => $"{header.Key}: {string.Join(',', header.Value)}"));
+        string.Join(
+            '\n',
+            response
+                .Headers.Concat(response.Content.Headers)
+                .Select(header => $"{header.Key}: {string.Join(',', header.Value)}")
+        );
 
     private static void AssertNoSentinel(string value)
     {

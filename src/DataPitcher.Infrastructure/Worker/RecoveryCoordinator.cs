@@ -4,7 +4,12 @@ namespace DataPitcher.Infrastructure.Worker;
 
 public sealed class RecoveryCoordinator(IControlCheckpointMirror mirror)
 {
-    public async Task<TargetCheckpoint> RecoverAsync(JobClaim claim, TransferRun run, ITargetRunSession target, CancellationToken cancellationToken)
+    public async Task<TargetCheckpoint> RecoverAsync(
+        JobClaim claim,
+        TransferRun run,
+        ITargetRunSession target,
+        CancellationToken cancellationToken
+    )
     {
         if (claim.IsInterrupted && !run.SupportsDurableResume)
             throw new NonResumableInterruptedException();
@@ -15,7 +20,11 @@ public sealed class RecoveryCoordinator(IControlCheckpointMirror mirror)
 
         var repaired = await target.RepairMutationsAsync(snapshot.Mutations, cancellationToken);
         foreach (var entry in repaired.Where(entry => entry.State is MutationJournalState.Quarantined))
-            await target.QuarantineAsync(entry.Mutation, entry.Detail ?? "Target mutation repair could not be verified.", cancellationToken);
+            await target.QuarantineAsync(
+                entry.Mutation,
+                entry.Detail ?? "Target mutation repair could not be verified.",
+                cancellationToken
+            );
 
         await mirror.OverwriteAsync(snapshot.Checkpoint, cancellationToken);
         return snapshot.Checkpoint;

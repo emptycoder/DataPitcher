@@ -17,8 +17,14 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     public async Task JobEvents_WhenReadAfterCursor_ReturnsOnlyStrictlyLaterOrderedEvents()
     {
         var jobId = Guid.NewGuid();
-        var first = await _factory.Events.AppendAsync(new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)), CancellationToken.None);
-        var second = await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 20, 200)), CancellationToken.None);
+        var first = await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)),
+            CancellationToken.None
+        );
+        var second = await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "progress", new JobEventPayload("running", 20, 200)),
+            CancellationToken.None
+        );
 
         var page = await _factory.Events.ReadAfterAsync(jobId, first.EventId, CancellationToken.None);
 
@@ -29,12 +35,23 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     public async Task JobEvents_WhenCursorPrecedesRetentionBoundary_RequiresReload()
     {
         var jobId = Guid.NewGuid();
-        await _factory.Events.AppendAsync(new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)), CancellationToken.None);
-        await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 20, 200)), CancellationToken.None);
-        var retained = await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 30, 300)), CancellationToken.None);
+        await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)),
+            CancellationToken.None
+        );
+        await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "progress", new JobEventPayload("running", 20, 200)),
+            CancellationToken.None
+        );
+        var retained = await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "progress", new JobEventPayload("running", 30, 300)),
+            CancellationToken.None
+        );
         await _factory.Events.TrimBeforeAsync(jobId, retained.EventId, CancellationToken.None);
 
-        var exception = await Assert.ThrowsAsync<EventCursorExpiredException>(() => _factory.Events.ReadAfterAsync(jobId, retained.EventId - 2, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<EventCursorExpiredException>(() =>
+            _factory.Events.ReadAfterAsync(jobId, retained.EventId - 2, CancellationToken.None)
+        );
 
         Assert.Equal(retained.EventId, exception.OldestAvailableEventId);
     }
@@ -43,9 +60,14 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     public async Task JobEvents_WhenTrimBoundaryExceedsTheNextEventId_RejectsTheInvalidRetentionBoundary()
     {
         var jobId = Guid.NewGuid();
-        await _factory.Events.AppendAsync(new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)), CancellationToken.None);
+        await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)),
+            CancellationToken.None
+        );
 
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => _factory.Events.TrimBeforeAsync(jobId, 3, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            _factory.Events.TrimBeforeAsync(jobId, 3, CancellationToken.None)
+        );
     }
 
     [Fact]
@@ -55,7 +77,9 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
         var signal = new JobEventSignal();
         var wait = signal.WaitAsync(jobId, 0, CancellationToken.None);
 
-        signal.Publish(new JobEvent(jobId, 1, "progress", new JobEventPayload("running", 10, 100), DateTimeOffset.UnixEpoch));
+        signal.Publish(
+            new JobEvent(jobId, 1, "progress", new JobEventPayload("running", 10, 100), DateTimeOffset.UnixEpoch)
+        );
 
         await wait;
     }
@@ -65,7 +89,9 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     {
         var jobId = Guid.NewGuid();
         var signal = new JobEventSignal();
-        signal.Publish(new JobEvent(jobId, 1, "progress", new JobEventPayload("running", 10, 100), DateTimeOffset.UnixEpoch));
+        signal.Publish(
+            new JobEvent(jobId, 1, "progress", new JobEventPayload("running", 10, 100), DateTimeOffset.UnixEpoch)
+        );
 
         await signal.WaitAsync(jobId, 0, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(1));
     }
@@ -75,7 +101,20 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     {
         var jobId = Guid.NewGuid();
         var signal = new JobEventSignal();
-        Parallel.For(1, 1025, eventId => signal.Publish(new JobEvent(jobId, eventId, "progress", new JobEventPayload("running", eventId, eventId), DateTimeOffset.UnixEpoch)));
+        Parallel.For(
+            1,
+            1025,
+            eventId =>
+                signal.Publish(
+                    new JobEvent(
+                        jobId,
+                        eventId,
+                        "progress",
+                        new JobEventPayload("running", eventId, eventId),
+                        DateTimeOffset.UnixEpoch
+                    )
+                )
+        );
 
         await signal.WaitAsync(jobId, 1023, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(1));
     }
@@ -96,7 +135,15 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
             var publish = Task.Run(() =>
             {
                 gate.SignalAndWait();
-                signal.Publish(new JobEvent(jobId, eventId, "progress", new JobEventPayload("running", eventId, eventId), DateTimeOffset.UnixEpoch));
+                signal.Publish(
+                    new JobEvent(
+                        jobId,
+                        eventId,
+                        "progress",
+                        new JobEventPayload("running", eventId, eventId),
+                        DateTimeOffset.UnixEpoch
+                    )
+                );
             });
 
             await Task.WhenAll(wait, publish).WaitAsync(TimeSpan.FromSeconds(1));
@@ -107,16 +154,27 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     public async Task JobEvents_WhenReconnectedWithLastEventId_StreamsOnlyLaterFrame()
     {
         var jobId = Guid.NewGuid();
-        var first = await _factory.Events.AppendAsync(new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)), CancellationToken.None);
-        var second = await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 20, 200)), CancellationToken.None);
+        var first = await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)),
+            CancellationToken.None
+        );
+        var second = await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "progress", new JobEventPayload("running", 20, 200)),
+            CancellationToken.None
+        );
         using var request = EventRequest(jobId, first.EventId);
-        using var response = await _factory.CreateClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+        using var response = await _factory
+            .CreateClient()
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/event-stream", response.Content.Headers.ContentType!.MediaType);
         var frame = await ReadFrameAsync(response);
 
-        Assert.Equal($"id: {second.EventId}\nevent: progress\ndata: {{\"State\":\"running\",\"RowsTransferred\":20,\"BytesTransferred\":200}}\n\n", frame);
+        Assert.Equal(
+            $"id: {second.EventId}\nevent: progress\ndata: {{\"State\":\"running\",\"RowsTransferred\":20,\"BytesTransferred\":200}}\n\n",
+            frame
+        );
     }
 
     [Fact]
@@ -124,11 +182,19 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     {
         var jobId = Guid.NewGuid();
         using var request = EventRequest(jobId);
-        using var response = await _factory.CreateClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+        using var response = await _factory
+            .CreateClient()
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
         var frame = ReadFrameAsync(response);
-        var appended = await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)), CancellationToken.None);
+        var appended = await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)),
+            CancellationToken.None
+        );
 
-        Assert.Equal($"id: {appended.EventId}\nevent: progress\ndata: {{\"State\":\"running\",\"RowsTransferred\":10,\"BytesTransferred\":100}}\n\n", await frame);
+        Assert.Equal(
+            $"id: {appended.EventId}\nevent: progress\ndata: {{\"State\":\"running\",\"RowsTransferred\":10,\"BytesTransferred\":100}}\n\n",
+            await frame
+        );
     }
 
     [Fact]
@@ -137,20 +203,39 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
         var signal = new AppendDuringWaitSignal();
         using var factory = new ApiWebApplicationFactory(signal);
         var jobId = Guid.NewGuid();
-        signal.AppendOnFirstWait = () => factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)), CancellationToken.None);
+        signal.AppendOnFirstWait = () =>
+            factory.Events.AppendAsync(
+                new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)),
+                CancellationToken.None
+            );
         using var request = EventRequest(jobId);
-        using var response = await factory.CreateClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+        using var response = await factory
+            .CreateClient()
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
 
-        Assert.Contains("data: {\"State\":\"running\",\"RowsTransferred\":10,\"BytesTransferred\":100}", await ReadFrameAsync(response), StringComparison.Ordinal);
+        Assert.Contains(
+            "data: {\"State\":\"running\",\"RowsTransferred\":10,\"BytesTransferred\":100}",
+            await ReadFrameAsync(response),
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
     public async Task JobEvents_WhenCursorHasExpired_ReturnsReloadRequiredProblemDetails()
     {
         var jobId = Guid.NewGuid();
-        await _factory.Events.AppendAsync(new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)), CancellationToken.None);
-        await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 20, 200)), CancellationToken.None);
-        var retained = await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 30, 300)), CancellationToken.None);
+        await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "state", new JobEventPayload("running", 10, 100)),
+            CancellationToken.None
+        );
+        await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "progress", new JobEventPayload("running", 20, 200)),
+            CancellationToken.None
+        );
+        var retained = await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "progress", new JobEventPayload("running", 30, 300)),
+            CancellationToken.None
+        );
         await _factory.Events.TrimBeforeAsync(jobId, retained.EventId, CancellationToken.None);
         using var request = EventRequest(jobId, retained.EventId - 2);
         using var response = await _factory.CreateClient().SendAsync(request, CancellationToken.None);
@@ -165,10 +250,15 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     public async Task JobEvents_WhenReconnectsAfterAuthorizedOpen_ReauthorizesTheSpecificJob()
     {
         var jobId = Guid.NewGuid();
-        await _factory.Events.AppendAsync(new JobEventAppend(jobId, "state", new JobEventPayload("running", 0, 0)), CancellationToken.None);
+        await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "state", new JobEventPayload("running", 0, 0)),
+            CancellationToken.None
+        );
         var calls = _factory.Grants.JobAuthorizationCalls;
         using var firstRequest = EventRequest(jobId);
-        using var first = await _factory.CreateClient().SendAsync(firstRequest, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+        using var first = await _factory
+            .CreateClient()
+            .SendAsync(firstRequest, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
         await ReadFrameAsync(first);
         _factory.Grants.AllowJob(jobId, false);
         using var secondRequest = EventRequest(jobId);
@@ -186,7 +276,12 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
         using var response = await _factory.CreateClient().SendAsync(request, CancellationToken.None);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        Assert.Contains(_factory.Services.GetRequiredService<EndpointDataSource>().Endpoints, endpoint => endpoint is RouteEndpoint routeEndpoint && routeEndpoint.RoutePattern.RawText == "/api/jobs/{jobId:guid}/events");
+        Assert.Contains(
+            _factory.Services.GetRequiredService<EndpointDataSource>().Endpoints,
+            endpoint =>
+                endpoint is RouteEndpoint routeEndpoint
+                && routeEndpoint.RoutePattern.RawText == "/api/jobs/{jobId:guid}/events"
+        );
     }
 
     [Fact]
@@ -205,7 +300,9 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
     [InlineData("authorization")]
     public async Task JobEvents_WhenCredentialQueryParameterIsSupplied_ReturnsValidationProblemDetails(string parameter)
     {
-        using var response = await _factory.CreateClient().GetAsync($"/api/jobs/{Guid.NewGuid()}/events?{parameter}=forbidden", CancellationToken.None);
+        using var response = await _factory
+            .CreateClient()
+            .GetAsync($"/api/jobs/{Guid.NewGuid()}/events?{parameter}=forbidden", CancellationToken.None);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -228,12 +325,21 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
         var jobId = Guid.NewGuid();
         using var request = EventRequest(jobId);
         request.Headers.Add("X-Test-Token-Expiry", DateTimeOffset.UtcNow.AddMilliseconds(150).ToString("O"));
-        using var response = await _factory.CreateClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+        using var response = await _factory
+            .CreateClient()
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         await Task.Delay(250);
-        await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)), CancellationToken.None);
+        await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)),
+            CancellationToken.None
+        );
 
-        Assert.DoesNotContain("data:", await response.Content.ReadAsStringAsync().WaitAsync(TimeSpan.FromSeconds(1)), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "data:",
+            await response.Content.ReadAsStringAsync().WaitAsync(TimeSpan.FromSeconds(1)),
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -242,17 +348,27 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
         var jobId = Guid.NewGuid();
         using var request = EventRequest(jobId);
         request.Headers.Add("X-Test-Token-Expiry", DateTimeOffset.UtcNow.AddSeconds(-1).ToString("O"));
-        using var response = await _factory.CreateClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
-        await _factory.Events.AppendAsync(new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)), CancellationToken.None);
+        using var response = await _factory
+            .CreateClient()
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+        await _factory.Events.AppendAsync(
+            new JobEventAppend(jobId, "progress", new JobEventPayload("running", 10, 100)),
+            CancellationToken.None
+        );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.DoesNotContain("data:", await response.Content.ReadAsStringAsync().WaitAsync(TimeSpan.FromSeconds(1)), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "data:",
+            await response.Content.ReadAsStringAsync().WaitAsync(TimeSpan.FromSeconds(1)),
+            StringComparison.Ordinal
+        );
     }
 
     private static HttpRequestMessage EventRequest(Guid jobId, long? lastEventId = null)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, $"/api/jobs/{jobId}/events");
-        if (lastEventId is { } cursor) request.Headers.Add("Last-Event-ID", cursor.ToString());
+        if (lastEventId is { } cursor)
+            request.Headers.Add("Last-Event-ID", cursor.ToString());
         return request;
     }
 
@@ -273,7 +389,8 @@ public sealed class JobEventStreamTests(ApiWebApplicationFactory factory) : ICla
 
         public async Task WaitAsync(Guid jobId, long lastObservedEventId, CancellationToken cancellationToken)
         {
-            if (Interlocked.Increment(ref _waits) == 1 && AppendOnFirstWait is { } append) await append();
+            if (Interlocked.Increment(ref _waits) == 1 && AppendOnFirstWait is { } append)
+                await append();
             await _signal.WaitAsync(jobId, lastObservedEventId, cancellationToken);
         }
 

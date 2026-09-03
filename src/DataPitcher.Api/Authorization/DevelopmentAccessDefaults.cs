@@ -10,8 +10,11 @@ namespace DataPitcher.Api.Authorization;
 /// </summary>
 public sealed class DevelopmentResourceAccessGrantReader : IResourceAccessGrantReader
 {
-    public Task<bool> IsGrantedAsync(ClaimsPrincipal principal, ApiResource resource, CancellationToken cancellationToken) =>
-        Task.FromResult(true);
+    public Task<bool> IsGrantedAsync(
+        ClaimsPrincipal principal,
+        ApiResource resource,
+        CancellationToken cancellationToken
+    ) => Task.FromResult(true);
 }
 
 /// <summary>
@@ -21,12 +24,19 @@ public sealed class DevelopmentResourceAccessGrantReader : IResourceAccessGrantR
 /// </summary>
 public static class DevelopmentAccessDefaultsRegistration
 {
-    public static IServiceCollection AddDevelopmentResourceAccessGrantReader(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddDevelopmentResourceAccessGrantReader(
+        this IServiceCollection services,
+        IConfiguration configuration
+    )
     {
 #if DEBUG
-        if (configuration.GetValue<bool>("Authorization:DevelopmentGrants:Enabled")) services.AddSingleton<IResourceAccessGrantReader, DevelopmentResourceAccessGrantReader>();
+        if (configuration.GetValue<bool>("Authorization:DevelopmentGrants:Enabled"))
+            services.AddSingleton<IResourceAccessGrantReader, DevelopmentResourceAccessGrantReader>();
 #else
-        if (configuration.GetValue<bool>("Authorization:DevelopmentGrants:Enabled")) throw new InvalidOperationException("Development resource-access grants cannot be enabled in a Release artifact.");
+        if (configuration.GetValue<bool>("Authorization:DevelopmentGrants:Enabled"))
+            throw new InvalidOperationException(
+                "Development resource-access grants cannot be enabled in a Release artifact."
+            );
 #endif
         return services;
     }

@@ -16,30 +16,46 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
         NpgsqlDataSource target,
         PostgreSqlSchemaSnapshot sourceSchema,
         PostgreSqlSchemaSnapshot targetSchema,
-        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys)
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys
+    )
     {
         _stages = new PostgreSqlStagingTables(source, target, sourceSchema, stableKeys);
         _target = targetSchema;
         _stableKeys = stableKeys;
     }
 
-    public Task<IReadOnlyCollection<StableKey>> SeedRootKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken) =>
-        _stages.InsertSourceAsync(table, keys, 0, cancellationToken);
+    public Task<IReadOnlyCollection<StableKey>> SeedRootKeysAsync(
+        TableDefinition table,
+        IReadOnlyCollection<StableKey> keys,
+        CancellationToken cancellationToken
+    ) => _stages.InsertSourceAsync(table, keys, 0, cancellationToken);
 
-    public Task<IReadOnlyCollection<StableKey>> InsertNewKeysAsync(TableDefinition table, IReadOnlyCollection<StableKey> keys, int generation, CancellationToken cancellationToken) =>
-        _stages.InsertSourceAsync(table, keys, generation, cancellationToken);
+    public Task<IReadOnlyCollection<StableKey>> InsertNewKeysAsync(
+        TableDefinition table,
+        IReadOnlyCollection<StableKey> keys,
+        int generation,
+        CancellationToken cancellationToken
+    ) => _stages.InsertSourceAsync(table, keys, generation, cancellationToken);
 
     public async Task<IReadOnlyDictionary<StableKey, TargetProbe>> ProbeTargetAsync(
-        TableDefinition table, IReadOnlyCollection<ClosureRelationship> outgoingRelationships, IReadOnlyCollection<StableKey> keys, CancellationToken cancellationToken)
+        TableDefinition table,
+        IReadOnlyCollection<ClosureRelationship> outgoingRelationships,
+        IReadOnlyCollection<StableKey> keys,
+        CancellationToken cancellationToken
+    )
     {
         await _stages.ReplaceTargetCandidatesAsync(table, keys, cancellationToken);
         var states = outgoingRelationships.ToDictionary(relationship => relationship, TargetState);
         var columns = KeyColumns(table);
         var select = string.Join(", ", columns.Select((_, i) => $"s.k{i}"));
-        var join = string.Join(" AND ", columns.Select((column, i) => $"s.k{i} = t.{PostgreSqlIdentifier.Quote(column)}"));
-        var sql = $"/* DataPitcher.ProbeTarget */ SELECT {select}, t.{PostgreSqlIdentifier.Quote(columns[0])} IS NOT NULL " +
-                  $"FROM {PostgreSqlStagingTables.Qualified(_stages.TargetTableName(table))} s " +
-                  $"LEFT JOIN {Qualified(table)} t ON {join}";
+        var join = string.Join(
+            " AND ",
+            columns.Select((column, i) => $"s.k{i} = t.{PostgreSqlIdentifier.Quote(column)}")
+        );
+        var sql =
+            $"/* DataPitcher.ProbeTarget */ SELECT {select}, t.{PostgreSqlIdentifier.Quote(columns[0])} IS NOT NULL "
+            + $"FROM {PostgreSqlStagingTables.Qualified(_stages.TargetTableName(table))} s "
+            + $"LEFT JOIN {Qualified(table)} t ON {join}";
         var result = new Dictionary<StableKey, TargetProbe>();
         await using var command = _stages.Target.CreateCommand(sql);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -48,7 +64,11 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
         return result;
     }
 
-    public async Task<IReadOnlyCollection<StableKey>> ExpandAsync(ClosureRelationship relationship, IReadOnlyCollection<StableKey> fromKeys, CancellationToken cancellationToken)
+    public async Task<IReadOnlyCollection<StableKey>> ExpandAsync(
+        ClosureRelationship relationship,
+        IReadOnlyCollection<StableKey> fromKeys,
+        CancellationToken cancellationToken
+    )
     {
         await _stages.ReplaceSourceCandidatesAsync(relationship.FromTable, fromKeys, cancellationToken);
         var fromColumns = relationship.FromColumns;
@@ -56,14 +76,28 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
         var fromKeyColumns = KeyColumns(relationship.FromTable);
         var toKeyColumns = KeyColumns(relationship.ToTable);
         var select = string.Join(", ", toKeyColumns.Select(column => $"t.{PostgreSqlIdentifier.Quote(column)}"));
-        var sourceJoin = string.Join(" AND ", fromKeyColumns.Select((column, i) => $"s.k{i} = f.{PostgreSqlIdentifier.Quote(column)}"));
-        var relationshipJoin = string.Join(" AND ", fromColumns.Zip(toColumns).Select(pair => $"f.{PostgreSqlIdentifier.Quote(pair.First)} = t.{PostgreSqlIdentifier.Quote(pair.Second)}"));
-        var required = string.Join(" AND ", fromColumns.Select(column => $"f.{PostgreSqlIdentifier.Quote(column)} IS NOT NULL"));
-        var sql = $"SELECT DISTINCT {select} " +
-                  $"FROM {PostgreSqlStagingTables.Qualified(_stages.InputTableName(relationship.FromTable))} s " +
-                  $"JOIN {Qualified(relationship.FromTable)} f ON {sourceJoin} " +
-                  $"JOIN {Qualified(relationship.ToTable)} t ON {relationshipJoin} " +
-                  $"WHERE {required}";
+        var sourceJoin = string.Join(
+            " AND ",
+            fromKeyColumns.Select((column, i) => $"s.k{i} = f.{PostgreSqlIdentifier.Quote(column)}")
+        );
+        var relationshipJoin = string.Join(
+            " AND ",
+            fromColumns
+                .Zip(toColumns)
+                .Select(pair =>
+                    $"f.{PostgreSqlIdentifier.Quote(pair.First)} = t.{PostgreSqlIdentifier.Quote(pair.Second)}"
+                )
+        );
+        var required = string.Join(
+            " AND ",
+            fromColumns.Select(column => $"f.{PostgreSqlIdentifier.Quote(column)} IS NOT NULL")
+        );
+        var sql =
+            $"SELECT DISTINCT {select} "
+            + $"FROM {PostgreSqlStagingTables.Qualified(_stages.InputTableName(relationship.FromTable))} s "
+            + $"JOIN {Qualified(relationship.FromTable)} f ON {sourceJoin} "
+            + $"JOIN {Qualified(relationship.ToTable)} t ON {relationshipJoin} "
+            + $"WHERE {required}";
         await using var command = _stages.Source.CreateCommand(sql);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var result = new List<StableKey>();
@@ -80,8 +114,11 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
             return new TargetConstraintState(relationship.Name, false, false, false);
 
         var fk = _target.ForeignKeys.SingleOrDefault(x =>
-            x.ChildTable == sourceFk.ChildTable && x.ParentTable == sourceFk.ParentTable &&
-            x.ChildColumns.SequenceEqual(sourceFk.ChildColumns) && x.ParentColumns.SequenceEqual(sourceFk.ParentColumns));
+            x.ChildTable == sourceFk.ChildTable
+            && x.ParentTable == sourceFk.ParentTable
+            && x.ChildColumns.SequenceEqual(sourceFk.ChildColumns)
+            && x.ParentColumns.SequenceEqual(sourceFk.ParentColumns)
+        );
         return fk is null
             ? new TargetConstraintState(relationship.Name, false, false, false)
             : new TargetConstraintState(fk.Name, true, fk.IsEnforced, fk.IsTrusted);

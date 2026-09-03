@@ -16,9 +16,18 @@ public sealed class PostgreSqlIdentifierTests : IClassFixture<PostgreSqlClosureF
         Assert.Equal("\"Select\"\"Rows\"", PostgreSqlIdentifier.Quote(table));
 
         await using var scope = await _fixture.CreateScopeAsync();
-        await scope.ExecuteAsync($"CREATE TABLE {PostgreSqlIdentifier.Qualified(scope.Schema, table)} (\"Value\" integer PRIMARY KEY);");
-        await scope.ExecuteAsync($"INSERT INTO {PostgreSqlIdentifier.Qualified(scope.Schema, table)} (\"Value\") VALUES (1);");
+        await scope.ExecuteAsync(
+            $"CREATE TABLE {PostgreSqlIdentifier.Qualified(scope.Schema, table)} (\"Value\" integer PRIMARY KEY);"
+        );
+        await scope.ExecuteAsync(
+            $"INSERT INTO {PostgreSqlIdentifier.Qualified(scope.Schema, table)} (\"Value\") VALUES (1);"
+        );
 
-        Assert.Equal(1L, await scope.ScalarAsync<long>($"SELECT count(*) FROM {PostgreSqlIdentifier.Qualified(scope.Schema, table)};"));
+        Assert.Equal(
+            1L,
+            await scope.ScalarAsync<long>(
+                $"SELECT count(*) FROM {PostgreSqlIdentifier.Qualified(scope.Schema, table)};"
+            )
+        );
     }
 }

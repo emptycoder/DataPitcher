@@ -7,7 +7,9 @@ public sealed class ControlDatabase(string connectionString)
 {
     public DataConnection Open()
     {
-        var connection = new DataConnection(new DataOptions().UseConnectionString(ProviderName.SQLiteMS, connectionString));
+        var connection = new DataConnection(
+            new DataOptions().UseConnectionString(ProviderName.SQLiteMS, connectionString)
+        );
         connection.Execute("PRAGMA foreign_keys = ON;");
         return connection;
     }
