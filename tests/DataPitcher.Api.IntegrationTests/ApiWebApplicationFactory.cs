@@ -21,6 +21,7 @@ namespace DataPitcher.Api.IntegrationTests;
 public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly string _databasePath = Path.Combine(Path.GetTempPath(), $"datapitcher-api-{Guid.NewGuid():N}.db");
+    private readonly ControlDatabase _database;
     public FakeDataPitcherApplication Application { get; } = new();
     public TestClock Clock { get; } = new(new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero));
     public JobEventStore Events { get; }
@@ -32,15 +33,19 @@ public sealed class ApiWebApplicationFactory : WebApplicationFactory<Program>
     internal ApiWebApplicationFactory(IJobEventSignal eventSignal)
     {
         EventSignal = eventSignal;
-        var database = new ControlDatabase($"Data Source={_databasePath}");
-        new ControlDatabaseMigrator(database, Clock).Apply();
-        Events = new(database, Clock, EventSignal);
+        _database = new ControlDatabase($"Data Source={_databasePath}");
+        new ControlDatabaseMigrator(_database, Clock).Apply();
+        Events = new(_database, Clock, EventSignal);
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseSetting("ControlDatabase:Path", _databasePath);
+        builder.UseSetting("Secrets:Root", Path.GetTempPath());
         builder.ConfigureServices(services =>
         {
+            services.AddSingleton(_database);
+            services.AddSingleton<IClock>(Clock);
             services.AddSingleton<IDataPitcherApplication>(Application);
             services.AddSingleton<TestResourceAccessGrantReader>();
             services.AddSingleton<IResourceAccessGrantReader>(serviceProvider => serviceProvider.GetRequiredService<TestResourceAccessGrantReader>());
