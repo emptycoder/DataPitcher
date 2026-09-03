@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from 'react';
 import type { AuthenticationAdapter } from '../auth/authAdapter';
 import { ConnectionsScreen } from '../features/connections/ConnectionsScreen';
 import { PlanReview } from '../features/plans/PlanReview';
+import { PlanSeal } from '../features/plans/PlanSeal';
 import { PlanReviewScreen } from '../features/plans/PlanReviewScreen';
 import { SchemaBrowserScreen } from '../features/schema/SchemaBrowserScreen';
 import { SelectionWorkbenchScreen } from '../features/selections/SelectionWorkbenchScreen';
@@ -55,6 +56,7 @@ export const routes = [
   { path: '/selection-workbench', label: 'Selection workbench', render: selectionWorkbenchRoute },
   { path: '/plan-review/:planId?', label: 'Plan review', render: planReviewRoute },
   { path: '/plans/:planId/review', label: 'Plan review', render: (params, context) => <PlanReview planId={params.planId!} authentication={context.authentication} /> },
+  { path: '/plans/:planId/seal', label: 'Seal plan', render: (params, context) => <PlanSeal planId={params.planId!} authentication={context.authentication} /> },
   { path: '/transfer-monitor/:jobId?', label: 'Transfer monitor', render: transferMonitorRoute },
   { path: '/jobs/:jobId?', label: 'Transfer jobs', render: jobsRoute },
   { path: '/schema-browser', label: 'Schema browser', render: (_params, { authentication }) => <SchemaBrowserScreen authentication={authentication} /> },
