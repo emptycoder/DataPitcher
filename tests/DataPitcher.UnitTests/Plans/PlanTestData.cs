@@ -24,7 +24,9 @@ public static class PlanTestData
         ConstraintStrategy constraint = ConstraintStrategy.Enforce,
         BatchTarget? batch = null,
         VerificationStrategy verification = VerificationStrategy.StrictExact,
-        ManifestCounts? totals = null
+        ManifestCounts? totals = null,
+        int sealingVersion = TransferPlanContent.CurrentSealingVersion,
+        IReadOnlyList<PlanWarning>? warnings = null
     ) =>
         new(
             source ?? new("PostgreSql", "source-db-001", "source-fingerprint"),
@@ -69,7 +71,9 @@ public static class PlanTestData
             tables ?? [Table(Orders, PlanTableState.Root), Table(Customers, PlanTableState.RequiredDependency)],
             batch ?? new(2_000, 8 * 1024 * 1024),
             verification,
-            totals ?? new(2, 2, 0, 0)
+            totals ?? new(2, 2, 0, 0),
+            sealingVersion,
+            warnings
         );
 
     public static PlanTable Table(TableAddress table, PlanTableState state) =>

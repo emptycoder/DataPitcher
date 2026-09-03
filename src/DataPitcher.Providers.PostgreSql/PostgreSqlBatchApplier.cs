@@ -30,7 +30,7 @@ public sealed class PostgreSqlBatchApplier
             await EnsureLedgerAsync(connection, transaction, cancellationToken);
             _ledgerEnsured = true;
         }
-        var affected = new List<StableKey>();
+        var affected = new HashSet<StableKey>();
         var updates =
             batch.Policy == PostgreSqlConflictPolicy.Upsert
                 ? await ExecuteReturningAsync(
@@ -43,7 +43,7 @@ public sealed class PostgreSqlBatchApplier
                     cancellationToken
                 )
                 : [];
-        affected.AddRange(updates);
+        affected.UnionWith(updates);
         var inserts = await ExecuteReturningAsync(
             connection,
             transaction,
@@ -53,8 +53,12 @@ public sealed class PostgreSqlBatchApplier
             table,
             cancellationToken
         );
-        affected.AddRange(inserts);
-        await RecordAsync(connection, transaction, context, table, affected, cancellationToken);
+        affected.UnionWith(inserts);
+        await RecordAsync(connection, transaction, context, table, affected, "INSERT", cancellationToken);
+        // Rows the target already had are recorded too, so verification can account for every planned key.
+        var skipped = batch.Rows.Select(row => row.StableKey).Where(key => !affected.Contains(key)).ToArray();
+        await RecordAsync(connection, transaction, context, table, skipped, "SKIP", cancellationToken);
+        await RecordPlannedAsync(connection, transaction, context, table, batch, cancellationToken);
         return new PostgreSqlApplyResult(affected.Count, inserts.Count, updates.Count);
     }
 
@@ -77,8 +81,6 @@ public sealed class PostgreSqlBatchApplier
             _ledgerEnsured = true;
         }
         var deferred = table.InsertColumns.Where(column => !column.IsStableKey).ToArray();
-        if (deferred.Length == 0)
-            return 0;
         const string temp = "datapitcher_backfill";
         var declaration = string.Join(
             ", ",
@@ -144,7 +146,7 @@ public sealed class PostgreSqlBatchApplier
                 + temp
                 + " b WHERE "
                 + Join(table.StableKeyColumns, "b", "t")
-                + " AND EXISTS (SELECT 1 FROM datapitcher.transfer_affected_keys l WHERE l.job_id=@job AND l.run_id=@run AND l.table_schema=@schema AND l.table_name=@table AND l.stable_key=b.__stable_key)",
+                + " AND EXISTS (SELECT 1 FROM datapitcher.transfer_affected_keys l WHERE l.job_id=@job AND l.run_id=@run AND l.table_schema=@schema AND l.table_name=@table AND l.action_name <> 'SKIP' AND l.stable_key=b.__stable_key)",
             connection,
             transaction
         );
@@ -247,7 +249,7 @@ public sealed class PostgreSqlBatchApplier
     )
     {
         await using var command = new NpgsqlCommand(
-            "CREATE TABLE IF NOT EXISTS datapitcher.transfer_affected_keys (job_id uuid NOT NULL,run_id uuid NOT NULL,table_schema text NOT NULL,table_name text NOT NULL,stable_key bytea NOT NULL,PRIMARY KEY(job_id,run_id,table_schema,table_name,stable_key)); CREATE TABLE IF NOT EXISTS datapitcher.transfer_write_manifest (job_id uuid NOT NULL,run_id uuid NOT NULL,table_schema text NOT NULL,table_name text NOT NULL,stable_key bytea NOT NULL,PRIMARY KEY(job_id,run_id,table_schema,table_name,stable_key));",
+            "CREATE TABLE IF NOT EXISTS datapitcher.transfer_affected_keys (job_id uuid NOT NULL,run_id uuid NOT NULL,table_schema text NOT NULL,table_name text NOT NULL,stable_key bytea NOT NULL,PRIMARY KEY(job_id,run_id,table_schema,table_name,stable_key)); ALTER TABLE datapitcher.transfer_affected_keys ADD COLUMN IF NOT EXISTS action_name text NOT NULL DEFAULT 'INSERT'; CREATE TABLE IF NOT EXISTS datapitcher.transfer_write_manifest (job_id uuid NOT NULL,run_id uuid NOT NULL,table_schema text NOT NULL,table_name text NOT NULL,stable_key bytea NOT NULL,PRIMARY KEY(job_id,run_id,table_schema,table_name,stable_key));",
             connection,
             transaction
         );
@@ -255,28 +257,68 @@ public sealed class PostgreSqlBatchApplier
     }
 
     /// <summary>Writes every affected key of the batch to the ledger in one statement instead of one INSERT per key.</summary>
-    private static async Task RecordAsync(
+    private static Task RecordAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         PostgreSqlExecutionContext context,
         PostgreSqlWriteTable table,
-        IReadOnlyList<StableKey> keys,
+        IReadOnlyCollection<StableKey> keys,
+        string action,
+        CancellationToken cancellationToken
+    ) =>
+        InsertKeysAsync(
+            connection,
+            transaction,
+            "INSERT INTO datapitcher.transfer_affected_keys (job_id, run_id, table_schema, table_name, stable_key, action_name) SELECT @job, @run, @schema, @table, unnest(@keys), @action ON CONFLICT DO NOTHING",
+            context,
+            table,
+            keys,
+            action,
+            cancellationToken
+        );
+
+    /// <summary>Every row of the batch is a planned row: the manifest the run is verified against grows with it.</summary>
+    private static Task RecordPlannedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        PostgreSqlExecutionContext context,
+        PostgreSqlWriteTable table,
+        PostgreSqlTransferBatch batch,
+        CancellationToken cancellationToken
+    ) =>
+        InsertKeysAsync(
+            connection,
+            transaction,
+            "INSERT INTO datapitcher.transfer_write_manifest (job_id, run_id, table_schema, table_name, stable_key) SELECT @job, @run, @schema, @table, unnest(@keys) ON CONFLICT DO NOTHING",
+            context,
+            table,
+            batch.Rows.Select(row => row.StableKey).ToArray(),
+            null,
+            cancellationToken
+        );
+
+    private static async Task InsertKeysAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string sql,
+        PostgreSqlExecutionContext context,
+        PostgreSqlWriteTable table,
+        IReadOnlyCollection<StableKey> keys,
+        string? action,
         CancellationToken cancellationToken
     )
     {
         if (keys.Count == 0)
             return;
-        await using var command = new NpgsqlCommand(
-            "INSERT INTO datapitcher.transfer_affected_keys (job_id, run_id, table_schema, table_name, stable_key) SELECT @job, @run, @schema, @table, unnest(@keys) ON CONFLICT DO NOTHING",
-            connection,
-            transaction
-        );
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
         command.Parameters.AddWithValue("job", context.JobId);
         command.Parameters.AddWithValue("run", context.RunId);
         command.Parameters.AddWithValue("schema", table.Target.Schema);
         command.Parameters.AddWithValue("table", table.Target.Name);
         command.Parameters.Add("keys", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Bytea).Value =
             keys.Select(key => PostgreSqlStableKeyCodec.Encode(key, table)).ToArray();
+        if (action is not null)
+            command.Parameters.AddWithValue("action", action);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

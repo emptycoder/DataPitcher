@@ -235,6 +235,31 @@ public sealed class JobStoreRecoveryTests
     }
 
     [Fact]
+    public async Task JobStore_WhenVerificationFails_PersistsTheVerificationFailedStateWithTheReason()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        var store = new JobStore(fixture.Database, fixture.Clock);
+        var job = store.Start(new(Guid.NewGuid(), "start-verification-failed")).Job;
+        var claim = (await store.TryClaimNextAsync("worker-a", TimeSpan.FromMinutes(1), CancellationToken.None))!;
+        await store.PrepareAsync(claim, CancellationToken.None);
+        await store.MarkRunningAsync(claim.Lease, CancellationToken.None);
+        await store.MarkVerifyingAsync(claim.Lease, CancellationToken.None);
+
+        await store.MarkVerificationFailedAsync(
+            claim.Lease,
+            "1 planned key was never written.",
+            CancellationToken.None
+        );
+
+        var persisted = store.Get(job.JobId);
+        Assert.Equal(JobState.VerificationFailed, persisted.State);
+        Assert.Equal("verification_failed", persisted.FailureCode);
+        Assert.Equal("1 planned key was never written.", persisted.FailureDetail);
+        Assert.Null(await store.TryClaimNextAsync("worker-b", TimeSpan.FromMinutes(1), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task JobStore_WhenWorkerSucceeds_PersistsTheTerminalTransitionAndReleasesTheLease()
     {
         using var fixture = new ControlDatabaseFixture();

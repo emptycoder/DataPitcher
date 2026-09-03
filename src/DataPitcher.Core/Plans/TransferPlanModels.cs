@@ -196,8 +196,19 @@ public sealed class PlanTable
         DeferredColumns.Concat(HierarchyColumns).Distinct(StringComparer.Ordinal).ToArray();
 }
 
+/// <summary>Something the operator should know about a sealed plan that did not stop it from sealing.</summary>
+public sealed record PlanWarning(string Code, string Message);
+
 public sealed class TransferPlanContent
 {
+    /// <summary>
+    /// The version of the sealing algorithm. A plan sealed by an older version may carry an order or a manifest
+    /// the current transfer code would not produce, so a job refuses to start on it until it is sealed again.
+    /// Bump it whenever sealing changes what a plan means. 1 = first versioned release (topological order,
+    /// deferred cycle columns, hierarchy levels, persisted inclusion, recorded warnings).
+    /// </summary>
+    public const int CurrentSealingVersion = 1;
+
     [JsonConstructor]
     public TransferPlanContent(
         ConnectionFingerprint source,
@@ -215,7 +226,9 @@ public sealed class TransferPlanContent
         IReadOnlyList<PlanTable> tables,
         BatchTarget batchTarget,
         VerificationStrategy verificationStrategy,
-        ManifestCounts manifestTotals
+        ManifestCounts manifestTotals,
+        int sealingVersion = 0,
+        IReadOnlyList<PlanWarning>? warnings = null
     )
     {
         Source = source;
@@ -234,6 +247,8 @@ public sealed class TransferPlanContent
         BatchTarget = batchTarget;
         VerificationStrategy = verificationStrategy;
         ManifestTotals = manifestTotals;
+        SealingVersion = sealingVersion;
+        Warnings = Array.AsReadOnly((warnings ?? []).ToArray());
     }
 
     public ConnectionFingerprint Source { get; }
@@ -252,6 +267,14 @@ public sealed class TransferPlanContent
     public BatchTarget BatchTarget { get; }
     public VerificationStrategy VerificationStrategy { get; }
     public ManifestCounts ManifestTotals { get; }
+
+    /// <summary>The sealing algorithm version that produced this content; 0 for plans sealed before versioning.</summary>
+    public int SealingVersion { get; }
+
+    public IReadOnlyList<PlanWarning> Warnings { get; }
+
+    [JsonIgnore]
+    public bool IsSealedByCurrentVersion => SealingVersion >= CurrentSealingVersion;
 }
 
 public sealed record BatchTarget(int MaximumRows, int MaximumBytes);

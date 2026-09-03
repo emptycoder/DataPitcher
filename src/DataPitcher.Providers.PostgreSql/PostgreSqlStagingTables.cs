@@ -119,6 +119,22 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
         await CopyAsync(_target, name, table, keys, 0, ct);
     }
 
+    /// <summary>Marks staged keys as part of the transfer set; the transfer reads only marked keys.</summary>
+    public async Task MarkIncludedAsync(
+        TableDefinition table,
+        IReadOnlyCollection<StableKey> keys,
+        CancellationToken ct
+    )
+    {
+        await ReplaceSourceCandidatesAsync(table, keys, ct);
+        var join = string.Join(" AND ", KeyColumns(table).Select((_, i) => $"f.k{i} = i.k{i}"));
+        await ExecuteAsync(
+            _source,
+            $"UPDATE {Qualified(SourceTableName(table))} f SET __included = true FROM {Qualified(InputTableName(table))} i WHERE {join}",
+            ct
+        );
+    }
+
     public async Task<int> GenerationAsync(TableDefinition table, StableKey key, CancellationToken ct)
     {
         var columns = KeyColumns(table);
@@ -200,10 +216,11 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
             " OR ",
             parentColumns.Select(column => "s." + PostgreSqlIdentifier.Quote(column) + " IS NULL")
         );
+        // A parent outside the transfer set (never staged, or staged but satisfied by the target) is a root.
         var parentInKeys =
             "EXISTS (SELECT 1 FROM "
             + keys
-            + " p WHERE "
+            + " p WHERE p.__included AND "
             + string.Join(
                 " AND ",
                 parentColumns.Select((column, i) => "p." + Key(i) + " = s." + PostgreSqlIdentifier.Quote(column))
@@ -234,13 +251,13 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
             + source
             + " s ON "
             + joinSource
-            + " WHERE ("
+            + " WHERE f.__included AND (("
             + parentNull
             + ") OR "
             + parentIsSelf
             + " OR NOT "
             + parentInKeys
-            + " UNION ALL SELECT "
+            + ") UNION ALL SELECT "
             + fKeys
             + ", h.lvl + 1 FROM "
             + keys
@@ -250,7 +267,7 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
             + joinSource
             + " JOIN h ON "
             + joinParent
-            + " WHERE h.lvl < 4096 AND NOT "
+            + " WHERE f.__included AND h.lvl < 4096 AND NOT "
             + parentIsSelf
             + ") "
             // Levels are stored as -(level + 1): 0 and above stays the closure generation of rows the levelling
@@ -285,7 +302,7 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
         await ExecuteAsync(
             dataSource,
             $"CREATE SCHEMA IF NOT EXISTS {PostgreSqlIdentifier.Quote(OwnerSchema)}; "
-                + $"CREATE TABLE IF NOT EXISTS {Qualified(name)} ({declarations}, __generation integer NOT NULL, UNIQUE ({unique}))",
+                + $"CREATE TABLE IF NOT EXISTS {Qualified(name)} ({declarations}, __generation integer NOT NULL, __included boolean NOT NULL DEFAULT false, UNIQUE ({unique}))",
             ct
         );
     }

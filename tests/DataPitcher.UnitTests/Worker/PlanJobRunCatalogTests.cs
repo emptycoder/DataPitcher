@@ -53,4 +53,24 @@ public sealed class PlanJobRunCatalogTests
         Assert.Equal(targetId, run.TargetConnectionId);
         Assert.Equal(transferMode, run.TransferMode);
     }
+
+    [Fact]
+    public async Task PlanJobRunCatalog_WhenThePlanWasSealedByAnOlderAlgorithm_RefusesToLoadTheRun()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        var plans = new PlanStore(fixture.Database, fixture.Clock);
+        var planId = Guid.NewGuid();
+        await plans.SaveAsync(planId, "plan", null, "", CancellationToken.None);
+        await plans.SealAsync(planId, PlanTestData.Baseline(sealingVersion: 0), CancellationToken.None);
+        var job = new TransferJob(Guid.NewGuid(), Guid.NewGuid(), planId, "job", DataPitcher.Core.Jobs.JobState.Queued);
+        IJobRunCatalog catalog = new PlanJobRunCatalog(plans);
+
+        var exception = await Assert.ThrowsAsync<StalePlanException>(() =>
+            catalog.LoadAsync(job, CancellationToken.None)
+        );
+
+        Assert.Equal(0, exception.SealingVersion);
+        Assert.Contains("Seal the plan again before starting a transfer.", exception.Message);
+    }
 }

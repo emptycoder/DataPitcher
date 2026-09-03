@@ -72,7 +72,13 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
         return result;
     }
 
-    public async Task<IReadOnlyCollection<StableKey>> ExpandAsync(
+    public Task MarkIncludedAsync(
+        TableDefinition table,
+        IReadOnlyCollection<StableKey> keys,
+        CancellationToken cancellationToken
+    ) => _stages.MarkIncludedAsync(table, keys, cancellationToken);
+
+    public async Task<ClosureExpansion> ExpandAsync(
         ClosureRelationship relationship,
         IReadOnlyCollection<StableKey> fromKeys,
         CancellationToken cancellationToken
@@ -100,18 +106,23 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
             " AND ",
             fromColumns.Select(column => $"f.{PostgreSqlIdentifier.Quote(column)} IS NOT NULL")
         );
+        // A left join keeps rows whose foreign key points at nothing, so orphans are counted instead of vanishing.
         var sql =
-            $"SELECT DISTINCT {select} "
+            $"SELECT {select} "
             + $"FROM {PostgreSqlStagingTables.Qualified(_stages.InputTableName(relationship.FromTable))} s "
             + $"JOIN {Qualified(relationship.FromTable)} f ON {sourceJoin} "
-            + $"JOIN {Qualified(relationship.ToTable)} t ON {relationshipJoin} "
+            + $"LEFT JOIN {Qualified(relationship.ToTable)} t ON {relationshipJoin} "
             + $"WHERE {required}";
         await using var command = _stages.Source.CreateCommand(sql);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var result = new List<StableKey>();
+        var result = new HashSet<StableKey>();
+        var orphans = 0L;
         while (await reader.ReadAsync(cancellationToken))
-            result.Add(ReadKey(reader, toKeyColumns));
-        return result;
+            if (reader.IsDBNull(0))
+                orphans++;
+            else
+                result.Add(ReadKey(reader, toKeyColumns));
+        return new ClosureExpansion(result, orphans);
     }
 
     public ValueTask DisposeAsync() => _stages.DisposeAsync();

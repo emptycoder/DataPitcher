@@ -59,6 +59,20 @@ public sealed class SqlServerSealingProvider : ISealingProvider
             sourceCatalog.Tables.Select(table => table.Definition).ToArray();
         public IReadOnlyCollection<ForeignKeyDefinition> SourceForeignKeys { get; } =
             sourceCatalog.ForeignKeys.ToArray();
+        public IReadOnlyCollection<UnresolvedForeignKey> SourceUnresolvedForeignKeys { get; } =
+            sourceCatalog.UnresolvedForeignKeys.ToArray();
+
+        public async Task<IReadOnlyCollection<string>> VerificationBlockersAsync(
+            IReadOnlyCollection<TableAddress> tables,
+            CancellationToken cancellationToken
+        )
+        {
+            var strictExact = new SqlServerStrictExact(target);
+            var blockers = new List<string>();
+            foreach (var table in tables)
+                blockers.AddRange(await strictExact.BlockersAsync(table, cancellationToken));
+            return blockers;
+        }
 
         public Task ValidateAsync(GeneratedSelectionSql selection, CancellationToken cancellationToken) =>
             new SqlServerSelectionExecutor(source, sourceCatalog).ValidateAsync(selection, cancellationToken);
@@ -86,21 +100,16 @@ public sealed class SqlServerSealingProvider : ISealingProvider
             CancellationToken cancellationToken
         )
         {
+            // Sealing passes only self references onto the stable key; those are levelled through the sealed keys.
             foreach (var relationship in selfRelationships)
-            {
-                var keyColumns = stableKeys[relationship.FromTable].Constraint?.Columns;
-                // Only a self reference onto the stable key can be levelled through the sealed keys.
-                if (keyColumns is null || !relationship.ToColumns.SequenceEqual(keyColumns, StringComparer.Ordinal))
-                    continue;
                 await SqlServerStagingTables.StampHierarchyAsync(
                     source,
                     planId,
                     relationship.FromTable,
-                    keyColumns,
+                    stableKeys[relationship.FromTable].Constraint!.Columns,
                     relationship.FromColumns,
                     cancellationToken
                 );
-            }
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

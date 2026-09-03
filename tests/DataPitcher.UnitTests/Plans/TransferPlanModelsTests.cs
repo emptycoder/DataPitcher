@@ -48,9 +48,25 @@ public sealed class TransferPlanModelsTests
     [Fact]
     public void TransferPlanContent_WhenSerialized_RoundTrips()
     {
-        var expected = JsonSerializer.Serialize(PlanTestData.Baseline());
+        var expected = JsonSerializer.Serialize(
+            PlanTestData.Baseline(warnings: [new PlanWarning("source_orphans", "2 rows point at nothing.")])
+        );
         var actual = JsonSerializer.Deserialize<TransferPlanContent>(expected);
         Assert.Equal(expected, JsonSerializer.Serialize(actual));
+        Assert.Equal(TransferPlanContent.CurrentSealingVersion, actual!.SealingVersion);
+        Assert.Equal([new PlanWarning("source_orphans", "2 rows point at nothing.")], actual.Warnings);
+    }
+
+    [Fact]
+    public void TransferPlanContent_WhenSealedBeforeVersioning_IsNotCurrent()
+    {
+        var legacy = JsonSerializer.Deserialize<TransferPlanContent>(
+            JsonSerializer.Serialize(PlanTestData.Baseline(sealingVersion: 0))
+        )!;
+        Assert.Equal(0, legacy.SealingVersion);
+        Assert.Empty(legacy.Warnings);
+        Assert.False(legacy.IsSealedByCurrentVersion);
+        Assert.True(PlanTestData.Baseline().IsSealedByCurrentVersion);
     }
 
     [Theory]

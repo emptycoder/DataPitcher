@@ -42,7 +42,7 @@ public sealed class SqlServerClosureStoreTests(SqlServerClosureFixture fixture)
             keys
         );
         Assert.Contains(
-            await store.ExpandAsync(fk, [new StableKey([new("id", 1)])], CancellationToken.None),
+            (await store.ExpandAsync(fk, [new StableKey([new("id", 1)])], CancellationToken.None)).Keys,
             key => key == new StableKey([new("left_value", 7), new("right_value", 8)])
         );
         var g = source.Table("untrusted_grandparents").Definition;

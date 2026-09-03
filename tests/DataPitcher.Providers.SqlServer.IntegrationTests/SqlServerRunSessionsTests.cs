@@ -186,16 +186,21 @@ public sealed class SqlServerRunSessionsTests(SqlServerClosureFixture fixture)
             planId,
             false
         );
+        var planned = new[]
+        {
+            new StableKey([new KeyComponent("id", 1)]),
+            new StableKey([new KeyComponent("id", 2)]),
+            new StableKey([new KeyComponent("id", 3)]),
+        };
+        // Key 4 is staged the way the closure stages every discovered key, but never marked as included: the
+        // transfer must leave it alone.
         await frozen.InsertSourceAsync(
             definition,
-            [
-                new StableKey([new KeyComponent("id", 1)]),
-                new StableKey([new KeyComponent("id", 2)]),
-                new StableKey([new KeyComponent("id", 3)]),
-            ],
+            [.. planned, new StableKey([new KeyComponent("id", 4)])],
             0,
             CancellationToken.None
         );
+        await frozen.MarkIncludedAsync(definition, planned, CancellationToken.None);
         await frozen.DisposeAsync();
         var jobId = Guid.NewGuid();
         var runId = Guid.NewGuid();
@@ -240,7 +245,8 @@ public sealed class SqlServerRunSessionsTests(SqlServerClosureFixture fixture)
             ],
             new BatchTarget(2, 64),
             VerificationStrategy.Standard,
-            new ManifestCounts(3, 3, 0, 0)
+            new ManifestCounts(3, 3, 0, 0),
+            TransferPlanContent.CurrentSealingVersion
         );
 
     private static LeaseGrant Lease(Guid jobId, long fenceToken) =>

@@ -38,6 +38,7 @@ public sealed class DependencyClosure(IClosureStore store)
         var frontier = new List<Frontier>();
         var included = new Dictionary<RowAddress, ClosureRow>();
         var warnings = new HashSet<TargetConstraintWarning>();
+        var orphans = new Dictionary<ClosureRelationship, long>();
 
         foreach (var root in request.Roots)
         foreach (var key in await store.SeedRootKeysAsync(root.Table, root.Keys, cancellationToken))
@@ -90,6 +91,8 @@ public sealed class DependencyClosure(IClosureStore store)
                     keysToExpand.Add(item.Key);
                 }
             }
+            foreach (var (table, keys) in expandable)
+                await store.MarkIncludedAsync(table, keys, cancellationToken);
 
             var discovered = new HashSet<RowAddress>();
             foreach (var relationship in request.Relationships.Where(relationship => relationship.IsEnabled))
@@ -97,10 +100,11 @@ public sealed class DependencyClosure(IClosureStore store)
                 if (!expandable.TryGetValue(relationship.FromTable, out var fromKeys))
                     continue;
 
-                foreach (
-                    var key in await store.ExpandAsync(relationship, fromKeys.Distinct().ToArray(), cancellationToken)
-                )
+                var expansion = await store.ExpandAsync(relationship, fromKeys.Distinct().ToArray(), cancellationToken);
+                foreach (var key in expansion.Keys)
                     discovered.Add(new(relationship.ToTable, key));
+                if (expansion.OrphanRows > 0)
+                    orphans[relationship] = orphans.GetValueOrDefault(relationship) + expansion.OrphanRows;
             }
 
             frontier = [];
@@ -112,7 +116,11 @@ public sealed class DependencyClosure(IClosureStore store)
             }
         }
 
-        return new ClosureResult(included.Values, warnings);
+        return new ClosureResult(
+            included.Values,
+            warnings,
+            orphans.Select(pair => new SourceOrphanWarning(pair.Key.Name, pair.Value))
+        );
     }
 
     private static bool IsTargetSatisfied(TargetProbe probe, IReadOnlyCollection<ClosureRelationship> requirements) =>

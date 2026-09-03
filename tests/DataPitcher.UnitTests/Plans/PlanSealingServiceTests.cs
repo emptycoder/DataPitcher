@@ -1,0 +1,409 @@
+using System.Text.Json;
+using DataPitcher.Application.Plans;
+using DataPitcher.ControlStore;
+using DataPitcher.Core.Closure;
+using DataPitcher.Core.Connections;
+using DataPitcher.Core.Identity;
+using DataPitcher.Core.Plans;
+using DataPitcher.Core.Schema;
+using DataPitcher.Core.Selection;
+using DataPitcher.UnitTests.Closure;
+using DataPitcher.UnitTests.Infrastructure;
+using Xunit;
+
+namespace DataPitcher.UnitTests.Plans;
+
+/// <summary>
+/// Drives <see cref="PlanSealingService"/> end to end over the real control stores with a fake provider whose
+/// closure runs in memory, so every refusal and warning sealing can produce is exercised without a database.
+/// </summary>
+public sealed class PlanSealingServiceTests
+{
+    private static readonly TableDefinition Child = Table("C", ("K1", false), ("PId", false));
+    private static readonly TableDefinition Parent = Table("P", ("K1", false), ("CId", true), ("GId", true));
+    private static readonly TableDefinition Grandparent = Table("G", ("K1", false));
+    private static readonly ForeignKeyDefinition ParentToGrandparent = new(
+        "FK_P_G",
+        Parent,
+        Grandparent,
+        ["GId"],
+        ["K1"],
+        true,
+        true
+    );
+    private static readonly ForeignKeyDefinition ChildToParent = new(
+        "FK_C_P",
+        Child,
+        Parent,
+        ["PId"],
+        ["K1"],
+        true,
+        true
+    );
+
+    [Fact]
+    public async Task SealAsync_StampsTheSealingVersionAndCarriesTheClosureWarnings()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent, Grandparent], [ChildToParent, ParentToGrandparent]);
+        var pg = new ClosureRelationship(ParentToGrandparent);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.Store.Link(pg, (K(2), K(3)));
+        // The parent exists in the target but its own constraint is untrusted: it is transferred, and the plan says why.
+        session.Store.MarkTarget(Parent, K(2));
+        session.Store.SetTargetConstraint(pg, new TargetConstraintState("FK_P_G", true, true, false));
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        Assert.Equal(TransferPlanContent.CurrentSealingVersion, content.SealingVersion);
+        Assert.True(content.IsSealedByCurrentVersion);
+        Assert.Equal(VerificationStrategy.StrictExact, content.VerificationStrategy);
+        Assert.Equal(
+            ["dbo.G", "dbo.P", "dbo.C"],
+            content.Tables.Select(table => $"{table.Mapping.Source.Schema}.{table.Mapping.Source.Name}")
+        );
+        Assert.Equal(["target_constraint_untrusted"], content.Warnings.Select(warning => warning.Code));
+        Assert.Contains("FK_P_G", content.Warnings[0].Message);
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenTheTargetCannotRecordExactWrites_DowngradesVerificationAndSaysWhy()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.VerificationBlockers = ["StrictExact is blocked by a target trigger on dbo.C."];
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        Assert.Equal(VerificationStrategy.Standard, content.VerificationStrategy);
+        var warning = Assert.Single(content.Warnings);
+        Assert.Equal("verification_downgraded", warning.Code);
+        Assert.StartsWith("StrictExact is blocked by a target trigger on dbo.C.", warning.Message);
+        Assert.Equal(["dbo.C", "dbo.P"], session.VerifiedTables);
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenAPlannedTableReferencesATableTheLoginCannotSee_Refuses()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.Unresolved =
+        [
+            new UnresolvedForeignKey(
+                "FK_P_Hidden",
+                new SchemaTableAddress("dbo", "P"),
+                new SchemaTableAddress("vault", "Hidden")
+            ),
+        ];
+        var (service, _, planId) = await ArrangeAsync(fixture, session);
+
+        var exception = await Assert.ThrowsAsync<IncompleteGraphException>(() =>
+            service.SealAsync(planId, CancellationToken.None)
+        );
+
+        Assert.Contains(
+            "FK_P_Hidden on dbo.P references vault.Hidden, which the source login cannot read",
+            exception.Message
+        );
+        Assert.Contains("Grant the source login SELECT", exception.Message);
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenAnUnresolvedForeignKeyBelongsToATableOutsideThePlan_Seals()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.Unresolved =
+        [
+            new UnresolvedForeignKey(
+                "FK_Other_Hidden",
+                new SchemaTableAddress("dbo", "Other"),
+                new SchemaTableAddress("vault", "Hidden")
+            ),
+        ];
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        Assert.NotNull(await plans.LoadContentAsync(planId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenSourceRowsAreOrphanedAndTheTargetEnforcesTheConstraint_Refuses()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent], targetEnforces: true);
+        var cp = new ClosureRelationship(ChildToParent);
+        session.Store.Link(cp, (K(1), K(2)));
+        session.Store.SetOrphans(cp, 2);
+        var (service, _, planId) = await ArrangeAsync(fixture, session);
+
+        var exception = await Assert.ThrowsAsync<SourceOrphansException>(() =>
+            service.SealAsync(planId, CancellationToken.None)
+        );
+
+        Assert.Contains(
+            "2 planned row(s) in dbo.C reference a dbo.P row through FK_C_P that does not exist in the source",
+            exception.Message
+        );
+        Assert.Contains("The target enforces the constraint", exception.Message);
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenSourceRowsAreOrphanedAndTheTargetDoesNotEnforceTheConstraint_Warns()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent], targetEnforces: false);
+        var cp = new ClosureRelationship(ChildToParent);
+        session.Store.Link(cp, (K(1), K(2)));
+        session.Store.SetOrphans(cp, 1);
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        var warning = Assert.Single(content.Warnings);
+        Assert.Equal("source_orphans", warning.Code);
+        Assert.Contains("the target does not enforce the constraint", warning.Message);
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenTheTargetSnapshotLacksAPlannedTable_JudgesNullabilityFromTheSource()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var parentToChild = new ForeignKeyDefinition("FK_P_C", Parent, Child, ["CId"], ["K1"], true, true);
+        var session = Session([Child, Parent], [ChildToParent, parentToChild]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.Store.Link(new ClosureRelationship(parentToChild), (K(2), K(1)));
+        // The target scan knows neither table (a target business schema that differs from the source's).
+        session.TargetSchema = new SchemaSnapshotContent([], []);
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        var parent = Assert.Single(content.Tables, table => table.Mapping.Source.Name == "P");
+        Assert.Equal(["CId"], parent.DeferredColumns);
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenTablesFormACycleWithoutANullableColumn_Refuses()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var strictParent = Table("P", ("K1", false), ("CId", false));
+        var childToParent = new ForeignKeyDefinition("FK_C_P", Child, strictParent, ["PId"], ["K1"], true, true);
+        var parentToChild = new ForeignKeyDefinition("FK_P_C", strictParent, Child, ["CId"], ["K1"], true, true);
+        var session = Session([Child, strictParent], [childToParent, parentToChild]);
+        session.Store.Link(new ClosureRelationship(childToParent), (K(1), K(2)));
+        session.Store.Link(new ClosureRelationship(parentToChild), (K(2), K(1)));
+        var (service, _, planId) = await ArrangeAsync(fixture, session);
+
+        var exception = await Assert.ThrowsAsync<UnorderablePlanException>(() =>
+            service.SealAsync(planId, CancellationToken.None)
+        );
+
+        Assert.Contains("FK_C_P", exception.Message);
+        Assert.Contains("FK_P_C", exception.Message);
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenACycleHasANullableColumn_DefersItOnThePlanTable()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var parentToChild = new ForeignKeyDefinition("FK_P_C", Parent, Child, ["CId"], ["K1"], true, true);
+        var session = Session([Child, Parent], [ChildToParent, parentToChild]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.Store.Link(new ClosureRelationship(parentToChild), (K(2), K(1)));
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        var parent = Assert.Single(content.Tables, table => table.Mapping.Source.Name == "P");
+        Assert.Equal(["CId"], parent.DeferredColumns);
+        Assert.Equal(CycleStrategy.NullableForeignKeyTwoPhase, parent.CycleStrategy);
+        Assert.Equal(
+            ["dbo.P", "dbo.C"],
+            content.Tables.Select(table => $"{table.Mapping.Source.Schema}.{table.Mapping.Source.Name}")
+        );
+        Assert.Empty(content.Warnings);
+    }
+
+    private static async Task<(PlanSealingService Service, PlanStore Plans, Guid PlanId)> ArrangeAsync(
+        ControlDatabaseFixture fixture,
+        FakeSealingSession session
+    )
+    {
+        fixture.Migrator.Apply();
+        var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
+        var source = await profiles.CreateAsync(Draft("source"), "source", CancellationToken.None);
+        var target = await profiles.CreateAsync(Draft("target"), "target", CancellationToken.None);
+        var snapshotId = Guid.NewGuid();
+        using (var db = fixture.Database.Open())
+            db.Execute(
+                "INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)",
+                new ControlParameter("snapshotId", snapshotId.ToString()),
+                new ControlParameter("connectionId", source.ConnectionId.ToString()),
+                new ControlParameter("snapshotHash", CanonicalSchemaSnapshotHasher.Hash(session.SourceSchema)),
+                new ControlParameter("contentJson", JsonSerializer.Serialize(session.SourceSchema)),
+                new ControlParameter("createdUtc", fixture.Clock.UtcNow.ToString("O"))
+            );
+        var selections = new SelectionStore(fixture.Database, fixture.Clock);
+        var selectionId = Guid.NewGuid();
+        await selections.SaveAsync(
+            selectionId,
+            "roots",
+            """{"Mode":"raw","RawSql":"SELECT K1 AS [__datapitcher_key_0] FROM dbo.C","Parameters":[]}""",
+            "\"0\"",
+            CancellationToken.None,
+            source.ConnectionId,
+            snapshotId,
+            "dbo",
+            "C",
+            "PK_C",
+            ["K1"]
+        );
+        var plans = new PlanStore(fixture.Database, fixture.Clock);
+        var planId = Guid.NewGuid();
+        await plans.SaveAsync(
+            planId,
+            "plan",
+            null,
+            "\"0\"",
+            CancellationToken.None,
+            selectionId,
+            source.ConnectionId,
+            target.ConnectionId
+        );
+        var service = new PlanSealingService(
+            plans,
+            selections,
+            profiles,
+            new SchemaSnapshotStore(fixture.Database, fixture.Clock),
+            new Resolver(),
+            [new FakeSealingProvider(session)]
+        );
+        return (service, plans, planId);
+    }
+
+    private static ConnectionProfileDraft Draft(string name) =>
+        new(name, "fake", new SecretReference(SecretReferenceKind.EnvironmentVariable, name), "dbo", "dbo");
+
+    private static FakeSealingSession Session(
+        TableDefinition[] tables,
+        ForeignKeyDefinition[] foreignKeys,
+        bool targetEnforces = true
+    )
+    {
+        var schema = new SchemaSnapshotContent(
+            tables.Select(table => new SchemaTable(
+                table.Schema,
+                table.Name,
+                table.Columns.Select(column => new SchemaColumn(column.Name, "int", "System.Int32", column.IsNullable)),
+                new SchemaKey(table.PrimaryKey!.Name, table.PrimaryKey.Columns),
+                []
+            )),
+            foreignKeys.Select(foreignKey => new SchemaForeignKey(
+                foreignKey.Name,
+                new SchemaTableAddress(foreignKey.ChildTable.Schema, foreignKey.ChildTable.Name),
+                new SchemaTableAddress(foreignKey.ParentTable.Schema, foreignKey.ParentTable.Name),
+                foreignKey.ChildColumns,
+                foreignKey.ParentColumns,
+                targetEnforces,
+                targetEnforces
+            ))
+        );
+        return new FakeSealingSession(schema, tables, foreignKeys, [K(1)]);
+    }
+
+    private static TableDefinition Table(string name, params (string Name, bool Nullable)[] columns) =>
+        new(
+            "dbo",
+            name,
+            columns.Select(column => new ColumnDefinition(column.Name, typeof(int), column.Nullable)).ToArray(),
+            new UniqueConstraint("PK_" + name, ["K1"]),
+            []
+        );
+
+    private static StableKey K(int value) => new([new KeyComponent("K1", value)]);
+
+    private sealed class Resolver : ISecretReferenceResolver
+    {
+        public Task<string> ResolveAsync(SecretReference reference, CancellationToken cancellationToken) =>
+            Task.FromResult("Server=fake");
+    }
+
+    private sealed class FakeSealingProvider(FakeSealingSession session) : ISealingProvider
+    {
+        public string ProviderId => "fake";
+
+        public Task<ISealingSession> OpenAsync(
+            ConnectionProfile source,
+            string sourceConnectionString,
+            ConnectionProfile target,
+            string targetConnectionString,
+            CancellationToken cancellationToken
+        ) => Task.FromResult<ISealingSession>(session);
+    }
+
+    private sealed class FakeSealingSession(
+        SchemaSnapshotContent schema,
+        IReadOnlyCollection<TableDefinition> tables,
+        IReadOnlyCollection<ForeignKeyDefinition> foreignKeys,
+        IReadOnlyList<StableKey> rootKeys
+    ) : ISealingSession
+    {
+        public InMemoryClosureStore Store { get; } = new();
+        public IReadOnlyCollection<UnresolvedForeignKey> Unresolved { get; set; } = [];
+        public IReadOnlyCollection<string> VerificationBlockers { get; set; } = [];
+        public List<string> VerifiedTables { get; } = [];
+        public SchemaSnapshotContent SourceSchema { get; } = schema;
+        public SchemaSnapshotContent TargetSchema { get; set; } = schema;
+        public IReadOnlyCollection<TableDefinition> SourceTables => tables;
+        public IReadOnlyCollection<ForeignKeyDefinition> SourceForeignKeys => foreignKeys;
+        public IReadOnlyCollection<UnresolvedForeignKey> SourceUnresolvedForeignKeys => Unresolved;
+
+        public Task<IReadOnlyCollection<string>> VerificationBlockersAsync(
+            IReadOnlyCollection<TableAddress> addresses,
+            CancellationToken cancellationToken
+        )
+        {
+            VerifiedTables.AddRange(
+                addresses
+                    .Select(address => address.Schema + "." + address.Name)
+                    .OrderBy(name => name, StringComparer.Ordinal)
+            );
+            return Task.FromResult(VerificationBlockers);
+        }
+
+        public Task ValidateAsync(GeneratedSelectionSql selection, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<SelectionKeySet> ReadKeysAsync(
+            GeneratedSelectionSql selection,
+            int maximumResultSize,
+            CancellationToken cancellationToken
+        ) => Task.FromResult(new SelectionKeySet(selection.RootTable, rootKeys));
+
+        public IClosureStore CreateClosureStore(
+            IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+            Guid planId
+        ) => Store;
+
+        public Task OrderHierarchiesAsync(
+            IReadOnlyCollection<ClosureRelationship> selfRelationships,
+            IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+            Guid planId,
+            CancellationToken cancellationToken
+        ) => Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+}

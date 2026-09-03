@@ -731,6 +731,10 @@ public static class EndpointGroups
         {
             return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: exception.Message);
         }
+        catch (StalePlanException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: exception.Message);
+        }
     }
 
     private static async Task<Results<Ok<JobResponse>, ProblemHttpResult>> GetJobAsync(

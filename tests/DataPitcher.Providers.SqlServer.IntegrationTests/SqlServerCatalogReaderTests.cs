@@ -7,6 +7,47 @@ namespace DataPitcher.Providers.SqlServer.IntegrationTests;
 public sealed class SqlServerCatalogReaderTests(SqlServerClosureFixture fixture)
 {
     [Fact]
+    public async Task ReadAsync_WhenTheLoginCannotSeeAParentTable_ReportsTheForeignKeyAsUnresolved()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync(
+            "EXEC('CREATE SCHEMA vault'); CREATE TABLE vault.hidden_parents (id int NOT NULL CONSTRAINT PK_hidden_parents PRIMARY KEY);"
+                + " CREATE TABLE dbo.visible_children (id int NOT NULL CONSTRAINT PK_visible_children PRIMARY KEY, parent_id int NOT NULL CONSTRAINT FK_visible_children_hidden FOREIGN KEY REFERENCES vault.hidden_parents(id));"
+        );
+        var login = "dp_catalog_" + Guid.NewGuid().ToString("N");
+        const string password = "DataPitcherProbe!2026";
+        await using (var server = new Microsoft.Data.SqlClient.SqlConnection(scope.SourceAdminConnectionString))
+        {
+            await server.OpenAsync();
+            await using var create = new Microsoft.Data.SqlClient.SqlCommand(
+                $"CREATE LOGIN [{login}] WITH PASSWORD = '{password}';",
+                server
+            );
+            await create.ExecuteNonQueryAsync();
+        }
+        await scope.ExecuteAsync(
+            $"CREATE USER [{login}] FOR LOGIN [{login}]; GRANT SELECT ON OBJECT::dbo.visible_children TO [{login}];"
+        );
+        var restricted = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(scope.SourceConnectionString)
+        {
+            UserID = login,
+            Password = password,
+            Pooling = false,
+        }.ConnectionString;
+
+        var catalog = await new SqlServerCatalogReader(restricted).ReadAsync("dbo", CancellationToken.None);
+
+        Assert.Contains(catalog.Tables, table => table.Definition.Name == "visible_children");
+        Assert.DoesNotContain(catalog.ForeignKeys, foreignKey => foreignKey.Name == "FK_visible_children_hidden");
+        var unresolved = Assert.Single(catalog.UnresolvedForeignKeys);
+        Assert.Equal("FK_visible_children_hidden", unresolved.Name);
+        Assert.Equal(new DataPitcher.Core.Schema.SchemaTableAddress("dbo", "visible_children"), unresolved.ChildTable);
+        // The login cannot resolve the parent's name, so the catalog names it by object id instead of dropping it.
+        Assert.Equal("?", unresolved.ParentTable.Schema);
+        Assert.StartsWith("#", unresolved.ParentTable.Name);
+    }
+
+    [Fact]
     public async Task ReadAsync_UsesConstraintOrderAndReadsTrustInThreeCommands()
     {
         await using var scope = await fixture.CreateScopeAsync();

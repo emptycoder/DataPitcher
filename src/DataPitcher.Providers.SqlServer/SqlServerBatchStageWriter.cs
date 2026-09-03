@@ -92,14 +92,14 @@ public sealed class SqlServerBatchStageWriter
         await bulk.WriteToServerAsync(reader, cancellationToken);
     }
 
-    public static string StageName(SqlServerWriteTable table) =>
+    public static string StageName(SqlServerWriteTable table) => StageName(table.Target);
+
+    public static string StageName(TableAddress table) =>
         SqlServerIdentifier.Qualified(
             "datapitcher",
             "stage_"
                 + Convert
-                    .ToHexString(
-                        SHA256.HashData(Encoding.UTF8.GetBytes(table.Target.Schema + "\u001f" + table.Target.Name))
-                    )
+                    .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(table.Schema + "\u001f" + table.Name)))
                     .ToLowerInvariant()
         );
 }

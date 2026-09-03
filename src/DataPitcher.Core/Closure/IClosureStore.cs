@@ -18,7 +18,11 @@ public interface IClosureStore
         CancellationToken cancellationToken
     );
 
-    Task<IReadOnlyCollection<StableKey>> ExpandAsync(
+    /// <summary>
+    /// Follows one relationship from the given rows to their parents in the source. Rows whose foreign key is set
+    /// but resolves to no parent are counted as orphans rather than silently dropped.
+    /// </summary>
+    Task<ClosureExpansion> ExpandAsync(
         ClosureRelationship relationship,
         IReadOnlyCollection<StableKey> fromKeys,
         CancellationToken cancellationToken
@@ -28,6 +32,16 @@ public interface IClosureStore
         TableDefinition table,
         IReadOnlyCollection<StableKey> keys,
         int generation,
+        CancellationToken cancellationToken
+    );
+
+    /// <summary>
+    /// Records that the closure decided to transfer these staged keys. Keys never marked stay staged for
+    /// provenance but are not part of the transfer set.
+    /// </summary>
+    Task MarkIncludedAsync(
+        TableDefinition table,
+        IReadOnlyCollection<StableKey> keys,
         CancellationToken cancellationToken
     );
 }

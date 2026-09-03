@@ -108,7 +108,7 @@ public sealed class InMemoryClosureStore : IClosureStore
         );
     }
 
-    public Task<IReadOnlyCollection<StableKey>> ExpandAsync(
+    public Task<ClosureExpansion> ExpandAsync(
         ClosureRelationship relationship,
         IReadOnlyCollection<StableKey> fromKeys,
         CancellationToken cancellationToken
@@ -119,20 +119,58 @@ public sealed class InMemoryClosureStore : IClosureStore
             && !relationship.IsInbound
             && _sourceRows.ContainsKey(relationship.FromTable)
         )
-            return Task.FromResult<IReadOnlyCollection<StableKey>>(
-                fromKeys.SelectMany(key => Resolve(foreignKey, key)).Distinct().ToArray()
-            );
-        return Task.FromResult<IReadOnlyCollection<StableKey>>(
-            fromKeys
-                .SelectMany(key =>
-                    _links.GetValueOrDefault((relationship, key))
-                    ?? _reverseLinks.GetValueOrDefault((relationship, key))
-                    ?? []
+        {
+            var resolved = fromKeys.Select(key => Resolve(foreignKey, key).ToArray()).ToArray();
+            return Task.FromResult(
+                new ClosureExpansion(
+                    resolved.SelectMany(keys => keys).Distinct().ToArray(),
+                    fromKeys.Zip(resolved).Count(pair => pair.Second.Length == 0 && References(foreignKey, pair.First))
                 )
-                .Distinct()
-                .ToArray()
+            );
+        }
+        return Task.FromResult(
+            new ClosureExpansion(
+                fromKeys
+                    .SelectMany(key =>
+                        _links.GetValueOrDefault((relationship, key))
+                        ?? _reverseLinks.GetValueOrDefault((relationship, key))
+                        ?? []
+                    )
+                    .Distinct()
+                    .ToArray(),
+                _orphans.GetValueOrDefault(relationship)
+            )
         );
     }
+
+    private readonly Dictionary<ClosureRelationship, long> _orphans = [];
+    private readonly Dictionary<TableDefinition, HashSet<StableKey>> _included = [];
+
+    /// <summary>Declares that following the relationship from the linked rows leaves this many rows without a parent.</summary>
+    public void SetOrphans(ClosureRelationship relationship, long rows) => _orphans[relationship] = rows;
+
+    public IReadOnlyCollection<StableKey> Included(TableDefinition table) =>
+        _included.TryGetValue(table, out var keys) ? keys : [];
+
+    public Task MarkIncludedAsync(
+        TableDefinition table,
+        IReadOnlyCollection<StableKey> keys,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!_included.TryGetValue(table, out var set))
+            _included[table] = set = [];
+        set.UnionWith(keys);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Whether the child row carries a complete, non-null foreign-key value.</summary>
+    private bool References(ForeignKeyDefinition foreignKey, StableKey childKey) =>
+        _sourceRows.TryGetValue(foreignKey.ChildTable, out var children)
+        && children.Any(row =>
+            row.Key == childKey
+            && foreignKey.ChildColumns.All(column => row.Values.GetValueOrDefault(column) is not null)
+        );
 
     public Task<IReadOnlyCollection<StableKey>> InsertNewKeysAsync(
         TableDefinition table,

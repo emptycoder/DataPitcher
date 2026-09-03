@@ -15,7 +15,17 @@ public sealed class PostgreSqlStrictExact(NpgsqlDataSource dataSource)
 {
     public async Task EnsureAvailableAsync(PostgreSqlWriteTable table, CancellationToken cancellationToken)
     {
-        var target = PostgreSqlIdentifier.Qualified(table.Target.Schema, table.Target.Name);
+        var blockers = await BlockersAsync(table.Target, cancellationToken);
+        if (blockers.Count > 0)
+            throw new PostgreSqlStrictExactBlockedException(blockers[0]);
+    }
+
+    /// <summary>Why exact-set verification cannot be promised for a target table; empty when it can.</summary>
+    public async Task<IReadOnlyList<string>> BlockersAsync(TableAddress table, CancellationToken cancellationToken)
+    {
+        var target = PostgreSqlIdentifier.Qualified(table.Schema, table.Name);
+        var name = table.Schema + "." + table.Name;
+        var blockers = new List<string>();
         if (
             await ExistsAsync(
                 "SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid=@target::regclass AND NOT tgisinternal AND tgenabled <> 'D')",
@@ -23,7 +33,7 @@ public sealed class PostgreSqlStrictExact(NpgsqlDataSource dataSource)
                 cancellationToken
             )
         )
-            throw new PostgreSqlStrictExactBlockedException("StrictExact is blocked by a target trigger.");
+            blockers.Add($"StrictExact is blocked by a target trigger on {name}.");
         if (
             await ExistsAsync(
                 "SELECT EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class=@target::regclass AND rulename <> '_RETURN')",
@@ -31,7 +41,7 @@ public sealed class PostgreSqlStrictExact(NpgsqlDataSource dataSource)
                 cancellationToken
             )
         )
-            throw new PostgreSqlStrictExactBlockedException("StrictExact is blocked by a target rewrite rule.");
+            blockers.Add($"StrictExact is blocked by a target rewrite rule on {name}.");
         if (
             await ExistsAsync(
                 "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE confrelid=@target::regclass AND contype='f' AND confupdtype IN ('c','n','d'))",
@@ -39,7 +49,8 @@ public sealed class PostgreSqlStrictExact(NpgsqlDataSource dataSource)
                 cancellationToken
             )
         )
-            throw new PostgreSqlStrictExactBlockedException("StrictExact is blocked by a target cascading write path.");
+            blockers.Add($"StrictExact is blocked by a target cascading write path into {name}.");
+        return blockers;
     }
 
     public async Task RecordPlannedAsync(
@@ -76,16 +87,25 @@ public sealed class PostgreSqlStrictExact(NpgsqlDataSource dataSource)
         await transaction.CommitAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// The keys the run recorded as written or confirmed present must equal the planned manifest: nothing written
+    /// outside the plan, nothing planned left unaccounted for.
+    /// </summary>
     public async Task VerifyAsync(PostgreSqlExecutionContext context, CancellationToken cancellationToken)
     {
         const string sql =
-            "(SELECT table_schema,table_name,stable_key FROM datapitcher.transfer_affected_keys WHERE job_id=@job AND run_id=@run EXCEPT SELECT table_schema,table_name,stable_key FROM datapitcher.transfer_write_manifest WHERE job_id=@job AND run_id=@run) UNION ALL (SELECT table_schema,table_name,stable_key FROM datapitcher.transfer_write_manifest WHERE job_id=@job AND run_id=@run EXCEPT SELECT table_schema,table_name,stable_key FROM datapitcher.transfer_affected_keys WHERE job_id=@job AND run_id=@run)";
+            "SELECT (SELECT count(*) FROM (SELECT table_schema,table_name,stable_key FROM datapitcher.transfer_affected_keys WHERE job_id=@job AND run_id=@run EXCEPT SELECT table_schema,table_name,stable_key FROM datapitcher.transfer_write_manifest WHERE job_id=@job AND run_id=@run) o), (SELECT count(*) FROM (SELECT table_schema,table_name,stable_key FROM datapitcher.transfer_write_manifest WHERE job_id=@job AND run_id=@run EXCEPT SELECT table_schema,table_name,stable_key FROM datapitcher.transfer_affected_keys WHERE job_id=@job AND run_id=@run) u)";
         await using var command = dataSource.CreateCommand(sql);
         command.Parameters.AddWithValue("job", context.JobId);
         command.Parameters.AddWithValue("run", context.RunId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
-            throw new InvalidOperationException("Committed affected keys differ from the planned write manifest.");
+        await reader.ReadAsync(cancellationToken);
+        var outside = reader.GetInt64(0);
+        var unaccounted = reader.GetInt64(1);
+        if (outside + unaccounted != 0)
+            throw new TransferVerificationException(
+                $"Committed affected keys differ from the planned write manifest: {outside} key(s) were written outside the plan and {unaccounted} planned key(s) were neither written nor found in the target."
+            );
     }
 
     private async Task<bool> ExistsAsync(string sql, string target, CancellationToken cancellationToken)

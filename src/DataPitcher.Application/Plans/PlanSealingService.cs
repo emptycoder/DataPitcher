@@ -15,6 +15,12 @@ using DataPitcher.Core.Transfer;
 
 namespace DataPitcher.Application.Plans;
 
+/// <summary>A planned table has a foreign key the source login cannot follow; the message names it.</summary>
+public sealed class IncompleteGraphException(string message) : InvalidOperationException(message);
+
+/// <summary>Planned rows reference source parents that do not exist while the target enforces the constraint.</summary>
+public sealed class SourceOrphansException(string message) : InvalidOperationException(message);
+
 /// <summary>
 /// Provider-neutral plan sealing: validates the saved selection against the sealed schema snapshot, runs it against
 /// the source, computes the demand-driven closure across source and target through the provider's
@@ -102,6 +108,7 @@ public sealed class PlanSealingService(
             cancellationToken
         );
         var relationships = ReachableRelationships(session.SourceForeignKeys, root);
+        RequireCompleteGraph(session.SourceUnresolvedForeignKeys, relationships, root);
         var stableKeys = relationships
             .SelectMany(relationship => new[] { relationship.FromTable, relationship.ToTable })
             .Append(root)
@@ -138,6 +145,28 @@ public sealed class PlanSealingService(
         );
         if (order.Levelled.Count > 0)
             await session.OrderHierarchiesAsync(order.Levelled, stableKeys, planId, cancellationToken);
+        var warnings = new List<PlanWarning>();
+        warnings.AddRange(
+            closure.Warnings.Select(warning => new PlanWarning(
+                "target_constraint_untrusted",
+                $"Target constraint {warning.ConstraintName} is missing, disabled or untrusted, so rows behind it are transferred instead of trusted to exist."
+            ))
+        );
+        warnings.AddRange(Orphans(closure.Orphans, relationships, session.TargetSchema));
+        var verification = VerificationStrategy.StrictExact;
+        var blockers = await session.VerificationBlockersAsync(depth.Keys.Select(Address).ToArray(), cancellationToken);
+        if (blockers.Count > 0)
+        {
+            // Never claim a guarantee the target cannot record: exact-set verification needs side-effect-free tables.
+            verification = VerificationStrategy.Standard;
+            warnings.AddRange(
+                blockers.Select(blocker => new PlanWarning(
+                    "verification_downgraded",
+                    blocker
+                        + " Exact-set verification is not available for this plan; row counts and foreign keys are still verified."
+                ))
+            );
+        }
         var content = Content(
             selection,
             snapshot,
@@ -150,7 +179,9 @@ public sealed class PlanSealingService(
             stableKeys,
             closure,
             order,
-            parameterHash
+            parameterHash,
+            verification,
+            warnings
         );
         var sealedPlan = new TransferPlanLifecycle(
             new TransferPlanDraft(plan.DisplayName, plan.OperatorNote, "", plan.UpdatedUtc, content)
@@ -170,7 +201,9 @@ public sealed class PlanSealingService(
         IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
         ClosureResult closure,
         ImportOrder order,
-        string parameterHash
+        string parameterHash,
+        VerificationStrategy verification,
+        IReadOnlyList<PlanWarning> warnings
     )
     {
         var groups = closure.Rows.GroupBy(row => row.Table).ToArray();
@@ -202,9 +235,7 @@ public sealed class PlanSealingService(
                     group.Key == root ? PlanTableState.Root : PlanTableState.RequiredDependency,
                     new ManifestCounts(count, count, count, 0),
                     new TopologicalGroup([address]),
-                    deferred.Length > 0 ? CycleStrategy.NullableForeignKeyTwoPhase
-                        : order.Blocked.Contains(group.Key) ? CycleStrategy.Blocked
-                        : CycleStrategy.NotApplicable,
+                    deferred.Length > 0 ? CycleStrategy.NullableForeignKeyTwoPhase : CycleStrategy.NotApplicable,
                     deferred,
                     hierarchy
                 );
@@ -263,10 +294,89 @@ public sealed class PlanSealingService(
                 .ToArray(),
             tables,
             new BatchTarget(2000, 8 * 1024 * 1024),
-            VerificationStrategy.StrictExact,
-            totals
+            verification,
+            totals,
+            TransferPlanContent.CurrentSealingVersion,
+            warnings
         );
     }
+
+    /// <summary>
+    /// A planned table whose foreign key points at a table the login cannot see has an edge the graph does not
+    /// know about while the target still enforces it, so the closure cannot be complete. Refuse rather than guess.
+    /// </summary>
+    private static void RequireCompleteGraph(
+        IReadOnlyCollection<UnresolvedForeignKey> unresolved,
+        IReadOnlyCollection<ClosureRelationship> relationships,
+        TableDefinition root
+    )
+    {
+        var planned = relationships
+            .SelectMany(relationship => new[] { relationship.FromTable, relationship.ToTable })
+            .Append(root)
+            .Select(table => new SchemaTableAddress(table.Schema, table.Name))
+            .ToHashSet();
+        var missing = unresolved.Where(foreignKey => planned.Contains(foreignKey.ChildTable)).ToArray();
+        if (missing.Length == 0)
+            return;
+        throw new IncompleteGraphException(
+            "The dependency graph is incomplete: "
+                + string.Join(
+                    "; ",
+                    missing.Select(foreignKey =>
+                        $"{foreignKey.Name} on {foreignKey.ChildTable.Schema}.{foreignKey.ChildTable.Name} references {foreignKey.ParentTable.Schema}.{foreignKey.ParentTable.Name}, which the source login cannot read"
+                    )
+                )
+                + ". Grant the source login SELECT on the referenced table(s), rescan the schema and seal again; otherwise the target would reject rows whose parents were never planned."
+        );
+    }
+
+    /// <summary>
+    /// Rows whose foreign key resolves to no source parent are transferred as they are (the source has no parent to
+    /// fabricate). When the target enforces the constraint they would fail mid-run, so sealing refuses; otherwise
+    /// the plan carries a warning.
+    /// </summary>
+    private static IEnumerable<PlanWarning> Orphans(
+        IReadOnlyCollection<SourceOrphanWarning> orphans,
+        IReadOnlyCollection<ClosureRelationship> relationships,
+        SchemaSnapshotContent targetSchema
+    )
+    {
+        var enforced = new List<string>();
+        var warnings = new List<PlanWarning>();
+        foreach (var orphan in orphans)
+        {
+            var relationship = relationships.First(candidate =>
+                string.Equals(candidate.Name, orphan.RelationshipName, StringComparison.Ordinal)
+            );
+            var where =
+                $"{orphan.Rows} planned row(s) in {relationship.FromTable.Schema}.{relationship.FromTable.Name} reference a {relationship.ToTable.Schema}.{relationship.ToTable.Name} row through {relationship.Name} that does not exist in the source";
+            if (IsEnforcedOnTarget(relationship, targetSchema))
+                enforced.Add(where);
+            else
+                warnings.Add(
+                    new PlanWarning(
+                        "source_orphans",
+                        where + "; the target does not enforce the constraint, so the rows are transferred as they are."
+                    )
+                );
+        }
+        if (enforced.Count > 0)
+            throw new SourceOrphansException(
+                string.Join("; ", enforced)
+                    + ". The target enforces the constraint and would reject these rows mid-run. Repair the source rows or disable the constraint on the target before sealing."
+            );
+        return warnings;
+    }
+
+    private static bool IsEnforcedOnTarget(ClosureRelationship relationship, SchemaSnapshotContent targetSchema) =>
+        targetSchema.ForeignKeys.Any(foreignKey =>
+            foreignKey.IsEnforced
+            && string.Equals(foreignKey.ChildTable.Schema, relationship.FromTable.Schema, StringComparison.Ordinal)
+            && string.Equals(foreignKey.ChildTable.Name, relationship.FromTable.Name, StringComparison.Ordinal)
+            && foreignKey.ChildColumns.SequenceEqual(relationship.FromColumns, StringComparer.Ordinal)
+            && foreignKey.ParentColumns.SequenceEqual(relationship.ToColumns, StringComparer.Ordinal)
+        );
 
     /// <summary>A relationship can be deferred when the target accepts NULL in every referencing column.</summary>
     private static bool IsNullable(ClosureRelationship relationship, SchemaSnapshotContent targetSchema)

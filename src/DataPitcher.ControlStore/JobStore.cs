@@ -139,6 +139,20 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
         CancellationToken cancellationToken
     ) => TransitionWorkerAsync(lease, JobState.Failed, failureCode, true, cancellationToken, failureDetail);
 
+    public Task MarkVerificationFailedAsync(
+        LeaseGrant lease,
+        string? failureDetail,
+        CancellationToken cancellationToken
+    ) =>
+        TransitionWorkerAsync(
+            lease,
+            JobState.VerificationFailed,
+            "verification_failed",
+            true,
+            cancellationToken,
+            failureDetail
+        );
+
     public JobTransitionResult TryTransition(LeaseGrant lease, JobState to)
     {
         using var db = database.Open();

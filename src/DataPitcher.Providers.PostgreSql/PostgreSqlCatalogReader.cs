@@ -26,6 +26,12 @@ public sealed class PostgreSqlSchemaSnapshot
     public IReadOnlyList<PostgreSqlTable> Tables { get; }
     public IReadOnlyList<ForeignKeyDefinition> ForeignKeys { get; }
 
+    /// <summary>
+    /// PostgreSQL catalogs are readable by every role, so a foreign key's parent table is always resolved; the
+    /// unresolved list exists for parity with SQL Server, where sys.tables is permission-filtered.
+    /// </summary>
+    public IReadOnlyList<UnresolvedForeignKey> UnresolvedForeignKeys => [];
+
     public PostgreSqlTable Table(string schema, string name) =>
         Tables.Single(x =>
             string.Equals(x.Definition.Schema, schema, StringComparison.Ordinal)
@@ -113,19 +119,16 @@ public sealed class PostgreSqlCatalogReader(NpgsqlDataSource dataSource)
             .ThenBy(x => x.Name, StringComparer.Ordinal)
             .Select(x => new PostgreSqlTable(x))
             .ToArray();
-        var resolved = rawForeignKeys
-            .Where(f =>
-                definitions.ContainsKey((f.ChildSchema, f.Child)) && definitions.ContainsKey((f.ParentSchema, f.Parent))
-            )
-            .Select(f => new ForeignKeyDefinition(
-                f.Name,
-                definitions[(f.ChildSchema, f.Child)],
-                definitions[(f.ParentSchema, f.Parent)],
-                f.ChildColumns,
-                f.ParentColumns,
-                f.Enabled,
-                f.Validated
-            ));
+        // Every schema a foreign key points at has been loaded above, so each key resolves.
+        var resolved = rawForeignKeys.Select(f => new ForeignKeyDefinition(
+            f.Name,
+            definitions[(f.ChildSchema, f.Child)],
+            definitions[(f.ParentSchema, f.Parent)],
+            f.ChildColumns,
+            f.ParentColumns,
+            f.Enabled,
+            f.Validated
+        ));
         return new PostgreSqlSchemaSnapshot(tables, resolved);
     }
 

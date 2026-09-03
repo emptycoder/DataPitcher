@@ -136,7 +136,7 @@ public sealed class SqlServerRunSessions(
                 + SqlServerStagingTables.Qualified(
                     SqlServerStagingTables.SourceTableName(planId, planTable.Mapping.Source)
                 )
-                + " f ON "
+                + " f ON f.[__included]=1 AND "
                 + string.Join(
                     " AND ",
                     source.StableKeyColumns.Select(
@@ -362,6 +362,13 @@ public sealed class SqlServerRunSessions(
         }
 
         public Task DiscardUncommittedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task VerifyAsync(TransferRun run, LeaseGrant lease, CancellationToken cancellationToken) =>
+            new SqlServerTransferVerifier(connectionString).VerifyAsync(
+                content,
+                Context(run, lease),
+                cancellationToken
+            );
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 

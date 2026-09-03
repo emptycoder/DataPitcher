@@ -1,3 +1,4 @@
+using DataPitcher.Core.Identity;
 using DataPitcher.Providers.PostgreSql;
 using Xunit;
 
@@ -53,6 +54,60 @@ public sealed class PostgreSqlBatchExecutionTests : IClassFixture<PostgreSqlClos
         );
     }
 
+    [Fact]
+    public async Task BackfillAsync_WhenItIsTheFirstWriteOfTheRun_EnsuresTheLedgerAndTouchesOnlyRowsTheRunWrote()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE transfer_rows (id integer PRIMARY KEY, parent_id integer NULL); INSERT INTO transfer_rows VALUES (1, NULL);"
+        );
+        var context = PostgreSqlTransferTestData.Context();
+        var table = new PostgreSqlWriteTable(
+            new(scope.Schema, "transfer_rows"),
+            [
+                new("id", "integer", NpgsqlTypes.NpgsqlDbType.Integer, true, false, false, false, null),
+                new("parent_id", "integer", NpgsqlTypes.NpgsqlDbType.Integer, false, false, false, false, null),
+            ]
+        );
+        var batch = new PostgreSqlTransferBatch(
+            0,
+            [
+                new PostgreSqlTransferRow(
+                    new StableKey([new KeyComponent("id", 1)]),
+                    new Dictionary<string, object?> { ["id"] = 1, ["parent_id"] = 5 }
+                ),
+                new PostgreSqlTransferRow(
+                    new StableKey([new KeyComponent("id", 2)]),
+                    new Dictionary<string, object?> { ["id"] = 2, ["parent_id"] = null }
+                ),
+            ],
+            new StableKey([new KeyComponent("id", 2)]),
+            PostgreSqlConflictPolicy.SkipExisting
+        );
+        await using var connection = await scope.Target.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+
+        var affected = await new PostgreSqlBatchApplier().BackfillAsync(
+            connection,
+            transaction,
+            context,
+            table,
+            batch,
+            CancellationToken.None
+        );
+        await transaction.CommitAsync();
+
+        // Neither row is in the run's ledger, so nothing is filled in; the ledger itself now exists.
+        Assert.Equal(0L, affected);
+        Assert.Equal(
+            1L,
+            await scope.ScalarTargetAsync<long>("SELECT count(*) FROM transfer_rows WHERE parent_id IS NULL")
+        );
+        Assert.True(
+            await scope.ScalarTargetAsync<bool>("SELECT to_regclass('datapitcher.transfer_affected_keys') IS NOT NULL")
+        );
+    }
+
     [Theory]
     [InlineData(PostgreSqlConflictPolicy.InsertOnly, 2, 0, 2)]
     [InlineData(PostgreSqlConflictPolicy.SkipExisting, 1, 0, 1)]
@@ -91,7 +146,20 @@ public sealed class PostgreSqlBatchExecutionTests : IClassFixture<PostgreSqlClos
         Assert.Equal(
             (long)affected,
             await scope.ScalarTargetAsync<long>(
+                $"SELECT count(*) FROM datapitcher.transfer_affected_keys WHERE job_id='{context.JobId}' AND action_name <> 'SKIP'"
+            )
+        );
+        // Every planned key is accounted for: written, or recorded as already present.
+        Assert.Equal(
+            2L,
+            await scope.ScalarTargetAsync<long>(
                 $"SELECT count(*) FROM datapitcher.transfer_affected_keys WHERE job_id='{context.JobId}'"
+            )
+        );
+        Assert.Equal(
+            2L,
+            await scope.ScalarTargetAsync<long>(
+                $"SELECT count(*) FROM datapitcher.transfer_write_manifest WHERE job_id='{context.JobId}'"
             )
         );
     }

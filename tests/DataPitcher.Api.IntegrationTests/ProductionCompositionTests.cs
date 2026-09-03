@@ -999,7 +999,11 @@ public sealed class ProductionCompositionTests
             )
             .Build();
 
-    private static TransferPlanContent SealedContent() =>
+    private static TransferPlanContent SealedContent(
+        int sealingVersion = TransferPlanContent.CurrentSealingVersion,
+        IReadOnlyList<PlanWarning>? warnings = null,
+        IReadOnlyList<PlanTable>? tables = null
+    ) =>
         new(
             new ConnectionFingerprint("postgresql", "source", "source"),
             new ConnectionFingerprint("postgresql", "target", "target"),
@@ -1013,11 +1017,88 @@ public sealed class ProductionCompositionTests
             TriggerStrategy.Fire,
             ConstraintStrategy.Enforce,
             [],
-            [],
+            tables ?? [],
             new BatchTarget(1, 1),
             VerificationStrategy.Standard,
-            new ManifestCounts(0, 0, 0, 0)
+            new ManifestCounts(0, 0, 0, 0),
+            sealingVersion,
+            warnings
         );
+
+    [Fact]
+    public async Task DataPitcherApplication_WhenThePlanWasSealedByAnOlderAlgorithm_RefusesToStartAndFlagsTheReview()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var planId = Guid.NewGuid();
+        _ = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest("Plan", null, "ignored-on-create"),
+            CancellationToken.None
+        );
+        await fixture.Plans.SealAsync(planId, SealedContent(sealingVersion: 0), CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<StalePlanException>(() =>
+            fixture.Application.StartJobAsync(planId, "stale-start", CancellationToken.None)
+        );
+        var review = await fixture.Application.GetPlanReviewAsync(planId, CancellationToken.None);
+
+        Assert.Contains("Seal the plan again", exception.Message);
+        Assert.Equal("invalidated", review.Seal.Status);
+        Assert.Equal("plan_stale", Assert.Single(review.Seal.InvalidationReasons).Code);
+        Assert.Equal("plan_stale", Assert.Single(review.Blockers).Code);
+    }
+
+    [Fact]
+    public async Task DataPitcherApplication_ProjectsSealedWarningsAndDeferredColumnsIntoThePlanReview()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var planId = Guid.NewGuid();
+        _ = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest("Plan", null, "ignored-on-create"),
+            CancellationToken.None
+        );
+        var teams = new TableAddress("app", "Teams");
+        var deferred = new PlanTable(
+            new TableMapping(teams, teams, [new ColumnMapping("Id", "Id"), new ColumnMapping("LeadId", "LeadId")]),
+            PlanTableState.RequiredDependency,
+            new ManifestCounts(1, 1, 1, 0),
+            new TopologicalGroup([teams]),
+            CycleStrategy.NullableForeignKeyTwoPhase,
+            ["LeadId"]
+        );
+        var nodes = new TableAddress("app", "Nodes");
+        var levelled = new PlanTable(
+            new TableMapping(nodes, nodes, [new ColumnMapping("Id", "Id"), new ColumnMapping("ParentId", "ParentId")]),
+            PlanTableState.Root,
+            new ManifestCounts(1, 1, 1, 0),
+            new TopologicalGroup([nodes]),
+            CycleStrategy.NotApplicable,
+            null,
+            ["ParentId"]
+        );
+        await fixture.Plans.SealAsync(
+            planId,
+            SealedContent(
+                warnings: [new PlanWarning("target_constraint_untrusted", "FK_Teams_Lead is untrusted.")],
+                tables: [deferred, levelled]
+            ),
+            CancellationToken.None
+        );
+
+        var review = await fixture.Application.GetPlanReviewAsync(planId, CancellationToken.None);
+
+        Assert.Equal("sealed", review.Seal.Status);
+        Assert.Empty(review.Blockers);
+        var warning = Assert.Single(review.Warnings);
+        Assert.Equal(("target_constraint_untrusted", "FK_Teams_Lead is untrusted."), (warning.Code, warning.Message));
+        Assert.Equal(2, review.Cycles.Count);
+        Assert.Equal("NullableForeignKeyTwoPhase", review.Cycles[0].Strategy);
+        Assert.Equal(["app.Teams"], review.Cycles[0].Tables);
+        Assert.Contains("LeadId", review.Cycles[0].Message);
+        Assert.Equal("Ordered", review.Cycles[1].Strategy);
+        Assert.Contains("ParentId", review.Cycles[1].Message);
+    }
 
     private sealed class ProductionApplicationFixture : IDisposable
     {

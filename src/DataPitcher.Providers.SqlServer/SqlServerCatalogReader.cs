@@ -19,14 +19,22 @@ public sealed record SqlServerTable(TableDefinition Definition, IReadOnlyList<Sq
 
 public sealed class SqlServerSchemaSnapshot
 {
-    public SqlServerSchemaSnapshot(IEnumerable<SqlServerTable> tables, IEnumerable<ForeignKeyDefinition> foreignKeys)
+    public SqlServerSchemaSnapshot(
+        IEnumerable<SqlServerTable> tables,
+        IEnumerable<ForeignKeyDefinition> foreignKeys,
+        IEnumerable<UnresolvedForeignKey>? unresolvedForeignKeys = null
+    )
     {
         Tables = tables.ToArray();
         ForeignKeys = foreignKeys.ToArray();
+        UnresolvedForeignKeys = (unresolvedForeignKeys ?? []).ToArray();
     }
 
     public IReadOnlyList<SqlServerTable> Tables { get; }
     public IReadOnlyList<ForeignKeyDefinition> ForeignKeys { get; }
+
+    /// <summary>Foreign keys whose parent table the login cannot see; the graph has no edge for them.</summary>
+    public IReadOnlyList<UnresolvedForeignKey> UnresolvedForeignKeys { get; }
 
     public SqlServerTable Table(string schema, string name) =>
         Tables.Single(t =>
@@ -66,16 +74,18 @@ public sealed class SqlServerCatalogReader(string connectionString)
         + "WHERE s.name = @schema AND i.key_ordinal > 0 "
         + "ORDER BY t.name, k.name, i.key_ordinal";
 
+    // The parent side is outer-joined: sys.tables is permission-filtered, and a foreign key whose parent the login
+    // cannot see must still be reported (as unresolved) rather than vanish. Its parent is then named by object id.
     private const string ForeignKeysSql =
-        "/* DataPitcher.Catalog.ForeignKeys */ SELECT f.name, s.name, ct.name, ps.name, pt.name, cc.name, pc.name, x.constraint_column_id, f.is_disabled, f.is_not_trusted "
+        "/* DataPitcher.Catalog.ForeignKeys */ SELECT f.name, s.name, ct.name, COALESCE(ps.name, OBJECT_SCHEMA_NAME(f.referenced_object_id), N'?'), COALESCE(pt.name, OBJECT_NAME(f.referenced_object_id), N'#' + CAST(f.referenced_object_id AS nvarchar(20))), cc.name, pc.name, x.constraint_column_id, f.is_disabled, f.is_not_trusted "
         + "FROM sys.foreign_keys f "
         + "JOIN sys.tables ct ON ct.object_id = f.parent_object_id "
         + "JOIN sys.schemas s ON s.schema_id = ct.schema_id "
-        + "JOIN sys.tables pt ON pt.object_id = f.referenced_object_id "
-        + "JOIN sys.schemas ps ON ps.schema_id = pt.schema_id "
+        + "LEFT JOIN sys.tables pt ON pt.object_id = f.referenced_object_id "
+        + "LEFT JOIN sys.schemas ps ON ps.schema_id = pt.schema_id "
         + "JOIN sys.foreign_key_columns x ON x.constraint_object_id = f.object_id "
         + "JOIN sys.columns cc ON cc.object_id = x.parent_object_id AND cc.column_id = x.parent_column_id "
-        + "JOIN sys.columns pc ON pc.object_id = x.referenced_object_id AND pc.column_id = x.referenced_column_id "
+        + "LEFT JOIN sys.columns pc ON pc.object_id = x.referenced_object_id AND pc.column_id = x.referenced_column_id "
         + "WHERE s.name = @schema "
         + "ORDER BY f.object_id, x.constraint_column_id";
 
@@ -119,12 +129,19 @@ public sealed class SqlServerCatalogReader(string connectionString)
             .Values.OrderBy(d => d.Schema, StringComparer.Ordinal)
             .ThenBy(d => d.Name, StringComparer.Ordinal)
             .Select(d => new SqlServerTable(d, columnsByTable[(d.Schema, d.Name)]));
-        // A parent the login cannot see is absent from the catalog; the foreign key is then left out rather than
-        // failing the whole scan.
+        // A parent the login cannot see is absent from the catalog (sys.tables is permission-filtered). The foreign
+        // key is reported as unresolved rather than dropped, so a plan over the child cannot silently miss an edge
+        // the database still enforces.
+        var unresolved = rawForeignKeys
+            .Where(f => !definitions.ContainsKey((f.ParentSchema, f.Parent)))
+            .Select(f => new UnresolvedForeignKey(
+                f.Name,
+                new SchemaTableAddress(f.ChildSchema, f.Child),
+                new SchemaTableAddress(f.ParentSchema, f.Parent)
+            ))
+            .ToArray();
         var resolved = rawForeignKeys
-            .Where(f =>
-                definitions.ContainsKey((f.ChildSchema, f.Child)) && definitions.ContainsKey((f.ParentSchema, f.Parent))
-            )
+            .Where(f => definitions.ContainsKey((f.ParentSchema, f.Parent)))
             .Select(f => new ForeignKeyDefinition(
                 f.Name,
                 definitions[(f.ChildSchema, f.Child)],
@@ -134,7 +151,7 @@ public sealed class SqlServerCatalogReader(string connectionString)
                 !f.Disabled,
                 !f.NotTrusted
             ));
-        return new SqlServerSchemaSnapshot(tables, resolved);
+        return new SqlServerSchemaSnapshot(tables, resolved, unresolved);
     }
 
     private sealed record RawForeignKey(
@@ -243,7 +260,8 @@ public sealed class SqlServerCatalogReader(string connectionString)
                 groups.Add(group);
             }
             group.ChildColumns.Add(rows.GetString(5));
-            group.ParentColumns.Add(rows.GetString(6));
+            // Parent columns are unknown when the parent table is invisible; the key is reported as unresolved.
+            group.ParentColumns.Add(rows.IsDBNull(6) ? "?" : rows.GetString(6));
         }
         return groups;
     }

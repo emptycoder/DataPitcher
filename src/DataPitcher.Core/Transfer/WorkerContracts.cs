@@ -204,7 +204,17 @@ public interface ITargetRunSession : IAsyncDisposable
         CancellationToken cancellationToken
     );
     Task DiscardUncommittedAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Proves the completed run after the final batch committed: every planned row reached the target, nothing
+    /// outside the plan was written, and the rows this run wrote resolve their foreign keys. Throws
+    /// <see cref="TransferVerificationException"/> with the reason when it does not hold.
+    /// </summary>
+    Task VerifyAsync(TransferRun run, LeaseGrant lease, CancellationToken cancellationToken);
 }
+
+/// <summary>The completed transfer does not match its plan; the detail names what differs.</summary>
+public sealed class TransferVerificationException(string detail) : InvalidOperationException(detail);
 
 public interface ITargetRunSessionFactory
 {

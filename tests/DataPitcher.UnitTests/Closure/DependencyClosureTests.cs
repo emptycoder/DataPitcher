@@ -689,6 +689,68 @@ public sealed class DependencyClosureTests
         );
     }
 
+    [Fact]
+    public async Task Closure_WhenSourceRowsPointAtMissingParents_ReportsTheOrphansPerRelationship()
+    {
+        var c = T("C");
+        var p = T("P");
+        var cp = E(F(c, p));
+        var s = new InMemoryClosureStore();
+        s.Link(cp, (K(1), K(2)));
+        s.SetOrphans(cp, 3);
+        var r = await Run(s, [cp], Root(c, 1));
+        Assert.True(r.Contains(p, K(2)));
+        Assert.Equal([new SourceOrphanWarning(cp.Name, 3)], r.Orphans);
+    }
+
+    [Fact]
+    public async Task Closure_WhenARelationshipIsExpandedInSeveralGenerations_SumsItsOrphans()
+    {
+        var n = T("N");
+        var self = E(F(n, n));
+        var s = new InMemoryClosureStore();
+        s.Link(self, (K(1), K(2)), (K(2), K(3)));
+        s.SetOrphans(self, 1);
+        var r = await Run(s, [self], Root(n, 1));
+        Assert.Equal([new SourceOrphanWarning(self.Name, 3)], r.Orphans);
+    }
+
+    [Fact]
+    public async Task Closure_WhenAChildRowCarriesAForeignKeyValueWithoutAParentRow_CountsItAsAnOrphan()
+    {
+        var c = T("C");
+        var p = T("P");
+        var cp = E(F(c, p, ["PId"], ["K1"]));
+        var s = new InMemoryClosureStore();
+        s.AddRow(c, K(1), new Dictionary<string, object?> { ["PId"] = 9 });
+        s.AddRow(c, K(2), new Dictionary<string, object?> { ["PId"] = null });
+        s.AddRow(p, K(3), new Dictionary<string, object?> { ["K1"] = 3 });
+        var r = await Run(s, [cp], new ClosureRoot(c, [K(1), K(2)], RootConflictPolicy.FailOnConflict));
+        Assert.Equal([new SourceOrphanWarning(cp.Name, 1)], r.Orphans);
+        Assert.False(r.Contains(p, K(3)));
+    }
+
+    [Fact]
+    public async Task Closure_MarksIncludedKeysInTheStoreAndLeavesSatisfiedParentsUnmarked()
+    {
+        var c = T("C");
+        var p = T("P");
+        var g = T("G");
+        var cp = E(F(c, p));
+        var pg = E(F(p, g));
+        var s = new InMemoryClosureStore();
+        s.MarkTarget(p, K(2));
+        s.SetTargetConstraint(pg, Target(pg));
+        s.Link(cp, (K(1), K(2)));
+        s.Link(pg, (K(2), K(3)));
+        var r = await Run(s, [cp, pg], Root(c, 1));
+        Assert.True(r.Contains(c, K(1)));
+        Assert.Equal([K(1)], s.Included(c));
+        Assert.Empty(s.Included(p));
+        Assert.Empty(s.Included(g));
+        Assert.Empty(r.Orphans);
+    }
+
     private static TableDefinition T(string name, string[]? uniqueColumns = null) =>
         new(
             "dbo",

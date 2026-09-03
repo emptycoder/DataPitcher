@@ -208,13 +208,355 @@ public sealed class JobWorkerTests
         await jobs.MarkedVerifying;
         await worker.StopAsync(CancellationToken.None);
 
-        Assert.Equal(["Prepare", "Fence", "Repair", "Mirror", "Running", "Apply", "Mirror", "Verifying"], calls);
+        Assert.Equal(
+            ["Prepare", "Fence", "Repair", "Mirror", "Running", "Apply", "Mirror", "Verifying", "Verify"],
+            calls
+        );
         Assert.Equal(recoveredKey, sourceFactory.LastRequestedStartAfter);
         Assert.Contains(mirror.Checkpoints, item => item == recoveredCheckpoint);
         Assert.Contains(mirror.Checkpoints, item => item == checkpoint);
         Assert.True(source.Disposed);
         Assert.True(target.Disposed);
         Assert.NotEqual(source.ConnectionOwnerId, target.ConnectionOwnerId);
+    }
+
+    [Fact]
+    public async Task JobWorker_WhenVerificationFindsTheTargetOffPlan_MarksTheJobVerificationFailed()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        var store = new JobStore(fixture.Database, fixture.Clock);
+        var job = store.Start(new(Guid.NewGuid(), "verification-failed-run")).Job;
+        var ttl = TimeSpan.FromMinutes(1);
+        var run = new TransferRun(
+            job.JobId,
+            job.RunId,
+            "seal",
+            true,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            TransferMode.DirectFast
+        );
+        var unit = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch);
+        var checkpoint = new TargetCheckpoint(job.JobId, job.RunId, 0, null, 0, "seal", 1);
+        var target = new TestTargetRunSession(checkpoint, "target", [])
+        {
+            VerificationFailure = "dbo.T: the plan sealed 2 row(s) but the run moved 1",
+        };
+        var mirror = new RecordingCheckpointMirror([]);
+        var events = new RecordingJobEventWriter();
+        var delay = new GateWorkerDelay();
+        var worker = new JobWorker(
+            store,
+            new TestJobRunCatalog(run),
+            new NoopConnectionRevalidator(),
+            new TestTargetRunSessionFactory(target),
+            new TestTransferReadSessionFactory(new TestTransferReadSession(unit, "source")),
+            new RecoveryCoordinator(mirror),
+            new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()),
+            mirror,
+            events,
+            new NoWorkerFaults(),
+            delay,
+            fixture.Clock,
+            "worker-a",
+            ttl,
+            TimeSpan.FromMinutes(1)
+        );
+
+        await worker.StartAsync(CancellationToken.None);
+        await delay.FirstDue;
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal(JobState.VerificationFailed, await store.GetStateAsync(job.JobId, CancellationToken.None));
+        Assert.Equal("verification_failed", store.Get(job.JobId).FailureCode);
+        Assert.Equal("dbo.T: the plan sealed 2 row(s) but the run moved 1", store.Get(job.JobId).FailureDetail);
+        var announced = Assert.Single(events.Appends, item => item.Payload.State == "verification_failed");
+        Assert.Equal("dbo.T: the plan sealed 2 row(s) but the run moved 1", announced.Payload.Detail);
+    }
+
+    [Fact]
+    public async Task JobWorker_WhenThePlanWasSealedByAnOlderAlgorithm_FailsTheJobAsStale()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        var jobId = fixture.SeedJob();
+        var ttl = TimeSpan.FromMinutes(1);
+        var lease = new LeaseGrant(
+            jobId,
+            "worker-a",
+            1,
+            fixture.Clock.UtcNow.Add(ttl),
+            fixture.Clock.UtcNow.AddMinutes(1)
+        );
+        var job = new TransferJob(jobId, Guid.NewGuid(), Guid.NewGuid(), "stale-run", JobState.Queued);
+        var calls = new List<string>();
+        var jobs = new SingleClaimJobControl(new JobClaim(job, lease, false), calls);
+        var mirror = new RecordingCheckpointMirror(calls);
+        var worker = new JobWorker(
+            jobs,
+            new StalePlanJobRunCatalog(),
+            new NoopConnectionRevalidator(),
+            new CountingTargetFactory(),
+            new CountingSourceFactory(),
+            new RecoveryCoordinator(mirror),
+            new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()),
+            mirror,
+            new RecordingJobEventWriter(),
+            new NoWorkerFaults(),
+            new BlockingWorkerDelay(),
+            fixture.Clock,
+            "worker-a",
+            ttl,
+            TimeSpan.FromMinutes(1)
+        );
+
+        await worker.StartAsync(CancellationToken.None);
+        await jobs.Failed;
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal("plan_stale", jobs.FailureCode);
+        Assert.Contains("Seal the plan again before starting a transfer.", jobs.FailureDetail);
+    }
+
+    [Theory]
+    [InlineData(TransferUnitKind.Batch, true, "Writing rows of dbo.T (batch 1) failed: boom")]
+    [InlineData(
+        TransferUnitKind.DeferredColumns,
+        false,
+        "Writing deferred columns of the target (batch 1) failed: boom"
+    )]
+    public async Task JobWorker_WhenTheTargetFailsToApplyAUnit_NamesTheUnitInTheFailureDetail(
+        TransferUnitKind kind,
+        bool withTable,
+        string expected
+    )
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        var jobId = fixture.SeedJob();
+        var runId = Guid.NewGuid();
+        var ttl = TimeSpan.FromMinutes(1);
+        var lease = new LeaseGrant(
+            jobId,
+            "worker-a",
+            1,
+            fixture.Clock.UtcNow.Add(ttl),
+            fixture.Clock.UtcNow.AddMinutes(1)
+        );
+        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "apply-failure", JobState.Queued);
+        var run = new TransferRun(jobId, runId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast);
+        var unit = new TransferUnit(
+            1,
+            new StableKey([new KeyComponent("Id", 1)]),
+            1,
+            kind,
+            Table: withTable ? new TableAddress("dbo", "T") : null
+        );
+        var checkpoint = new TargetCheckpoint(jobId, runId, 0, null, 0, "seal", lease.FenceToken);
+        var calls = new List<string>();
+        var jobs = new SingleClaimJobControl(new JobClaim(job, lease, false), calls);
+        var target = new TestTargetRunSession(checkpoint, "target", calls)
+        {
+            ApplyFailure = new InvalidOperationException("boom"),
+        };
+        var mirror = new RecordingCheckpointMirror(calls);
+        var worker = new JobWorker(
+            jobs,
+            new TestJobRunCatalog(run),
+            new NoopConnectionRevalidator(),
+            new TestTargetRunSessionFactory(target),
+            new TestTransferReadSessionFactory(new TestTransferReadSession(unit, "source")),
+            new RecoveryCoordinator(mirror),
+            new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()),
+            mirror,
+            new RecordingJobEventWriter(),
+            new NoWorkerFaults(),
+            new BlockingWorkerDelay(),
+            fixture.Clock,
+            "worker-a",
+            ttl,
+            TimeSpan.FromMinutes(1)
+        );
+
+        await worker.StartAsync(CancellationToken.None);
+        await jobs.Failed;
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal("transfer_failed", jobs.FailureCode);
+        Assert.Equal(expected, jobs.FailureDetail);
+    }
+
+    [Fact]
+    public async Task JobWorker_WhenVerificationFailsOnAControlWithoutADedicatedTransition_FallsBackToFailed()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        var jobId = fixture.SeedJob();
+        var runId = Guid.NewGuid();
+        var ttl = TimeSpan.FromMinutes(1);
+        var lease = new LeaseGrant(
+            jobId,
+            "worker-a",
+            1,
+            fixture.Clock.UtcNow.Add(ttl),
+            fixture.Clock.UtcNow.AddMinutes(1)
+        );
+        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "verify-fallback", JobState.Queued);
+        var run = new TransferRun(jobId, runId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast);
+        var unit = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch);
+        var checkpoint = new TargetCheckpoint(jobId, runId, 1, unit.LastStableKey, 1, "seal", lease.FenceToken);
+        var calls = new List<string>();
+        var jobs = new SingleClaimJobControl(new JobClaim(job, lease, false), calls);
+        var target = new TestTargetRunSession(checkpoint, "target", calls) { VerificationFailure = "off plan" };
+        var mirror = new RecordingCheckpointMirror(calls);
+        var worker = new JobWorker(
+            jobs,
+            new TestJobRunCatalog(run),
+            new NoopConnectionRevalidator(),
+            new TestTargetRunSessionFactory(target),
+            new TestTransferReadSessionFactory(new TestTransferReadSession(unit, "source")),
+            new RecoveryCoordinator(mirror),
+            new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()),
+            mirror,
+            new RecordingJobEventWriter(),
+            new NoWorkerFaults(),
+            new BlockingWorkerDelay(),
+            fixture.Clock,
+            "worker-a",
+            ttl,
+            TimeSpan.FromMinutes(1)
+        );
+
+        await worker.StartAsync(CancellationToken.None);
+        await jobs.Failed;
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal("verification_failed", jobs.FailureCode);
+        Assert.Equal("off plan", jobs.FailureDetail);
+    }
+
+    [Fact]
+    public async Task JobWorker_WhenARowIsSkippedOnAUnitWithoutATable_AnnouncesTheConflictAgainstTheTarget()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        var store = new JobStore(fixture.Database, fixture.Clock);
+        var job = store.Start(new(Guid.NewGuid(), "skipped-run")).Job;
+        var ttl = TimeSpan.FromMinutes(1);
+        var run = new TransferRun(
+            job.JobId,
+            job.RunId,
+            "seal",
+            true,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            TransferMode.DirectFast
+        );
+        var unit = new TransferUnit(1, new StableKey([new KeyComponent("Id", 1)]), 1, TransferUnitKind.Batch);
+        var checkpoint = new TargetCheckpoint(job.JobId, job.RunId, 1, null, 0, "seal", 1, SkippedRows: 1);
+        var events = new ThrowOnSucceededJobEventWriter();
+        var mirror = new RecordingCheckpointMirror([]);
+        var delay = new GateWorkerDelay();
+        var worker = new JobWorker(
+            store,
+            new TestJobRunCatalog(run),
+            new NoopConnectionRevalidator(),
+            new TestTargetRunSessionFactory(new TestTargetRunSession(checkpoint, "target", [])),
+            new TestTransferReadSessionFactory(new TestTransferReadSession(unit, "source")),
+            new RecoveryCoordinator(mirror),
+            new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()),
+            mirror,
+            events,
+            new NoWorkerFaults(),
+            delay,
+            fixture.Clock,
+            "worker-a",
+            ttl,
+            TimeSpan.FromMinutes(1)
+        );
+
+        await worker.StartAsync(CancellationToken.None);
+        await delay.FirstDue;
+        await worker.StopAsync(CancellationToken.None);
+
+        // The announcement of the terminal state failed, which never fails the job itself.
+        Assert.Equal(JobState.Succeeded, await store.GetStateAsync(job.JobId, CancellationToken.None));
+        var conflict = Assert.Single(events.Appends, item => item.EventType == "conflict");
+        Assert.Equal("1 row(s) in the target already existed in the target and were skipped.", conflict.Payload.Detail);
+    }
+
+    [Fact]
+    public async Task JobWorker_WhenTheFailureMessageIsVeryLong_KeepsTheFirstTwoThousandCharacters()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        var jobId = fixture.SeedJob();
+        var runId = Guid.NewGuid();
+        var ttl = TimeSpan.FromMinutes(1);
+        var lease = new LeaseGrant(
+            jobId,
+            "worker-a",
+            1,
+            fixture.Clock.UtcNow.Add(ttl),
+            fixture.Clock.UtcNow.AddMinutes(1)
+        );
+        var job = new TransferJob(jobId, runId, Guid.NewGuid(), "long-failure", JobState.Queued);
+        var run = new TransferRun(jobId, runId, "seal", true, Guid.NewGuid(), Guid.NewGuid(), TransferMode.DirectFast);
+        var calls = new List<string>();
+        var jobs = new SingleClaimJobControl(new JobClaim(job, lease, false), calls);
+        var mirror = new RecordingCheckpointMirror(calls);
+        var worker = new JobWorker(
+            jobs,
+            new TestJobRunCatalog(run),
+            new ThrowingConnectionRevalidator(new InvalidOperationException(new string('x', 2500))),
+            new CountingTargetFactory(),
+            new CountingSourceFactory(),
+            new RecoveryCoordinator(mirror),
+            new LeaseRenewer(new LeaseStore(fixture.Database, fixture.Clock), new BlockingWorkerDelay()),
+            mirror,
+            new RecordingJobEventWriter(),
+            new NoWorkerFaults(),
+            new BlockingWorkerDelay(),
+            fixture.Clock,
+            "worker-a",
+            ttl,
+            TimeSpan.FromMinutes(1)
+        );
+
+        await worker.StartAsync(CancellationToken.None);
+        await jobs.Failed;
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal("transfer_failed", jobs.FailureCode);
+        Assert.Equal(2000, jobs.FailureDetail!.Length);
+    }
+
+    private sealed class ThrowingConnectionRevalidator(Exception exception) : ITransferConnectionRevalidator
+    {
+        public Task RevalidateAsync(TransferRun run, CancellationToken cancellationToken) =>
+            Task.FromException(exception);
+    }
+
+    private sealed class ThrowOnSucceededJobEventWriter : IJobEventWriter
+    {
+        public List<JobEventAppend> Appends { get; } = [];
+
+        public Task<JobEvent> AppendAsync(JobEventAppend append, CancellationToken cancellationToken)
+        {
+            if (append.Payload.State == "succeeded")
+                return Task.FromException<JobEvent>(new InvalidOperationException("event store unavailable"));
+            Appends.Add(append);
+            return Task.FromResult(
+                new JobEvent(append.JobId, Appends.Count, append.EventType, append.Payload, DateTimeOffset.UnixEpoch)
+            );
+        }
+    }
+
+    private sealed class StalePlanJobRunCatalog : IJobRunCatalog
+    {
+        public Task<TransferRun> LoadAsync(TransferJob job, CancellationToken cancellationToken) =>
+            Task.FromException<TransferRun>(new StalePlanException(0));
     }
 
     [Fact]

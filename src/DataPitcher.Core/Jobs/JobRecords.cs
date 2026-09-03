@@ -42,6 +42,10 @@ public interface IJobControl
         string? failureDetail,
         CancellationToken cancellationToken
     ) => MarkFailedAsync(lease, failureCode, cancellationToken);
+
+    /// <summary>The batches committed but post-transfer verification found the target does not match the plan.</summary>
+    Task MarkVerificationFailedAsync(LeaseGrant lease, string? failureDetail, CancellationToken cancellationToken) =>
+        MarkFailedAsync(lease, "verification_failed", failureDetail, cancellationToken);
 }
 
 /// <summary>Job persistence beyond worker control: starting, listing and inspecting jobs.</summary>

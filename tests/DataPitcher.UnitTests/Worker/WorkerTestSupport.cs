@@ -223,6 +223,9 @@ internal sealed class TestTargetRunSession(TargetCheckpoint checkpoint, string c
     public List<TargetMutation> QuarantinedMutations { get; } = [];
     public LeaseGrant? LastFenceLease { get; private set; }
 
+    /// <summary>Set to make every apply fail with this exception.</summary>
+    public Exception? ApplyFailure { get; set; }
+
     public Task<TargetCheckpoint> ApplyAsync(
         TransferRun run,
         LeaseGrant lease,
@@ -231,7 +234,7 @@ internal sealed class TestTargetRunSession(TargetCheckpoint checkpoint, string c
     )
     {
         calls.Add("Apply");
-        return Task.FromResult(checkpoint);
+        return ApplyFailure is null ? Task.FromResult(checkpoint) : Task.FromException<TargetCheckpoint>(ApplyFailure);
     }
 
     public Task<RecoverySnapshot> AcquireFenceReadCheckpointAndJournalAsync(
@@ -262,6 +265,17 @@ internal sealed class TestTargetRunSession(TargetCheckpoint checkpoint, string c
     }
 
     public Task DiscardUncommittedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>Set to make verification fail with this detail.</summary>
+    public string? VerificationFailure { get; set; }
+
+    public Task VerifyAsync(TransferRun run, LeaseGrant lease, CancellationToken cancellationToken)
+    {
+        calls.Add("Verify");
+        return VerificationFailure is null
+            ? Task.CompletedTask
+            : Task.FromException(new TransferVerificationException(VerificationFailure));
+    }
 
     public ValueTask DisposeAsync()
     {
@@ -492,6 +506,9 @@ internal sealed class CommitBarrierTargetSession(TargetCheckpoint initialCheckpo
         DiscardToken = cancellationToken;
         return Task.CompletedTask;
     }
+
+    public Task VerifyAsync(TransferRun run, LeaseGrant lease, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

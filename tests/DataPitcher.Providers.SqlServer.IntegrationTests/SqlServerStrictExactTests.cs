@@ -1,5 +1,6 @@
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Plans;
+using DataPitcher.Core.Transfer;
 using Xunit;
 
 namespace DataPitcher.Providers.SqlServer.IntegrationTests;
@@ -78,7 +79,9 @@ public sealed class SqlServerStrictExactTests(SqlServerClosureFixture fixture)
             CancellationToken.None
         );
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => strict.VerifyAsync(context, CancellationToken.None));
+        await Assert.ThrowsAsync<TransferVerificationException>(() =>
+            strict.VerifyAsync(context, CancellationToken.None)
+        );
     }
 
     [Fact]

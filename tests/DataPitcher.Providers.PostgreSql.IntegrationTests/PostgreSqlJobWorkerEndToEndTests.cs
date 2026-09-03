@@ -1,11 +1,13 @@
 using System.Text.Json;
 using DataPitcher.Api.Composition;
 using DataPitcher.Api.Contracts;
+using DataPitcher.Application.Plans;
 using DataPitcher.Application.Schema;
 using DataPitcher.Application.Worker;
 using DataPitcher.ControlStore;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Jobs;
+using DataPitcher.Core.Plans;
 using DataPitcher.Core.Schema;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -227,23 +229,175 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
         );
         await scope.ExecuteTargetAsync(ddl);
 
-        var job = await RunTransferAsync(scope, "worker_people", "pk_worker_people", "SELECT * FROM worker_people");
+        var job = await RunTransferAsync(
+            scope,
+            "worker_people",
+            "pk_worker_people",
+            "SELECT * FROM worker_people",
+            // A planned team appears in the target after sealing: it is skipped, and the second phase must not
+            // touch its deferred column either.
+            afterSeal: (_, _) => scope.ExecuteTargetAsync("INSERT INTO worker_teams (id, lead_id) VALUES (2100, NULL);")
+        );
 
         Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
         Assert.Equal(2100L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_people"));
         Assert.Equal(
-            2100L,
+            2099L,
             await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_teams WHERE lead_id = id")
         );
+        Assert.Equal(
+            1L,
+            await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_teams WHERE id = 2100 AND lead_id IS NULL")
+        );
+    }
+
+    [Fact]
+    public async Task Start_WhenThePlanWasSealedByAnOlderAlgorithm_RefusesBeforeWritingAnything()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl = "CREATE TABLE worker_stale (id integer NOT NULL CONSTRAINT pk_worker_stale PRIMARY KEY);";
+        await scope.ExecuteAsync(ddl + " INSERT INTO worker_stale VALUES (1),(2);");
+        await scope.ExecuteTargetAsync(ddl);
+
+        var exception = await Assert.ThrowsAsync<StalePlanException>(() =>
+            RunTransferAsync(
+                scope,
+                "worker_stale",
+                "pk_worker_stale",
+                "SELECT * FROM worker_stale",
+                afterSeal: (provider, planId) =>
+                {
+                    // The stored content is what an older build left behind: no sealing version at all.
+                    using var control = provider.GetRequiredService<ControlDatabase>().Open();
+                    control.Execute(
+                        "UPDATE Plans SET ContentJson = REPLACE(ContentJson, '\"SealingVersion\":' || @current, '\"SealingVersion\":0') WHERE PlanId = @planId",
+                        new ControlParameter("current", TransferPlanContent.CurrentSealingVersion.ToString()),
+                        new ControlParameter("planId", planId.ToString())
+                    );
+                    return Task.CompletedTask;
+                }
+            )
+        );
+
+        Assert.Equal(0, exception.SealingVersion);
+        Assert.Contains("Seal the plan again before starting a transfer.", exception.Message);
+        Assert.Equal(0L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_stale"));
+    }
+
+    [Fact]
+    public async Task Seal_WhenSourceRowsReferenceAMissingParentAndTheTargetEnforcesTheKey_Refuses()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string tables =
+            "CREATE TABLE worker_parents (id integer NOT NULL CONSTRAINT pk_worker_parents PRIMARY KEY); CREATE TABLE worker_children (id integer NOT NULL CONSTRAINT pk_worker_children PRIMARY KEY, parent_id integer NOT NULL);";
+        // The source constraint was added NOT VALID, so an orphan slipped in; the target checks the same key.
+        await scope.ExecuteAsync(
+            tables
+                + " INSERT INTO worker_children VALUES (1,999); ALTER TABLE worker_children ADD CONSTRAINT fk_worker_children_parents FOREIGN KEY (parent_id) REFERENCES worker_parents(id) NOT VALID;"
+        );
+        await scope.ExecuteTargetAsync(
+            tables
+                + " ALTER TABLE worker_children ADD CONSTRAINT fk_worker_children_parents FOREIGN KEY (parent_id) REFERENCES worker_parents(id);"
+        );
+
+        var exception = await Assert.ThrowsAsync<SourceOrphansException>(() =>
+            RunTransferAsync(scope, "worker_children", "pk_worker_children", "SELECT * FROM worker_children")
+        );
+
+        Assert.Contains(
+            "1 planned row(s) in "
+                + scope.Schema
+                + ".worker_children reference a "
+                + scope.Schema
+                + ".worker_parents row through fk_worker_children_parents that does not exist in the source",
+            exception.Message
+        );
+        Assert.Equal(0L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_children"));
+    }
+
+    [Fact]
+    public async Task Transfer_WhenTheGraphNestsCyclesWithNullableBreaks_WritesEveryRowInAnOrderTheTargetAccepts()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        var graph = new TwelveTableGraph(scope.Schema);
+        await scope.ExecuteAsync(graph.Source(nullableT11ToT12: true, nullableT12ToT11: false));
+        await scope.ExecuteTargetAsync(graph.Target(nullableT11ToT12: true, nullableT12ToT11: false));
+
+        var job = await RunTransferAsync(
+            scope,
+            "t12",
+            "pk_t12",
+            "SELECT * FROM " + graph.B + ".t12",
+            businessSchema: graph.B
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        foreach (
+            var table in new[]
+            {
+                graph.A + ".t3",
+                graph.A + ".t2",
+                graph.A + ".t1",
+                graph.B + ".t10",
+                graph.B + ".t11",
+                graph.B + ".t9",
+                graph.B + ".t12",
+            }
+        )
+            Assert.Equal(2L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM " + table));
+        // Tables the root never demands stay untouched, and the deferred columns carry the source values.
+        Assert.Equal(0L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM " + graph.A + ".t4"));
+        Assert.Equal(0L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM " + graph.C + ".t8"));
+        Assert.Equal(
+            await scope.ScalarAsync<long>("SELECT sum(t12ida * 10 + t12idb) FROM " + graph.B + ".t11"),
+            await scope.ScalarTargetAsync<long>("SELECT sum(t12ida * 10 + t12idb) FROM " + graph.B + ".t11")
+        );
+        Assert.Equal(1, await scope.ScalarTargetAsync<int>("SELECT selfid FROM " + graph.B + ".t12 WHERE id = 2"));
+        Assert.Equal(
+            0L,
+            await scope.ScalarTargetAsync<long>(
+                "SELECT count(*) FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE c.contype = 'f' AND NOT c.convalidated AND n.nspname IN ('"
+                    + graph.A
+                    + "','"
+                    + graph.B
+                    + "','"
+                    + graph.C
+                    + "')"
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Seal_WhenACycleHasNoNullableColumn_RefusesNamingTheCycle()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        var graph = new TwelveTableGraph(scope.Schema);
+        await scope.ExecuteAsync(graph.Source(nullableT11ToT12: false, nullableT12ToT11: true));
+        await scope.ExecuteTargetAsync(graph.Target(nullableT11ToT12: false, nullableT12ToT11: true));
+
+        var exception = await Assert.ThrowsAsync<UnorderablePlanException>(() =>
+            RunTransferAsync(scope, "t12", "pk_t12", "SELECT * FROM " + graph.B + ".t12", businessSchema: graph.B)
+        );
+
+        // t12 -> t9 -> t11 -> t12 has no nullable edge once t11's columns are NOT NULL; t12 -> t11 being nullable
+        // does not help because that edge is not the one closing this cycle.
+        Assert.Contains("fk_t12_t9", exception.Message);
+        Assert.Contains("fk_t9_t11", exception.Message);
+        Assert.Contains("fk_t11_t12a", exception.Message);
+        Assert.Contains(graph.B + ".t12", exception.Message);
+        Assert.Equal(0L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM " + graph.B + ".t12"));
     }
 
     private static async Task<TransferJob> RunTransferAsync(
         PostgreSqlClosureScope scope,
         string rootTable,
         string primaryKey,
-        string sql
+        string sql,
+        Func<IServiceProvider, Guid, Task>? afterSeal = null,
+        string? businessSchema = null
     )
     {
+        businessSchema ??= scope.Schema;
         var directory = Path.Combine(Path.GetTempPath(), "datapitcher-pg-worker-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
@@ -273,7 +427,7 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
                     "source",
                     "postgresql",
                     new SecretReference(SecretReferenceKind.FileMounted, sourceSecret),
-                    scope.Schema,
+                    businessSchema,
                     "datapitcher"
                 ),
                 "source",
@@ -284,7 +438,7 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
                     "target",
                     "postgresql",
                     new SecretReference(SecretReferenceKind.FileMounted, targetSecret),
-                    scope.Schema,
+                    businessSchema,
                     "datapitcher"
                 ),
                 "target",
@@ -320,7 +474,7 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
                     CancellationToken.None,
                     source.ConnectionId,
                     snapshotId,
-                    scope.Schema,
+                    businessSchema,
                     rootTable,
                     primaryKey,
                     ["id"]
@@ -342,6 +496,8 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
             await application.QueuePlanSealAsync(planId, CancellationToken.None);
             var review = await application.GetPlanReviewAsync(planId, CancellationToken.None);
             Assert.Equal("sealed", review.Seal.Status);
+            if (afterSeal is not null)
+                await afterSeal(provider, planId);
             var worker = provider.GetServices<IHostedService>().OfType<JobWorker>().Single();
             await worker.StartAsync(CancellationToken.None);
             try

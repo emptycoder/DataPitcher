@@ -26,6 +26,7 @@ public static class CanonicalPlanHasher
         Batch(w, plan.BatchTarget);
         w.Int((int)plan.VerificationStrategy);
         Counts(w, plan.ManifestTotals);
+        w.Int(plan.SealingVersion);
         return Convert.ToHexString(SHA256.HashData(w.Bytes));
     }
 

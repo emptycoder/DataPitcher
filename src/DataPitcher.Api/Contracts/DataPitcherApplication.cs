@@ -621,11 +621,19 @@ public sealed class DataPitcherApplication(
             : null;
         var content = await plans.LoadContentAsync(planId, cancellationToken);
         if (content is not null)
+        {
+            // A plan sealed by an older sealing algorithm cannot start; say so where the operator looks.
+            var stale = content.IsSealedByCurrentVersion
+                ? []
+                : new[]
+                {
+                    new PlanReviewMessageResponse("plan_stale", new StalePlanException(content.SealingVersion).Message),
+                };
             return new PlanReviewResponse(
                 record.PlanId,
                 checked((int)record.Version),
                 record.CanonicalHash ?? "",
-                new PlanReviewSealResponse("sealed", []),
+                new PlanReviewSealResponse(stale.Length == 0 ? "sealed" : "invalidated", stale),
                 new PlanReviewTotalsResponse(
                     content.ManifestTotals.Included,
                     content.ManifestTotals.PlannedWrites,
@@ -663,9 +671,22 @@ public sealed class DataPitcherApplication(
                         ""
                     ))
                     .ToArray(),
-                [],
-                [],
-                [],
+                content
+                    .Tables.Where(table => table.BackfilledColumns.Count > 0)
+                    .Select(table => new PlanReviewCycleResponse(
+                        [table.Mapping.Source.Schema + "." + table.Mapping.Source.Name],
+                        table.CycleStrategy == CycleStrategy.NullableForeignKeyTwoPhase
+                            ? "NullableForeignKeyTwoPhase"
+                            : "Ordered",
+                        "Column(s) "
+                            + string.Join(", ", table.BackfilledColumns)
+                            + " are written NULL first and filled in after every table has been written, so the target's constraints stay enforced."
+                    ))
+                    .ToArray(),
+                content
+                    .Warnings.Select(warning => new PlanReviewMessageResponse(warning.Code, warning.Message))
+                    .ToArray(),
+                stale,
                 selection is null
                     ? null
                     : new PlanReviewSelectionResponse(
@@ -677,6 +698,7 @@ public sealed class DataPitcherApplication(
                 source,
                 target
             );
+        }
         var notSealed = new PlanReviewMessageResponse("plan_not_sealed", "This plan has not completed sealing.");
         return new PlanReviewResponse(
             record.PlanId,
@@ -719,8 +741,9 @@ public sealed class DataPitcherApplication(
     )
     {
         _ = await plans.FindAsync(planId, cancellationToken) ?? throw new PlanNotFoundException();
-        if (await plans.LoadContentAsync(planId, cancellationToken) is null)
-            throw new PlanNotSealedException();
+        var content = await plans.LoadContentAsync(planId, cancellationToken) ?? throw new PlanNotSealedException();
+        if (!content.IsSealedByCurrentVersion)
+            throw new StalePlanException(content.SealingVersion);
         var result = jobs.Start(new StartJobRequest(planId, idempotencyKey));
         return Receipt(result.Job.JobId, planId: planId, jobId: result.Job.JobId, state: "queued");
     }

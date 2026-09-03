@@ -143,7 +143,7 @@ public sealed class PostgreSqlRunSessions(
                 + PostgreSqlStagingTables.Qualified(
                     PostgreSqlStagingTables.SourceTableName(planId, planTable.Mapping.Source)
                 )
-                + " f ON "
+                + " f ON f.__included AND "
                 + string.Join(
                     " AND ",
                     source.StableKeyColumns.Select(
@@ -362,6 +362,9 @@ public sealed class PostgreSqlRunSessions(
         }
 
         public Task DiscardUncommittedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task VerifyAsync(TransferRun run, LeaseGrant lease, CancellationToken cancellationToken) =>
+            new PostgreSqlTransferVerifier(dataSource).VerifyAsync(content, Context(run, lease), cancellationToken);
 
         public ValueTask DisposeAsync() => dataSource.DisposeAsync();
 

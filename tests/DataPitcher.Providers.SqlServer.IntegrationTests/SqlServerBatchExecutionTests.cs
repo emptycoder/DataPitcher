@@ -68,6 +68,96 @@ public sealed class SqlServerBatchExecutionTests(SqlServerClosureFixture fixture
         Assert.Equal(-1, checkpoint!.LastBatchSequence);
     }
 
+    [Fact]
+    public async Task BackfillAsync_WhenItIsTheFirstWriteOfTheRun_EnsuresTheLedgerAndTouchesOnlyRowsTheRunWrote()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE dbo.transfer_rows (id int PRIMARY KEY, parent_id int NULL); INSERT dbo.transfer_rows VALUES (1, NULL);"
+                + " CREATE TABLE dbo.coded_rows (code nvarchar(64) COLLATE Latin1_General_100_BIN2 PRIMARY KEY, parent_id int NULL); INSERT dbo.coded_rows VALUES (N'a', NULL);"
+        );
+        var context = SqlServerTransferTestData.Context();
+        var numeric = new SqlServerWriteTable(
+            new TableAddress("dbo", "transfer_rows"),
+            [
+                new("id", "int", typeof(int), System.Data.SqlDbType.Int, true, false, false, false, false, null),
+                new("parent_id", "int", typeof(int), System.Data.SqlDbType.Int, false, false, false, false, true, null),
+            ]
+        );
+        var coded = new SqlServerWriteTable(
+            new TableAddress("dbo", "coded_rows"),
+            [
+                new(
+                    "code",
+                    "nvarchar(64)",
+                    typeof(string),
+                    System.Data.SqlDbType.NVarChar,
+                    true,
+                    false,
+                    false,
+                    false,
+                    false,
+                    "Latin1_General_100_BIN2"
+                ),
+                new("parent_id", "int", typeof(int), System.Data.SqlDbType.Int, false, false, false, false, true, null),
+            ]
+        );
+        await using var connection = new SqlConnection(scope.TargetConnectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync();
+
+        var applier = new SqlServerBatchApplier();
+        var numericAffected = await applier.BackfillAsync(
+            connection,
+            transaction,
+            context,
+            numeric,
+            Batch(numeric, ("id", 1, 5), ("id", 2, null)),
+            CancellationToken.None
+        );
+        var codedAffected = await applier.BackfillAsync(
+            connection,
+            transaction,
+            context,
+            coded,
+            Batch(coded, ("code", "a", 7)),
+            CancellationToken.None
+        );
+        await transaction.CommitAsync();
+
+        // Neither row is in the run's ledger, so nothing is filled in; the ledger itself now exists.
+        Assert.Equal(0L, numericAffected);
+        Assert.Equal(0L, codedAffected);
+        Assert.Equal(
+            1,
+            await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.transfer_rows WHERE parent_id IS NULL")
+        );
+        Assert.Equal(
+            1,
+            await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.coded_rows WHERE parent_id IS NULL")
+        );
+        Assert.Equal(
+            1,
+            await scope.ScalarTargetAsync<int>(
+                "SELECT COUNT(*) FROM sys.tables WHERE name = 'transfer_affected_keys' AND schema_id = SCHEMA_ID('datapitcher')"
+            )
+        );
+    }
+
+    private static SqlServerTransferBatch Batch(
+        SqlServerWriteTable table,
+        params (string KeyColumn, object Key, object? Parent)[] rows
+    ) =>
+        new(
+            0,
+            rows.Select(row => new SqlServerTransferRow(
+                new StableKey([new KeyComponent(row.KeyColumn, row.Key)]),
+                new Dictionary<string, object?> { [row.KeyColumn] = row.Key, ["parent_id"] = row.Parent }
+            )),
+            new StableKey([new KeyComponent(rows[^1].KeyColumn, rows[^1].Key)]),
+            SqlServerConflictPolicy.SkipExisting
+        );
+
     [Theory]
     [InlineData(SqlServerConflictPolicy.InsertOnly, 2, 0, 2)]
     [InlineData(SqlServerConflictPolicy.SkipExisting, 1, 0, 1)]
@@ -116,7 +206,20 @@ public sealed class SqlServerBatchExecutionTests(SqlServerClosureFixture fixture
         Assert.Equal(
             affected,
             await scope.ScalarTargetAsync<int>(
+                $"SELECT COUNT(*) FROM [datapitcher].[transfer_affected_keys] WHERE job_id='{context.JobId}' AND action_name<>'SKIP'"
+            )
+        );
+        // Every planned key is accounted for: written, or recorded as already present.
+        Assert.Equal(
+            2,
+            await scope.ScalarTargetAsync<int>(
                 $"SELECT COUNT(*) FROM [datapitcher].[transfer_affected_keys] WHERE job_id='{context.JobId}'"
+            )
+        );
+        Assert.Equal(
+            2,
+            await scope.ScalarTargetAsync<int>(
+                $"SELECT COUNT(*) FROM [datapitcher].[transfer_write_manifest] WHERE job_id='{context.JobId}'"
             )
         );
     }

@@ -31,6 +31,7 @@ public sealed class SqlServerBatchApplier
             await EnsureLedgerAsync(connection, transaction, cancellationToken);
             _ledgerEnsured = true;
         }
+        _affected.Clear();
         var updates =
             batch.Policy == SqlServerConflictPolicy.Upsert && table.UpdateColumns.Count != 0
                 ? await ApplyAndRecordAsync(
@@ -60,6 +61,10 @@ public sealed class SqlServerBatchApplier
                 batch.Sequence,
                 cancellationToken
             );
+            // Rows the target already had are recorded too, so verification can account for every planned key.
+            var skipped = batch.Rows.Select(row => row.StableKey).Except(_affected).ToArray();
+            await RecordAsync(connection, transaction, context, table, skipped, "SKIP", cancellationToken);
+            await RecordPlannedAsync(connection, transaction, context, table, batch, cancellationToken);
             return new SqlServerApplyResult(inserts + updates, inserts, updates);
         }
         finally
@@ -88,8 +93,6 @@ public sealed class SqlServerBatchApplier
             _ledgerEnsured = true;
         }
         var deferred = table.InsertColumns.Where(column => !column.IsStableKey).ToArray();
-        if (deferred.Length == 0)
-            return 0;
         var declarations = string.Join(
             ",",
             table
@@ -145,7 +148,7 @@ public sealed class SqlServerBatchApplier
                 + SqlServerIdentifier.Qualified(table.Target.Schema, table.Target.Name)
                 + " t JOIN #backfill b ON "
                 + Join(table.StableKeyColumns, "b", "t")
-                + " WHERE EXISTS (SELECT 1 FROM [datapitcher].[transfer_affected_keys] l WHERE l.job_id=@job AND l.run_id=@run AND l.table_schema=@schema AND l.table_name=@name AND l.stable_key=b.[__stable_key]); DROP TABLE #backfill;",
+                + " WHERE EXISTS (SELECT 1 FROM [datapitcher].[transfer_affected_keys] l WHERE l.job_id=@job AND l.run_id=@run AND l.table_schema=@schema AND l.table_name=@name AND l.action_name<>'SKIP' AND l.stable_key=b.[__stable_key]); DROP TABLE #backfill;",
             connection,
             transaction
         );
@@ -156,7 +159,9 @@ public sealed class SqlServerBatchApplier
         return await update.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task<long> ApplyAndRecordAsync(
+    private readonly HashSet<StableKey> _affected = [];
+
+    private async Task<long> ApplyAndRecordAsync(
         SqlConnection connection,
         SqlTransaction transaction,
         string sql,
@@ -207,7 +212,45 @@ public sealed class SqlServerBatchApplier
             );
         await rows.CloseAsync();
         await RecordAsync(connection, transaction, context, table, keys, action, cancellationToken);
+        _affected.UnionWith(keys);
         return keys.Count;
+    }
+
+    /// <summary>Every row of the batch is a planned row: the manifest the run is verified against grows with it.</summary>
+    private static async Task RecordPlannedAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        SqlServerExecutionContext context,
+        SqlServerWriteTable table,
+        SqlServerTransferBatch batch,
+        CancellationToken cancellationToken
+    )
+    {
+        var data = new DataTable();
+        data.Columns.Add("job_id", typeof(Guid));
+        data.Columns.Add("run_id", typeof(Guid));
+        data.Columns.Add("table_schema", typeof(string));
+        data.Columns.Add("table_name", typeof(string));
+        data.Columns.Add("stable_key", typeof(byte[]));
+        foreach (var row in batch.Rows)
+            data.Rows.Add(
+                context.JobId,
+                context.RunId,
+                table.Target.Schema,
+                table.Target.Name,
+                SqlServerStableKeyCodec.Encode(row.StableKey, table)
+            );
+        using var reader = data.CreateDataReader();
+        using var bulk = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction)
+        {
+            DestinationTableName = "[datapitcher].[transfer_write_manifest]",
+            BatchSize = 0,
+            BulkCopyTimeout = 30,
+            EnableStreaming = true,
+        };
+        for (var ordinal = 0; ordinal < data.Columns.Count; ordinal++)
+            bulk.ColumnMappings.Add(ordinal, data.Columns[ordinal].ColumnName);
+        await bulk.WriteToServerAsync(reader, cancellationToken);
     }
 
     private static string UpdateSql(SqlServerWriteTable table)

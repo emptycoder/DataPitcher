@@ -818,6 +818,29 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task StartJob_WhenPlanWasSealedByAnOlderAlgorithm_ReturnsConflictTellingTheOperatorToReseal()
+    {
+        _factory.Application.StartJobException = new StalePlanException(0);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/plans/{Guid.NewGuid()}/jobs");
+            request.Headers.Add("Idempotency-Key", "request-stale");
+            using var response = await _client.SendAsync(request, CancellationToken.None);
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains(
+                "Seal the plan again before starting a transfer.",
+                problem.RootElement.GetProperty("title").GetString()
+            );
+        }
+        finally
+        {
+            _factory.Application.StartJobException = null;
+        }
+    }
+
+    [Fact]
     public async Task StartJob_WhenPlanDoesNotExist_ReturnsNotFound()
     {
         _factory.Application.StartJobException = new PlanNotFoundException();

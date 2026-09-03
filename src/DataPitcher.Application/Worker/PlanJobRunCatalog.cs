@@ -15,6 +15,8 @@ public sealed class PlanJobRunCatalog(IPlanRepository plans) : IJobRunCatalog
     {
         var plan = (await plans.FindAsync(job.PlanId, cancellationToken))!;
         var content = (await plans.LoadContentAsync(job.PlanId, cancellationToken))!;
+        if (!content.IsSealedByCurrentVersion)
+            throw new StalePlanException(content.SealingVersion);
         return new(
             job.JobId,
             job.RunId,

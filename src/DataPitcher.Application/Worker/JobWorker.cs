@@ -146,6 +146,24 @@ public sealed class JobWorker(
                 ),
                 leaseLost.Token
             );
+            try
+            {
+                // Bulk-copy completion is not success: the target has to match the plan before the job is Succeeded.
+                await target.VerifyAsync(run, claim.Lease, leaseLost.Token);
+            }
+            catch (TransferVerificationException exception)
+            {
+                await jobs.MarkVerificationFailedAsync(claim.Lease, exception.Message, leaseLost.Token);
+                await AnnounceAsync(
+                    claim.Job.JobId,
+                    "verification_failed",
+                    rows,
+                    bytes,
+                    exception.Message,
+                    leaseLost.Token
+                );
+                return;
+            }
             await jobs.MarkSucceededAsync(claim.Lease, leaseLost.Token);
             await AnnounceAsync(claim.Job.JobId, "succeeded", rows, bytes, null, leaseLost.Token);
         }
@@ -204,6 +222,7 @@ public sealed class JobWorker(
         var code = (exception is TransferUnitException wrapped ? wrapped.InnerException! : exception) switch
         {
             ConnectionNotHealthyException => "connection_unhealthy",
+            StalePlanException => "plan_stale",
             NotSupportedException => "not_supported",
             _ => "transfer_failed",
         };

@@ -15,6 +15,19 @@ public interface ISealingSession : IAsyncDisposable
     SchemaSnapshotContent TargetSchema { get; }
     IReadOnlyCollection<TableDefinition> SourceTables { get; }
     IReadOnlyCollection<ForeignKeyDefinition> SourceForeignKeys { get; }
+
+    /// <summary>Foreign keys of the source whose parent table the catalog could not load; see <see cref="UnresolvedForeignKey"/>.</summary>
+    IReadOnlyCollection<UnresolvedForeignKey> SourceUnresolvedForeignKeys { get; }
+
+    /// <summary>
+    /// Why exact-set verification cannot be promised for these target tables (a trigger, a rule, a cascading
+    /// path), one message per blocker. Empty when StrictExact is available.
+    /// </summary>
+    Task<IReadOnlyCollection<string>> VerificationBlockersAsync(
+        IReadOnlyCollection<TableAddress> tables,
+        CancellationToken cancellationToken
+    );
+
     Task ValidateAsync(GeneratedSelectionSql selection, CancellationToken cancellationToken);
     Task<SelectionKeySet> ReadKeysAsync(
         GeneratedSelectionSql selection,
@@ -32,7 +45,7 @@ public interface ISealingSession : IAsyncDisposable
         IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
         Guid planId,
         CancellationToken cancellationToken
-    ) => Task.CompletedTask;
+    );
 
     /// <summary>
     /// Creates the closure store for this plan. Root key staging must survive the session so the transfer worker can

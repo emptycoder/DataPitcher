@@ -1,4 +1,5 @@
 using DataPitcher.Core.Identity;
+using DataPitcher.Core.Transfer;
 using DataPitcher.Providers.PostgreSql;
 using Npgsql;
 using NpgsqlTypes;
@@ -101,7 +102,9 @@ public sealed class PostgreSqlStrictExactTests : IClassFixture<PostgreSqlClosure
             CancellationToken.None
         );
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => strict.VerifyAsync(context, CancellationToken.None));
+        await Assert.ThrowsAsync<TransferVerificationException>(() =>
+            strict.VerifyAsync(context, CancellationToken.None)
+        );
     }
 
     [Fact]

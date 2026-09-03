@@ -166,17 +166,33 @@ public sealed class TargetProbe
 
 public sealed record TargetConstraintWarning(string ConstraintName);
 
+/// <summary>
+/// Included rows whose foreign key does not resolve to a parent in the source. They are transferred as they are;
+/// a target that enforces the constraint will reject them.
+/// </summary>
+public sealed record SourceOrphanWarning(string RelationshipName, long Rows);
+
+/// <summary>The parent keys an expansion found, and how many expanded rows pointed at a parent that does not exist.</summary>
+public sealed record ClosureExpansion(IReadOnlyCollection<StableKey> Keys, long OrphanRows);
+
 public sealed class ClosureResult
 {
-    public ClosureResult(IEnumerable<ClosureRow> rows, IEnumerable<TargetConstraintWarning> warnings)
+    public ClosureResult(
+        IEnumerable<ClosureRow> rows,
+        IEnumerable<TargetConstraintWarning> warnings,
+        IEnumerable<SourceOrphanWarning>? orphans = null
+    )
     {
         Rows = Array.AsReadOnly(rows.ToArray());
         Warnings = Array.AsReadOnly(warnings.ToArray());
+        Orphans = Array.AsReadOnly((orphans ?? []).ToArray());
     }
 
     public IReadOnlyCollection<ClosureRow> Rows { get; }
 
     public IReadOnlyCollection<TargetConstraintWarning> Warnings { get; }
+
+    public IReadOnlyCollection<SourceOrphanWarning> Orphans { get; }
 
     public bool Contains(TableDefinition table, StableKey key) => Rows.Any(row => row.Table == table && row.Key == key);
 }

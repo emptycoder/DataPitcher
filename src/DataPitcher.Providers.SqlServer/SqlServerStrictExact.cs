@@ -16,7 +16,16 @@ public sealed class SqlServerStrictExact(string targetConnectionString)
 {
     public async Task EnsureAvailableAsync(SqlServerWriteTable table, CancellationToken cancellationToken)
     {
-        var target = SqlServerIdentifier.Qualified(table.Target.Schema, table.Target.Name);
+        var blockers = await BlockersAsync(table.Target, cancellationToken);
+        if (blockers.Count > 0)
+            throw new SqlServerStrictExactBlockedException(blockers[0]);
+    }
+
+    /// <summary>Why exact-set verification cannot be promised for a target table; empty when it can.</summary>
+    public async Task<IReadOnlyList<string>> BlockersAsync(TableAddress table, CancellationToken cancellationToken)
+    {
+        var target = SqlServerIdentifier.Qualified(table.Schema, table.Name);
+        var blockers = new List<string>();
         if (
             await ExistsAsync(
                 "SELECT 1 FROM sys.triggers WHERE parent_id=OBJECT_ID(@target) AND is_disabled=0 AND is_ms_shipped=0",
@@ -24,7 +33,7 @@ public sealed class SqlServerStrictExact(string targetConnectionString)
                 cancellationToken
             )
         )
-            throw new SqlServerStrictExactBlockedException("StrictExact is blocked by a target trigger.");
+            blockers.Add($"StrictExact is blocked by a target trigger on {table.Schema}.{table.Name}.");
         if (
             await ExistsAsync(
                 "SELECT 1 FROM sys.foreign_keys WHERE referenced_object_id=OBJECT_ID(@target) AND is_disabled=0 AND (delete_referential_action<>0 OR update_referential_action<>0)",
@@ -32,7 +41,8 @@ public sealed class SqlServerStrictExact(string targetConnectionString)
                 cancellationToken
             )
         )
-            throw new SqlServerStrictExactBlockedException("StrictExact is blocked by a target cascading write path.");
+            blockers.Add($"StrictExact is blocked by a target cascading write path into {table.Schema}.{table.Name}.");
+        return blockers;
     }
 
     public async Task RecordPlannedAsync(
@@ -63,18 +73,27 @@ public sealed class SqlServerStrictExact(string targetConnectionString)
         await transaction.CommitAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// The keys the run recorded as written or confirmed present must equal the planned manifest: nothing written
+    /// outside the plan, nothing planned left unaccounted for.
+    /// </summary>
     public async Task VerifyAsync(SqlServerExecutionContext context, CancellationToken cancellationToken)
     {
         const string sql =
-            "(SELECT table_schema,table_name,stable_key FROM [datapitcher].[transfer_affected_keys] WHERE job_id=@job AND run_id=@run EXCEPT SELECT table_schema,table_name,stable_key FROM [datapitcher].[transfer_write_manifest] WHERE job_id=@job AND run_id=@run) UNION ALL (SELECT table_schema,table_name,stable_key FROM [datapitcher].[transfer_write_manifest] WHERE job_id=@job AND run_id=@run EXCEPT SELECT table_schema,table_name,stable_key FROM [datapitcher].[transfer_affected_keys] WHERE job_id=@job AND run_id=@run)";
+            "SELECT (SELECT COUNT(*) FROM (SELECT table_schema,table_name,stable_key FROM [datapitcher].[transfer_affected_keys] WHERE job_id=@job AND run_id=@run EXCEPT SELECT table_schema,table_name,stable_key FROM [datapitcher].[transfer_write_manifest] WHERE job_id=@job AND run_id=@run) o), (SELECT COUNT(*) FROM (SELECT table_schema,table_name,stable_key FROM [datapitcher].[transfer_write_manifest] WHERE job_id=@job AND run_id=@run EXCEPT SELECT table_schema,table_name,stable_key FROM [datapitcher].[transfer_affected_keys] WHERE job_id=@job AND run_id=@run) u)";
         await using var connection = new SqlConnection(targetConnectionString);
         await connection.OpenAsync(cancellationToken);
         await using var command = new SqlCommand(sql, connection);
         command.Parameters.AddWithValue("@job", context.JobId);
         command.Parameters.AddWithValue("@run", context.RunId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
-            throw new InvalidOperationException("Committed affected keys differ from the planned write manifest.");
+        await reader.ReadAsync(cancellationToken);
+        var outside = reader.GetInt32(0);
+        var unaccounted = reader.GetInt32(1);
+        if (outside + unaccounted != 0)
+            throw new TransferVerificationException(
+                $"Committed affected keys differ from the planned write manifest: {outside} key(s) were written outside the plan and {unaccounted} planned key(s) were neither written nor found in the target."
+            );
     }
 
     private async Task<bool> ExistsAsync(string sql, string target, CancellationToken cancellationToken)

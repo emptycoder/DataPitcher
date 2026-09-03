@@ -156,6 +156,7 @@ public sealed class SqlServerDependencyClosureTests(SqlServerClosureFixture fixt
         var r = await s.RunAsync([e], s.Root(c, 1));
         Assert.True(r.Contains(c, K(1)));
         Assert.False(r.Contains(p, K(2)));
+        Assert.Equal([new SourceOrphanWarning(e.Name, 1)], r.Orphans);
     }
 
     [Fact]
@@ -751,7 +752,7 @@ internal sealed class CountingClosureStore(IClosureStore inner) : IClosureStore,
         CancellationToken cancellationToken
     ) => inner.ProbeTargetAsync(table, outgoingRelationships, keys, cancellationToken);
 
-    public Task<IReadOnlyCollection<StableKey>> ExpandAsync(
+    public Task<ClosureExpansion> ExpandAsync(
         ClosureRelationship relationship,
         IReadOnlyCollection<StableKey> fromKeys,
         CancellationToken cancellationToken
@@ -763,6 +764,12 @@ internal sealed class CountingClosureStore(IClosureStore inner) : IClosureStore,
         int generation,
         CancellationToken cancellationToken
     ) => inner.InsertNewKeysAsync(table, keys, generation, cancellationToken);
+
+    public Task MarkIncludedAsync(
+        TableDefinition table,
+        IReadOnlyCollection<StableKey> keys,
+        CancellationToken cancellationToken
+    ) => inner.MarkIncludedAsync(table, keys, cancellationToken);
 
     public ValueTask DisposeAsync() =>
         inner is IAsyncDisposable disposable ? disposable.DisposeAsync() : ValueTask.CompletedTask;

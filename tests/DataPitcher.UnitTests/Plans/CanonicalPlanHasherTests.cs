@@ -14,6 +14,13 @@ public sealed class CanonicalPlanHasherTests
         );
 
     [Fact]
+    public void Hash_WhenTheSealingVersionDiffers_Differs() =>
+        Assert.NotEqual(
+            CanonicalPlanHasher.Hash(PlanTestData.Baseline()),
+            CanonicalPlanHasher.Hash(PlanTestData.Baseline(sealingVersion: 0))
+        );
+
+    [Fact]
     public void Hash_WhenCurrentCultureIsSwedishOrTurkish_IsUnchanged()
     {
         var originalCulture = CultureInfo.CurrentCulture;

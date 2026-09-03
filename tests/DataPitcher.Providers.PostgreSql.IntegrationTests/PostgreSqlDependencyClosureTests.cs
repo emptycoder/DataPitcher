@@ -234,6 +234,7 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
         var r = await RunAsync(store, [relationship], Selections(c, p), Root(c, Key("id", 1)));
         Assert.True(r.Contains(c, Key("id", 1)));
         Assert.False(r.Contains(p, Key("id", 999)));
+        Assert.Equal([new SourceOrphanWarning(relationship.Name, 1)], r.Orphans);
     }
 
     [Fact]
@@ -922,7 +923,7 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
             CancellationToken cancellationToken
         ) => inner.ProbeTargetAsync(table, outgoingRelationships, keys, cancellationToken);
 
-        public Task<IReadOnlyCollection<StableKey>> ExpandAsync(
+        public Task<ClosureExpansion> ExpandAsync(
             ClosureRelationship relationship,
             IReadOnlyCollection<StableKey> fromKeys,
             CancellationToken cancellationToken
@@ -934,6 +935,12 @@ public sealed class PostgreSqlDependencyClosureTests : IClassFixture<PostgreSqlC
             int generation,
             CancellationToken cancellationToken
         ) => inner.InsertNewKeysAsync(table, keys, generation, cancellationToken);
+
+        public Task MarkIncludedAsync(
+            TableDefinition table,
+            IReadOnlyCollection<StableKey> keys,
+            CancellationToken cancellationToken
+        ) => inner.MarkIncludedAsync(table, keys, cancellationToken);
 
         public ValueTask DisposeAsync() =>
             inner is IAsyncDisposable disposable ? disposable.DisposeAsync() : ValueTask.CompletedTask;

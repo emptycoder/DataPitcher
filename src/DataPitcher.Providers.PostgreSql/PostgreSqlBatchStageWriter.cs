@@ -77,14 +77,14 @@ public sealed class PostgreSqlBatchStageWriter
         await importer.CompleteAsync(cancellationToken);
     }
 
-    public static string StageName(PostgreSqlWriteTable table) =>
+    public static string StageName(PostgreSqlWriteTable table) => StageName(table.Target);
+
+    public static string StageName(TableAddress table) =>
         PostgreSqlIdentifier.Qualified(
             "datapitcher",
             "stage_"
                 + Convert
-                    .ToHexString(
-                        SHA256.HashData(Encoding.UTF8.GetBytes(table.Target.Schema + "\u001f" + table.Target.Name))
-                    )
+                    .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(table.Schema + "\u001f" + table.Name)))
                     .ToLowerInvariant()
         );
 

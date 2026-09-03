@@ -35,7 +35,7 @@ public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosur
             }
         );
         var result = await store.ExpandAsync(relationship, [new StableKey([new("id", 1)])], CancellationToken.None);
-        Assert.Contains(result, key => key == new StableKey([new("left_value", 7), new("right_value", 8)]));
+        Assert.Contains(result.Keys, key => key == new StableKey([new("left_value", 7), new("right_value", 8)]));
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosur
             [new StableKey([new("customer_id", 1)])],
             CancellationToken.None
         );
-        Assert.Contains(result, key => key == new StableKey([new("order_id", 10)]));
+        Assert.Contains(result.Keys, key => key == new StableKey([new("order_id", 10)]));
     }
 
     [Fact]

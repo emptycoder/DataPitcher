@@ -22,7 +22,6 @@ public sealed class ImportOrderingTests
 
         Assert.True(order.Order[parent] < order.Order[child]);
         Assert.Empty(order.Deferred);
-        Assert.Empty(order.Blocked);
     }
 
     [Fact]
@@ -41,25 +40,68 @@ public sealed class ImportOrderingTests
 
         Assert.True(order.Order[teams] < order.Order[people]);
         Assert.Equal([lead], order.Deferred);
-        Assert.Empty(order.Blocked);
     }
 
     [Fact]
-    public void Plan_MarksACycleWithoutANullableEdgeAsBlocked()
+    public void Plan_BreaksAThreeTableCycleAtItsOnlyNullableEdge()
     {
         var a = Table("A", new ColumnDefinition("BId", typeof(int), false));
-        var b = Table("B", new ColumnDefinition("AId", typeof(int), false));
+        var b = Table("B", new ColumnDefinition("CId", typeof(int), false));
+        var c = Table("C", new ColumnDefinition("AId", typeof(int), true));
+        var closing = Reference(c, "AId", a);
         var order = ImportOrdering.Plan(
-            [a, b],
-            [Reference(a, "BId", b), Reference(b, "AId", a)],
-            Depth((a, 0), (b, 1)),
+            [a, b, c],
+            [Reference(a, "BId", b), Reference(b, "CId", c), closing],
+            Depth((a, 0), (b, 1), (c, 2)),
             Nullable,
             OntoKey
         );
 
-        Assert.Equal(2, order.Order.Count);
-        Assert.Empty(order.Deferred);
-        Assert.Single(order.Blocked);
+        Assert.Equal([closing], order.Deferred);
+        Assert.True(order.Order[c] < order.Order[b]);
+        Assert.True(order.Order[b] < order.Order[a]);
+    }
+
+    [Fact]
+    public void Plan_RefusesACycleWithoutANullableEdgeAndNamesIt()
+    {
+        var a = Table("A", new ColumnDefinition("BId", typeof(int), false));
+        var b = Table("B", new ColumnDefinition("AId", typeof(int), false));
+        var exception = Assert.Throws<UnorderablePlanException>(() =>
+            ImportOrdering.Plan(
+                [a, b],
+                [Reference(a, "BId", b), Reference(b, "AId", a)],
+                Depth((a, 0), (b, 1)),
+                Nullable,
+                OntoKey
+            )
+        );
+
+        Assert.Contains("FK_A_BId (dbo.A -> dbo.B, BId not nullable in the target)", exception.Message);
+        Assert.Contains("FK_B_AId (dbo.B -> dbo.A, AId not nullable in the target)", exception.Message);
+        Assert.Contains("constraints are never disabled", exception.Message);
+    }
+
+    [Fact]
+    public void Plan_WhenATableOutsideTheCycleWaitsOnIt_NamesOnlyTheCycle()
+    {
+        var a = Table("A", new ColumnDefinition("BId", typeof(int), false));
+        var b = Table("B", new ColumnDefinition("AId", typeof(int), false));
+        var x = Table("X", new ColumnDefinition("AId", typeof(int), false));
+        var exception = Assert.Throws<UnorderablePlanException>(() =>
+            ImportOrdering.Plan(
+                [a, b, x],
+                [Reference(a, "BId", b), Reference(b, "AId", a), Reference(x, "AId", a)],
+                Depth((a, 1), (b, 2), (x, 3)),
+                Nullable,
+                OntoKey
+            )
+        );
+
+        Assert.Contains("FK_A_BId", exception.Message);
+        Assert.Contains("FK_B_AId", exception.Message);
+        Assert.DoesNotContain("FK_X_AId", exception.Message);
+        Assert.DoesNotContain("dbo.X", exception.Message);
     }
 
     [Fact]
@@ -76,7 +118,20 @@ public sealed class ImportOrderingTests
 
         Assert.Equal([parent], order.Levelled);
         Assert.Equal([root], order.Deferred);
-        Assert.Empty(order.Blocked);
+    }
+
+    [Fact]
+    public void Plan_RefusesANonNullableSelfReferenceThatDoesNotTargetTheStableKey()
+    {
+        var nodes = Table("Nodes", new ColumnDefinition("ParentCode", typeof(int), false));
+        var parent = new ClosureRelationship(
+            new ForeignKeyDefinition("FK_Nodes_ParentCode", nodes, nodes, ["ParentCode"], ["Code"], true, true)
+        );
+        var exception = Assert.Throws<UnorderablePlanException>(() =>
+            ImportOrdering.Plan([nodes], [parent], Depth((nodes, 0)), Nullable, OntoKey)
+        );
+
+        Assert.Contains("dbo.Nodes references itself through FK_Nodes_ParentCode (ParentCode)", exception.Message);
     }
 
     private static TableDefinition Table(string name, params ColumnDefinition[] columns) =>

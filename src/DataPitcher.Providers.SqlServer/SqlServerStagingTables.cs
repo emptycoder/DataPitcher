@@ -75,6 +75,18 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
         CancellationToken ct
     ) => ReplaceAsync(_target, TargetTableName(t), t, keys, ct);
 
+    /// <summary>Marks staged keys as part of the transfer set; the transfer reads only marked keys.</summary>
+    public async Task MarkIncludedAsync(TableDefinition t, IReadOnlyCollection<StableKey> keys, CancellationToken ct)
+    {
+        await ReplaceAsync(_source, InputTableName(t), t, keys, ct);
+        var join = string.Join(" AND ", Columns(t).Select((_, i) => $"f.[k{i}]=i.[k{i}]"));
+        await ExecuteAsync(
+            _source,
+            $"UPDATE f SET [__included]=1 FROM {Qualified(SourceTableName(t))} f JOIN {Qualified(InputTableName(t))} i ON {join}",
+            ct
+        );
+    }
+
     public async Task<int> GenerationAsync(TableDefinition t, StableKey key, CancellationToken ct)
     {
         var columns = Columns(t);
@@ -156,10 +168,11 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
             " OR ",
             parentColumns.Select(column => "s." + SqlServerIdentifier.Quote(column) + " IS NULL")
         );
+        // A parent outside the transfer set (never staged, or staged but satisfied by the target) is a root.
         var parentInKeys =
             "EXISTS (SELECT 1 FROM "
             + keys
-            + " p WHERE "
+            + " p WHERE p.[__included]=1 AND "
             + string.Join(
                 " AND ",
                 parentColumns.Select((column, i) => "p." + Key(i) + "=s." + SqlServerIdentifier.Quote(column))
@@ -190,13 +203,13 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
             + source
             + " s ON "
             + joinSource
-            + " WHERE ("
+            + " WHERE f.[__included]=1 AND (("
             + parentNull
             + ") OR "
             + parentIsSelf
             + " OR NOT "
             + parentInKeys
-            + " UNION ALL SELECT "
+            + ") UNION ALL SELECT "
             + fKeys
             + ", h.lvl + 1 FROM "
             + keys
@@ -206,7 +219,7 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
             + joinSource
             + " JOIN h ON "
             + joinParent
-            + " WHERE h.lvl < 4096 AND NOT "
+            + " WHERE f.[__included]=1 AND h.lvl < 4096 AND NOT "
             + parentIsSelf
             + ") "
             // Levels are stored as -(level + 1): 0 and above stays the closure generation of rows the levelling
@@ -252,7 +265,7 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
         await ExecuteAsync(
             cs,
             $"IF OBJECT_ID(N'{Qualified(name)}',N'U') IS NULL BEGIN "
-                + $"CREATE TABLE {Qualified(name)} ({declarations}, [__generation] int NOT NULL); "
+                + $"CREATE TABLE {Qualified(name)} ({declarations}, [__generation] int NOT NULL, [__included] bit NOT NULL DEFAULT 0); "
                 + $"CREATE UNIQUE INDEX {SqlServerIdentifier.Quote(index)} ON {Qualified(name)} ({keyList}); "
                 + "END",
             ct
