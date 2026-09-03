@@ -87,6 +87,17 @@ it('associates a plan with a saved selection, source, and target before sealing'
   expect(JSON.parse(String(fetch.mock.calls.filter(([url, init]) => String(url) === `/api/plans/${planId}` && init?.method === 'PUT')[1]![1]?.body))).toMatchObject({ ifMatch: '"2"' });
 });
 
+it('uses the reviewed plan version when saving an existing association', async () => {
+  const fetch = server({ reviews: [{ body: unsealed }] });
+  renderPlan(fetch);
+
+  await screen.findByText('TARGET DATABASE: Reporting TARGET');
+  fireEvent.submit(screen.getByRole('form', { name: 'Plan association' }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/plans/${planId}`, expect.objectContaining({ method: 'PUT' })));
+  expect(JSON.parse(String(fetch.mock.calls.find(([url, init]) => String(url) === `/api/plans/${planId}` && init?.method === 'PUT')?.[1]?.body))).toMatchObject({ ifMatch: '"1"' });
+});
+
 it('shows sealing as pending until the operation resolves', async () => {
   const fetch = server({ reviews: [{ body: unsealed }], operation: { body: { ...receipt, operation: 'plan-seal', state: 'running', finished: false, failed: false, failureCode: null } } });
   renderPlan(fetch);
@@ -115,6 +126,15 @@ it('presents sealing failure and does not offer start', async () => {
   await requestSeal();
 
   expect(await screen.findByText('Sealing failed: closure_failed.')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Start transfer' })).toBeNull();
+});
+
+it('blocks start with a generic failure when sealing returns no failure code', async () => {
+  renderPlan(server({ reviews: [{ body: unsealed }], operation: { body: { ...receipt, operation: 'plan-seal', state: 'failed', finished: true, failed: true, failureCode: null } } }));
+
+  await requestSeal();
+
+  expect(await screen.findByText('Sealing failed.')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Start transfer' })).toBeNull();
 });
 
@@ -257,6 +277,62 @@ it('cleans up polling when unmounted', async () => {
   view.unmount();
 
   expect(clearInterval).toHaveBeenCalled();
+});
+
+it('ignores an operation response that arrives after unmounting', async () => {
+  let resolveOperation: (response: Response) => void = () => undefined;
+  const base = server({ reviews: [{ body: unsealed }] });
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input) === `/api/operations/${receipt.operationId}` ? new Promise<Response>((resolve) => { resolveOperation = resolve; }) : base(input, init));
+  const view = renderPlan(fetch);
+
+  await requestSeal();
+  await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url) === `/api/operations/${receipt.operationId}`)).toHaveLength(1));
+  const operationRequest = fetch.mock.calls.find(([url]) => String(url) === `/api/operations/${receipt.operationId}`)!;
+  view.unmount();
+  resolveOperation(json({ ...receipt, operation: 'plan-seal', state: 'succeeded', finished: true, failed: false, failureCode: null }));
+
+  await new Promise((resolve) => window.setTimeout(resolve));
+  expect((operationRequest[1]?.signal as AbortSignal).aborted).toBe(true);
+  expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/review'))).toHaveLength(1);
+});
+
+it('does not finish a sealing poll after unmounting during review verification', async () => {
+  let reviewCalls = 0;
+  let resolveReview: (response: Response) => void = () => undefined;
+  const clearInterval = vi.spyOn(window, 'clearInterval');
+  const base = server();
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith('/review')) {
+      if (reviewCalls++ === 0) return json(unsealed);
+      return new Promise<Response>((resolve) => { resolveReview = resolve; });
+    }
+    return base(input, init);
+  });
+  const view = renderPlan(fetch);
+
+  await requestSeal();
+  await waitFor(() => expect(reviewCalls).toBe(2));
+  view.unmount();
+  const clearIntervalCalls = clearInterval.mock.calls.length;
+  resolveReview(json(sealed));
+
+  await new Promise((resolve) => window.setTimeout(resolve));
+  expect(clearInterval).toHaveBeenCalledTimes(clearIntervalCalls);
+});
+
+it('ignores an operation failure that arrives after unmounting', async () => {
+  let rejectOperation: (error: Error) => void = () => undefined;
+  const base = server({ reviews: [{ body: unsealed }] });
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input) === `/api/operations/${receipt.operationId}` ? new Promise<Response>((_resolve, reject) => { rejectOperation = reject; }) : base(input, init));
+  const view = renderPlan(fetch);
+
+  await requestSeal();
+  await waitFor(() => expect(fetch.mock.calls.filter(([url]) => String(url) === `/api/operations/${receipt.operationId}`)).toHaveLength(1));
+  view.unmount();
+  rejectOperation(new Error('late operation failure'));
+
+  await new Promise((resolve) => window.setTimeout(resolve));
+  expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/review'))).toHaveLength(1);
 });
 
 it('registers the plan sealing route', () => {
