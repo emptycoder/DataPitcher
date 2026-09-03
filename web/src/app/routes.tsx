@@ -3,6 +3,7 @@ import type { AuthenticationAdapter } from '../auth/authAdapter';
 import { ConnectionsScreen } from '../features/connections/ConnectionsScreen';
 import { PlanReview } from '../features/plans/PlanReview';
 import { PlanReviewScreen } from '../features/plans/PlanReviewScreen';
+import { SchemaBrowserScreen } from '../features/schema/SchemaBrowserScreen';
 import { SelectionWorkbenchScreen } from '../features/selections/SelectionWorkbenchScreen';
 import { JobDetailScreen, JobsListScreen } from '../features/jobs/JobsScreens';
 import { TransferMonitorScreen } from '../features/transfers/TransferMonitorScreen';
@@ -56,4 +57,5 @@ export const routes = [
   { path: '/plans/:planId/review', label: 'Plan review', render: (params, context) => <PlanReview planId={params.planId!} authentication={context.authentication} /> },
   { path: '/transfer-monitor/:jobId?', label: 'Transfer monitor', render: transferMonitorRoute },
   { path: '/jobs/:jobId?', label: 'Transfer jobs', render: jobsRoute },
+  { path: '/schema-browser', label: 'Schema browser', render: (_params, { authentication }) => <SchemaBrowserScreen authentication={authentication} /> },
 ] satisfies readonly RouteRecord[];
