@@ -138,6 +138,7 @@ public sealed class JobWorker(
                 ),
                 leaseLost.Token
             );
+            await target.CompleteAsync(run, leaseLost.Token);
             await jobs.MarkSucceededAsync(claim.Lease, leaseLost.Token);
             await AnnounceAsync(claim.Job.JobId, "succeeded", rows, bytes, null, leaseLost.Token);
         }
@@ -195,6 +196,7 @@ public sealed class JobWorker(
         var code = exception switch
         {
             ConnectionNotHealthyException => "connection_unhealthy",
+            TargetVerificationException => "verification_failed",
             NotSupportedException => "not_supported",
             _ => "transfer_failed",
         };

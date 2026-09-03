@@ -194,10 +194,110 @@ public sealed class SqlServerRunSessions(
         {
             var context = Context(run, lease);
             await _executor.InitializeAsync(context, cancellationToken);
+            await RelaxConstraintsAsync(cancellationToken);
             var checkpoint =
                 await _checkpoints.ReadAsync(run.JobId, run.RunId, cancellationToken)
                 ?? throw new InvalidOperationException("Target checkpoint was not initialized.");
             return new RecoverySnapshot(await CheckpointAsync(run, checkpoint, cancellationToken), []);
+        }
+
+        private bool Relaxes => content.ConstraintStrategy is ConstraintStrategy.DisableAndRevalidate;
+        private bool _relaxed;
+
+        /// <summary>Foreign keys on the planned tables stop being checked per statement until the run completes.</summary>
+        private async Task RelaxConstraintsAsync(CancellationToken cancellationToken)
+        {
+            if (!Relaxes)
+                return;
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+            foreach (var table in Tables(content))
+                await ExecuteAsync(
+                    connection,
+                    "ALTER TABLE " + Qualified(table.Mapping.Target) + " NOCHECK CONSTRAINT ALL;",
+                    cancellationToken
+                );
+            _relaxed = true;
+        }
+
+        /// <summary>
+        /// Re-enables every constraint WITH CHECK, which validates the rows written during the run. A violation names
+        /// the table so the operator knows which parent rows are missing.
+        /// </summary>
+        public async Task CompleteAsync(TransferRun run, CancellationToken cancellationToken)
+        {
+            if (!Relaxes)
+                return;
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+            foreach (var table in Tables(content))
+                try
+                {
+                    await ExecuteAsync(
+                        connection,
+                        "ALTER TABLE " + Qualified(table.Mapping.Target) + " WITH CHECK CHECK CONSTRAINT ALL;",
+                        cancellationToken
+                    );
+                }
+                catch (SqlException exception)
+                {
+                    throw new TargetVerificationException(
+                        "Constraint validation failed on "
+                            + table.Mapping.Target.Schema
+                            + "."
+                            + table.Mapping.Target.Name
+                            + " after the transfer: "
+                            + exception.Message
+                            + " The rows written by this run remain in the target with the constraint disabled; fix the referenced rows and re-enable it, or remove the rows."
+                    );
+                }
+            _relaxed = false;
+        }
+
+        private async Task RestoreConstraintsBestEffortAsync()
+        {
+            if (!_relaxed)
+                return;
+            try
+            {
+                await using var connection = new SqlConnection(connectionString);
+                await connection.OpenAsync();
+                foreach (var table in Tables(content))
+                    try
+                    {
+                        await ExecuteAsync(
+                            connection,
+                            "ALTER TABLE " + Qualified(table.Mapping.Target) + " WITH CHECK CHECK CONSTRAINT ALL;",
+                            CancellationToken.None
+                        );
+                    }
+                    catch (SqlException)
+                    {
+                        // Partial data (a pause) may not validate yet; keep the constraint enforced for new rows.
+                        await ExecuteAsync(
+                            connection,
+                            "ALTER TABLE " + Qualified(table.Mapping.Target) + " CHECK CONSTRAINT ALL;",
+                            CancellationToken.None
+                        );
+                    }
+            }
+            catch (SqlException)
+            {
+                // Leaving constraints relaxed is recoverable: the next run relaxes and revalidates them again.
+            }
+        }
+
+        private static string Qualified(TableAddress address) =>
+            SqlServerIdentifier.Qualified(address.Schema, address.Name);
+
+        private static async Task ExecuteAsync(
+            SqlConnection connection,
+            string sql,
+            CancellationToken cancellationToken
+        )
+        {
+            await using var command = new SqlCommand(sql, connection) { CommandTimeout = 0 };
+            await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
         // ponytail: mutation journal recovery is unwired; add it when mutation strategies are enabled.
@@ -246,7 +346,7 @@ public sealed class SqlServerRunSessions(
 
         public Task DiscardUncommittedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public async ValueTask DisposeAsync() => await RestoreConstraintsBestEffortAsync();
 
         private async Task<TargetCheckpoint> CheckpointAsync(
             TransferRun run,

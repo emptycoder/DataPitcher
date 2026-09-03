@@ -196,10 +196,132 @@ public sealed class PostgreSqlRunSessions(
         {
             var context = Context(run, lease);
             await _executor.InitializeAsync(context, cancellationToken);
+            await RelaxConstraintsAsync(cancellationToken);
             var checkpoint =
                 await _checkpoints.ReadAsync(run.JobId, run.RunId, cancellationToken)
                 ?? throw new InvalidOperationException("Target checkpoint was not initialized.");
             return new RecoverySnapshot(await CheckpointAsync(run, checkpoint, cancellationToken), []);
+        }
+
+        private bool Relaxes => content.ConstraintStrategy is ConstraintStrategy.DisableAndRevalidate;
+        private bool _relaxed;
+
+        /// <summary>
+        /// Disables the constraint triggers of the planned tables for the run when the role may (PostgreSQL needs
+        /// superuser for that); otherwise the run proceeds with foreign keys enforced per statement.
+        /// </summary>
+        private async Task RelaxConstraintsAsync(CancellationToken cancellationToken)
+        {
+            if (!Relaxes)
+                return;
+            await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+            foreach (var table in Tables(content))
+                try
+                {
+                    await ExecuteAsync(
+                        connection,
+                        "ALTER TABLE " + Qualified(table.Mapping.Target) + " DISABLE TRIGGER ALL",
+                        cancellationToken
+                    );
+                    _relaxed = true;
+                }
+                catch (PostgresException exception) when (exception.SqlState == "42501")
+                {
+                    return;
+                }
+        }
+
+        /// <summary>Re-enables the triggers and checks every relationship of the plan for orphaned child rows.</summary>
+        public async Task CompleteAsync(TransferRun run, CancellationToken cancellationToken)
+        {
+            if (!Relaxes)
+                return;
+            await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+            if (_relaxed)
+            {
+                foreach (var table in Tables(content))
+                    await ExecuteAsync(
+                        connection,
+                        "ALTER TABLE " + Qualified(table.Mapping.Target) + " ENABLE TRIGGER ALL",
+                        cancellationToken
+                    );
+                _relaxed = false;
+            }
+            var planned = Tables(content).Select(table => table.Mapping.Target).ToArray();
+            foreach (var relationship in content.Relationships)
+            {
+                if (!planned.Any(address => Same(address, relationship.From)))
+                    continue;
+                var predicate = string.Join(
+                    " AND ",
+                    relationship.FromColumns.Select(
+                        (column, index) =>
+                            "p."
+                            + PostgreSqlIdentifier.Quote(relationship.ToColumns[index])
+                            + " = c."
+                            + PostgreSqlIdentifier.Quote(column)
+                    )
+                );
+                var notNull = string.Join(
+                    " AND ",
+                    relationship.FromColumns.Select(column =>
+                        "c." + PostgreSqlIdentifier.Quote(column) + " IS NOT NULL"
+                    )
+                );
+                await using var command = new NpgsqlCommand(
+                    "SELECT count(*) FROM "
+                        + Qualified(relationship.From)
+                        + " c WHERE "
+                        + notNull
+                        + " AND NOT EXISTS (SELECT 1 FROM "
+                        + Qualified(relationship.To)
+                        + " p WHERE "
+                        + predicate
+                        + ")",
+                    connection
+                )
+                {
+                    CommandTimeout = 0,
+                };
+                var orphans = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
+                if (orphans > 0)
+                    throw new TargetVerificationException(
+                        $"Constraint validation failed after the transfer: {orphans} row(s) in {relationship.From.Schema}.{relationship.From.Name} reference rows missing from {relationship.To.Schema}.{relationship.To.Name} ({relationship.Name}). The rows written by this run remain in the target; fix the referenced rows or remove them."
+                    );
+            }
+        }
+
+        private async Task RestoreConstraintsBestEffortAsync()
+        {
+            if (!_relaxed)
+                return;
+            try
+            {
+                await using var connection = await dataSource.OpenConnectionAsync();
+                foreach (var table in Tables(content))
+                    await ExecuteAsync(
+                        connection,
+                        "ALTER TABLE " + Qualified(table.Mapping.Target) + " ENABLE TRIGGER ALL",
+                        CancellationToken.None
+                    );
+            }
+            catch (PostgresException)
+            {
+                // Leaving triggers disabled is recoverable: the next run disables and revalidates again.
+            }
+        }
+
+        private static string Qualified(TableAddress address) =>
+            PostgreSqlIdentifier.Qualified(address.Schema, address.Name);
+
+        private static async Task ExecuteAsync(
+            NpgsqlConnection connection,
+            string sql,
+            CancellationToken cancellationToken
+        )
+        {
+            await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = 0 };
+            await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
         // Mutation journal recovery is unwired for PostgreSQL as well; add it when mutation strategies are enabled.
@@ -248,7 +370,11 @@ public sealed class PostgreSqlRunSessions(
 
         public Task DiscardUncommittedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public ValueTask DisposeAsync() => dataSource.DisposeAsync();
+        public async ValueTask DisposeAsync()
+        {
+            await RestoreConstraintsBestEffortAsync();
+            await dataSource.DisposeAsync();
+        }
 
         private async Task<TargetCheckpoint> CheckpointAsync(
             TransferRun run,

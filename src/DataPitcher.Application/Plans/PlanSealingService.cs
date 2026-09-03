@@ -159,11 +159,14 @@ public sealed class PlanSealingService(
         string parameterHash
     )
     {
-        var tables = closure
-            .Rows.GroupBy(row => row.Table)
-            .OrderByDescending(group => group.Min(row => row.Generation))
-            .ThenBy(group => group.Key.Schema, StringComparer.Ordinal)
-            .ThenBy(group => group.Key.Name, StringComparer.Ordinal)
+        var groups = closure.Rows.GroupBy(row => row.Table).ToArray();
+        var order = TransferOrder(
+            groups.Select(group => group.Key).ToArray(),
+            relationships,
+            groups.ToDictionary(group => group.Key, group => group.Max(row => row.Generation))
+        );
+        var tables = groups
+            .OrderBy(group => order[group.Key])
             .Select(group =>
             {
                 var address = Address(group.Key);
@@ -222,7 +225,9 @@ public sealed class PlanSealingService(
             ConsistencyMode.FrozenKeys,
             TransferMode.ResumableStaged,
             TriggerStrategy.Fire,
-            ConstraintStrategy.Enforce,
+            // Foreign keys on the planned target tables are relaxed for the run and validated at the end, so
+            // batch boundaries, same-table references and cycles cannot fail a transfer mid-way.
+            ConstraintStrategy.DisableAndRevalidate,
             stableKeys
                 .Select(pair => new StableKeyDefinition(
                     Address(pair.Key),
@@ -235,6 +240,41 @@ public sealed class PlanSealingService(
             VerificationStrategy.StrictExact,
             totals
         );
+    }
+
+    /// <summary>
+    /// Parents before children (Kahn's algorithm over the planned tables), so a target that enforces foreign keys
+    /// accepts the rows in the order they are written. Tables in a cycle fall back to deepest-generation-first.
+    /// </summary>
+    private static IReadOnlyDictionary<TableDefinition, int> TransferOrder(
+        IReadOnlyList<TableDefinition> planned,
+        IReadOnlyCollection<ClosureRelationship> relationships,
+        IReadOnlyDictionary<TableDefinition, int> depth
+    )
+    {
+        var set = planned.ToHashSet();
+        // child -> parents, restricted to planned tables and ignoring self references.
+        var parents = planned.ToDictionary(
+            table => table,
+            table =>
+                relationships
+                    .Where(r => r.FromTable == table && r.ToTable != table && set.Contains(r.ToTable))
+                    .Select(r => r.ToTable)
+                    .ToHashSet()
+        );
+        var order = new Dictionary<TableDefinition, int>();
+        var remaining = planned
+            .OrderByDescending(table => depth[table])
+            .ThenBy(table => table.Schema, StringComparer.Ordinal)
+            .ThenBy(table => table.Name, StringComparer.Ordinal)
+            .ToList();
+        while (remaining.Count > 0)
+        {
+            var next = remaining.FirstOrDefault(table => parents[table].All(order.ContainsKey)) ?? remaining[0];
+            order[next] = order.Count;
+            remaining.Remove(next);
+        }
+        return order;
     }
 
     private static IReadOnlyCollection<ClosureRelationship> ReachableRelationships(

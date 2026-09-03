@@ -173,7 +173,17 @@ public interface ITargetRunSession : IAsyncDisposable
         CancellationToken cancellationToken
     );
     Task DiscardUncommittedAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Called once every unit has been applied, before the job is marked succeeded: re-enables and validates
+    /// anything the session relaxed for the run (foreign keys). Throws <see cref="TargetVerificationException"/>
+    /// when the target does not validate.
+    /// </summary>
+    Task CompleteAsync(TransferRun run, CancellationToken cancellationToken) => Task.CompletedTask;
 }
+
+/// <summary>The target holds data that violates a constraint after the transfer; the message names it.</summary>
+public sealed class TargetVerificationException(string message) : InvalidOperationException(message);
 
 public interface ITargetRunSessionFactory
 {

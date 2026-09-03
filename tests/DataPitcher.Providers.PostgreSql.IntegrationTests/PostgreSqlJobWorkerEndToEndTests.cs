@@ -180,6 +180,152 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
         }
     }
 
+    [Fact]
+    public async Task Transfer_WhenATableReferencesItselfAcrossBatches_RelaxesAndRevalidatesForeignKeys()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE worker_nodes (id integer NOT NULL CONSTRAINT pk_worker_nodes PRIMARY KEY, parent_id integer NULL CONSTRAINT fk_worker_nodes_parent REFERENCES worker_nodes(id));";
+        // 2,001 rows: every row points at the last one, which the 2,000-row batches only reach in the second batch.
+        await scope.ExecuteAsync(
+            ddl
+                + " INSERT INTO worker_nodes (id, parent_id) VALUES (2001, NULL); INSERT INTO worker_nodes (id, parent_id) SELECT g, 2001 FROM generate_series(1, 2000) g;"
+        );
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(scope, "worker_nodes", "pk_worker_nodes", "SELECT * FROM worker_nodes");
+
+        Assert.Equal(JobState.Succeeded, job.State);
+        Assert.Equal(2001L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_nodes"));
+    }
+
+    private static async Task<TransferJob> RunTransferAsync(
+        PostgreSqlClosureScope scope,
+        string rootTable,
+        string primaryKey,
+        string sql
+    )
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "datapitcher-pg-worker-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var sourceSecret = Path.Combine(directory, "source");
+            var targetSecret = Path.Combine(directory, "target");
+            await File.WriteAllTextAsync(sourceSecret, scope.SourceConnectionString);
+            await File.WriteAllTextAsync(targetSecret, scope.TargetConnectionString);
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ControlDatabase:Path"] = Path.Combine(directory, "control.db"),
+                        ["Secrets:Root"] = directory,
+                        ["Worker:LeaseTtl"] = "00:00:30",
+                        ["Worker:PollInterval"] = "00:00:00.050",
+                    }
+                )
+                .Build();
+            var services = new ServiceCollection();
+            services.AddDataPitcherComposition(configuration);
+            using var provider = services.BuildServiceProvider();
+            provider.ApplyControlDatabaseMigrations();
+            var profiles = provider.GetRequiredService<ConnectionProfileStore>();
+            var source = await profiles.CreateAsync(
+                new ConnectionProfileDraft(
+                    "source",
+                    "postgresql",
+                    new SecretReference(SecretReferenceKind.FileMounted, sourceSecret),
+                    scope.Schema,
+                    "datapitcher"
+                ),
+                "source",
+                CancellationToken.None
+            );
+            var target = await profiles.CreateAsync(
+                new ConnectionProfileDraft(
+                    "target",
+                    "postgresql",
+                    new SecretReference(SecretReferenceKind.FileMounted, targetSecret),
+                    scope.Schema,
+                    "datapitcher"
+                ),
+                "target",
+                CancellationToken.None
+            );
+            var snapshots = provider.GetRequiredService<SchemaSnapshotStore>();
+            var scan = await snapshots.QueueAsync(source.ConnectionId, "source-scan", CancellationToken.None);
+            var scanner = provider.GetServices<IHostedService>().OfType<SchemaScanWorker>().Single();
+            await scanner.ProcessNextAsync(CancellationToken.None);
+            var completedScan = await snapshots.GetScanAsync(source.ConnectionId, scan.ScanId, CancellationToken.None);
+            Assert.True(
+                completedScan.State == SchemaScanState.Completed,
+                "Schema scan ended in " + completedScan.State + " (" + completedScan.FailureCode + ")."
+            );
+            var snapshotId =
+                completedScan.SnapshotId
+                ?? throw new InvalidOperationException("Source schema scan did not create a snapshot.");
+            var selectionId = Guid.NewGuid();
+            await provider
+                .GetRequiredService<SelectionStore>()
+                .SaveAsync(
+                    selectionId,
+                    rootTable,
+                    JsonSerializer.Serialize(
+                        new
+                        {
+                            Mode = "raw",
+                            RawSql = sql,
+                            Parameters = Array.Empty<object>(),
+                        }
+                    ),
+                    "\"0\"",
+                    CancellationToken.None,
+                    source.ConnectionId,
+                    snapshotId,
+                    scope.Schema,
+                    rootTable,
+                    primaryKey,
+                    ["id"]
+                );
+            var application = provider.GetRequiredService<IDataPitcherApplication>();
+            var planId = Guid.NewGuid();
+            await application.SavePlanAsync(
+                planId,
+                new SavePlanRequest(
+                    "worker plan",
+                    null,
+                    "\"0\"",
+                    selectionId,
+                    source.ConnectionId,
+                    target.ConnectionId
+                ),
+                CancellationToken.None
+            );
+            await application.QueuePlanSealAsync(planId, CancellationToken.None);
+            var review = await application.GetPlanReviewAsync(planId, CancellationToken.None);
+            Assert.Equal("sealed", review.Seal.Status);
+            var worker = provider.GetServices<IHostedService>().OfType<JobWorker>().Single();
+            await worker.StartAsync(CancellationToken.None);
+            try
+            {
+                var started = await application.StartJobAsync(planId, "worker-job", CancellationToken.None);
+                var started2 = started;
+                return await WaitForTerminalAsync(
+                    provider.GetRequiredService<JobStore>(),
+                    started2.JobId ?? throw new InvalidOperationException("Job start did not return a job identifier.")
+                );
+            }
+            finally
+            {
+                await worker.StopAsync(CancellationToken.None);
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
     private static async Task<TransferJob> WaitForTerminalAsync(JobStore jobs, Guid jobId)
     {
         var last = jobs.Get(jobId);

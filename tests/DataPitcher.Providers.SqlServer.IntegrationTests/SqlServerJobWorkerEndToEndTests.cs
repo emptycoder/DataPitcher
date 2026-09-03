@@ -172,6 +172,178 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
         }
     }
 
+    [Fact]
+    public async Task Transfer_WhenATableReferencesItselfAcrossBatches_RelaxesAndRevalidatesForeignKeys()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE dbo.worker_nodes (id int NOT NULL CONSTRAINT PK_worker_nodes PRIMARY KEY, parent_id int NULL CONSTRAINT FK_worker_nodes_parent FOREIGN KEY REFERENCES dbo.worker_nodes(id));";
+        // 2,001 rows: every row points at the last one, which the 2,000-row batches only reach in the second batch.
+        await scope.ExecuteAsync(
+            ddl
+                + " INSERT dbo.worker_nodes (id, parent_id) VALUES (2001, NULL); WITH n AS (SELECT TOP (2000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS i FROM sys.all_objects a CROSS JOIN sys.all_objects b) INSERT dbo.worker_nodes (id, parent_id) SELECT i, 2001 FROM n;"
+        );
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(scope, "worker_nodes", "PK_worker_nodes", "SELECT * FROM dbo.worker_nodes");
+
+        Assert.Equal(JobState.Succeeded, job.State);
+        Assert.Equal(2001, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_nodes"));
+        Assert.Equal(
+            1,
+            await scope.ScalarTargetAsync<int>(
+                "SELECT COUNT(*) FROM sys.foreign_keys WHERE name = 'FK_worker_nodes_parent' AND is_disabled = 0 AND is_not_trusted = 0"
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Transfer_WhenTheSourceHoldsAnOrphan_EndsAsAVerificationFailureNamingTheTable()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE dbo.worker_owners (id int NOT NULL CONSTRAINT PK_worker_owners PRIMARY KEY); CREATE TABLE dbo.worker_pets (id int NOT NULL CONSTRAINT PK_worker_pets PRIMARY KEY, owner_id int NOT NULL);";
+        // The source constraint is not trusted, so an orphaned pet exists there; the target enforces it.
+        await scope.ExecuteAsync(
+            ddl
+                + " ALTER TABLE dbo.worker_pets WITH NOCHECK ADD CONSTRAINT FK_worker_pets_owner FOREIGN KEY (owner_id) REFERENCES dbo.worker_owners(id); ALTER TABLE dbo.worker_pets NOCHECK CONSTRAINT FK_worker_pets_owner; INSERT dbo.worker_pets VALUES (1, 99);"
+        );
+        await scope.ExecuteTargetAsync(
+            ddl
+                + " ALTER TABLE dbo.worker_pets ADD CONSTRAINT FK_worker_pets_owner FOREIGN KEY (owner_id) REFERENCES dbo.worker_owners(id);"
+        );
+
+        var job = await RunTransferAsync(scope, "worker_pets", "PK_worker_pets", "SELECT * FROM dbo.worker_pets");
+
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Equal("verification_failed", job.FailureCode);
+        Assert.Contains("dbo.worker_pets", job.FailureDetail, StringComparison.Ordinal);
+    }
+
+    /// <summary>Scans, selects every row of <paramref name="rootTable"/>, seals, runs the worker and waits for the end.</summary>
+    private static async Task<TransferJob> RunTransferAsync(
+        SqlServerClosureScope scope,
+        string rootTable,
+        string primaryKey,
+        string sql
+    )
+    {
+        await EnableSnapshotIsolationAsync(scope.SourceAdminConnectionString, scope.Database);
+        await EnableSnapshotIsolationAsync(scope.TargetAdminConnectionString, scope.Database);
+        var directory = Path.Combine(Path.GetTempPath(), "datapitcher-job-worker-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var sourceSecret = Path.Combine(directory, "source");
+            var targetSecret = Path.Combine(directory, "target");
+            await File.WriteAllTextAsync(sourceSecret, scope.SourceConnectionString);
+            await File.WriteAllTextAsync(targetSecret, scope.TargetConnectionString);
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["ControlDatabase:Path"] = Path.Combine(directory, "control.db"),
+                        ["Secrets:Root"] = directory,
+                        ["Worker:LeaseTtl"] = "00:00:30",
+                        ["Worker:PollInterval"] = "00:00:00.050",
+                    }
+                )
+                .Build();
+            var services = new ServiceCollection();
+            services.AddDataPitcherComposition(configuration);
+            using var provider = services.BuildServiceProvider();
+            provider.ApplyControlDatabaseMigrations();
+            var profiles = provider.GetRequiredService<ConnectionProfileStore>();
+            var source = await profiles.CreateAsync(
+                new ConnectionProfileDraft(
+                    "source",
+                    "sqlserver",
+                    new SecretReference(SecretReferenceKind.FileMounted, sourceSecret),
+                    "dbo",
+                    "dbo"
+                ),
+                "source",
+                CancellationToken.None
+            );
+            var target = await profiles.CreateAsync(
+                new ConnectionProfileDraft(
+                    "target",
+                    "sqlserver",
+                    new SecretReference(SecretReferenceKind.FileMounted, targetSecret),
+                    "dbo",
+                    "dbo"
+                ),
+                "target",
+                CancellationToken.None
+            );
+            var snapshots = provider.GetRequiredService<SchemaSnapshotStore>();
+            var scan = await snapshots.QueueAsync(source.ConnectionId, "source-scan", CancellationToken.None);
+            await provider
+                .GetServices<IHostedService>()
+                .OfType<SchemaScanWorker>()
+                .Single()
+                .ProcessNextAsync(CancellationToken.None);
+            var completedScan = await snapshots.GetScanAsync(source.ConnectionId, scan.ScanId, CancellationToken.None);
+            Assert.True(completedScan.State == SchemaScanState.Completed, completedScan.FailureDetail);
+            var selectionId = Guid.NewGuid();
+            await provider
+                .GetRequiredService<SelectionStore>()
+                .SaveAsync(
+                    selectionId,
+                    rootTable,
+                    JsonSerializer.Serialize(
+                        new
+                        {
+                            Mode = "raw",
+                            RawSql = sql,
+                            Parameters = Array.Empty<object>(),
+                        }
+                    ),
+                    "\"0\"",
+                    CancellationToken.None,
+                    source.ConnectionId,
+                    completedScan.SnapshotId,
+                    "dbo",
+                    rootTable,
+                    primaryKey,
+                    ["id"]
+                );
+            var application = provider.GetRequiredService<IDataPitcherApplication>();
+            var planId = Guid.NewGuid();
+            await application.SavePlanAsync(
+                planId,
+                new SavePlanRequest(
+                    "worker plan",
+                    null,
+                    "\"0\"",
+                    selectionId,
+                    source.ConnectionId,
+                    target.ConnectionId
+                ),
+                CancellationToken.None
+            );
+            await application.QueuePlanSealAsync(planId, CancellationToken.None);
+            var worker = provider.GetServices<IHostedService>().OfType<JobWorker>().Single();
+            await worker.StartAsync(CancellationToken.None);
+            try
+            {
+                var started = await application.StartJobAsync(planId, "worker-job", CancellationToken.None);
+                return await WaitForTerminalAsync(
+                    provider.GetRequiredService<JobStore>(),
+                    started.JobId ?? throw new InvalidOperationException("Job start did not return a job identifier.")
+                );
+            }
+            finally
+            {
+                await worker.StopAsync(CancellationToken.None);
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
     private static async Task<TransferJob> WaitForTerminalAsync(JobStore jobs, Guid jobId)
     {
         var last = jobs.Get(jobId);
