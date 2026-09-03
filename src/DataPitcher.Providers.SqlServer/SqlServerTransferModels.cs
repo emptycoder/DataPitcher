@@ -62,7 +62,7 @@ public sealed class SqlServerTransferBatch
 
 public sealed record SqlServerExecutionContext(Guid JobId, Guid RunId, long FenceToken, string ManifestHash);
 
-public sealed record SqlServerTargetCheckpoint(Guid JobId, Guid RunId, long LastBatchSequence, byte[] LastStableKey, long CumulativeAffected, long CumulativeInserts, long CumulativeUpdates, string ManifestHash, long FenceToken);
+public sealed record SqlServerTargetCheckpoint(Guid JobId, Guid RunId, long LastBatchSequence, byte[] LastStableKey, long CumulativeAffected, long CumulativeInserts, long CumulativeUpdates, string ManifestHash, long FenceToken, TableAddress? LastTable = null);
 
 public sealed record SqlServerResumePoint(long NextBatchSequence, StableKey? AfterStableKey);
 

@@ -7,7 +7,7 @@ public sealed record SqlServerSeekQuery(string Sql, IReadOnlyList<SqlParameter> 
 
 public static class SqlServerKeysetSeek
 {
-    public static SqlServerSeekQuery Build(SqlServerWriteTable table, StableKey after, int limit)
+    public static SqlServerSeekQuery Build(SqlServerWriteTable table, StableKey? after, int limit, string join = "")
     {
         if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
         var columns = table.StableKeyColumns;
@@ -18,11 +18,13 @@ public static class SqlServerKeysetSeek
             var equal = string.Join(" AND ", Enumerable.Range(0, index).Select(prior => Expression(columns[prior]) + "=@k" + prior));
             predicates.Add((equal.Length == 0 ? "" : equal + " AND ") + Expression(columns[index]) + ">@k" + index);
         }
-        for (var index = 0; index < columns.Count; index++)
-            parameters.Add(new SqlParameter("@k" + index, columns[index].ProviderType) { Value = after.Components.Single(component => component.Column == columns[index].Name).Value! });
+        if (after is not null)
+            for (var index = 0; index < columns.Count; index++)
+                parameters.Add(new SqlParameter("@k" + index, columns[index].ProviderType) { Value = after.Components.Single(component => component.Column == columns[index].Name).Value! });
         parameters.Add(new SqlParameter("@limit", System.Data.SqlDbType.Int) { Value = limit });
         var select = string.Join(",", table.InsertColumns.Select(column => "s." + SqlServerIdentifier.Quote(column.Name)));
-        return new SqlServerSeekQuery("SELECT TOP (@limit) " + select + " FROM " + SqlServerIdentifier.Qualified(table.Target.Schema, table.Target.Name) + " s WHERE (" + string.Join(" OR ", predicates) + ") ORDER BY " + string.Join(",", columns.Select(Expression)), Array.AsReadOnly(parameters.ToArray()));
+        var where = after is null ? "" : " WHERE (" + string.Join(" OR ", predicates) + ")";
+        return new SqlServerSeekQuery("SELECT TOP (@limit) " + select + " FROM " + SqlServerIdentifier.Qualified(table.Target.Schema, table.Target.Name) + " s" + join + where + " ORDER BY " + string.Join(",", columns.Select(Expression)), Array.AsReadOnly(parameters.ToArray()));
     }
 
     private static string Expression(SqlServerWriteColumn column) => "s." + SqlServerIdentifier.Quote(column.Name) + (column.ProviderType == System.Data.SqlDbType.NVarChar ? " COLLATE " + (column.Collation ?? throw new InvalidOperationException("Text stable keys require a catalog collation.")) : "");

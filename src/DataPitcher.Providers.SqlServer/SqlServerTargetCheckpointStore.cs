@@ -1,4 +1,6 @@
 using System.Data;
+using System.Text.Json;
+using DataPitcher.Core.Plans;
 using Microsoft.Data.SqlClient;
 
 namespace DataPitcher.Providers.SqlServer;
@@ -36,11 +38,12 @@ public sealed class SqlServerTargetCheckpointStore(string targetConnectionString
 
     public async Task AdvanceAsync(SqlConnection connection, SqlTransaction transaction, SqlServerExecutionContext context, SqlServerWriteTable table, SqlServerTransferBatch batch, long affected, long inserts, long updates, CancellationToken cancellationToken)
     {
-        const string sql = "UPDATE [datapitcher].[transfer_checkpoints] SET last_batch_sequence=@sequence,last_stable_key=@key,cumulative_affected=cumulative_affected+@affected,cumulative_inserts=cumulative_inserts+@inserts,cumulative_updates=cumulative_updates+@updates WHERE job_id=@job AND run_id=@run AND manifest_hash=@hash AND fence_token=@fence AND last_batch_sequence=@previous";
+        const string sql = "UPDATE [datapitcher].[transfer_checkpoints] SET last_batch_sequence=@sequence,last_stable_key=@key,last_table=@table,cumulative_affected=cumulative_affected+@affected,cumulative_inserts=cumulative_inserts+@inserts,cumulative_updates=cumulative_updates+@updates WHERE job_id=@job AND run_id=@run AND manifest_hash=@hash AND fence_token=@fence AND last_batch_sequence=@previous";
         await using var command = new SqlCommand(sql, connection, transaction);
         AddContext(command, context);
         command.Parameters.Add("@sequence", SqlDbType.BigInt).Value = batch.Sequence;
         command.Parameters.Add("@key", SqlDbType.VarBinary, -1).Value = SqlServerStableKeyCodec.Encode(batch.LastStableKey, table);
+        command.Parameters.Add("@table", SqlDbType.NVarChar, 512).Value = JsonSerializer.Serialize(table.Target);
         command.Parameters.Add("@affected", SqlDbType.BigInt).Value = affected;
         command.Parameters.Add("@inserts", SqlDbType.BigInt).Value = inserts;
         command.Parameters.Add("@updates", SqlDbType.BigInt).Value = updates;
@@ -56,12 +59,12 @@ public sealed class SqlServerTargetCheckpointStore(string targetConnectionString
 
     private static async Task<SqlServerTargetCheckpoint?> ReadAsync(SqlConnection connection, SqlTransaction? transaction, Guid jobId, Guid runId, CancellationToken cancellationToken)
     {
-        await using var command = new SqlCommand("SELECT job_id,run_id,last_batch_sequence,last_stable_key,cumulative_affected,cumulative_inserts,cumulative_updates,manifest_hash,fence_token FROM " + Name + " WHERE job_id=@job AND run_id=@run", connection, transaction);
+        await using var command = new SqlCommand("SELECT job_id,run_id,last_batch_sequence,last_stable_key,cumulative_affected,cumulative_inserts,cumulative_updates,manifest_hash,fence_token,last_table FROM " + Name + " WHERE job_id=@job AND run_id=@run", connection, transaction);
         command.Parameters.Add("@job", SqlDbType.UniqueIdentifier).Value = jobId;
         command.Parameters.Add("@run", SqlDbType.UniqueIdentifier).Value = runId;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? new SqlServerTargetCheckpoint(reader.GetGuid(0), reader.GetGuid(1), reader.GetInt64(2), reader.GetFieldValue<byte[]>(3), reader.GetInt64(4), reader.GetInt64(5), reader.GetInt64(6), reader.GetString(7), reader.GetInt64(8))
+            ? new SqlServerTargetCheckpoint(reader.GetGuid(0), reader.GetGuid(1), reader.GetInt64(2), reader.GetFieldValue<byte[]>(3), reader.GetInt64(4), reader.GetInt64(5), reader.GetInt64(6), reader.GetString(7), reader.GetInt64(8), reader.IsDBNull(9) ? null : JsonSerializer.Deserialize<TableAddress>(reader.GetString(9)))
             : null;
     }
 
