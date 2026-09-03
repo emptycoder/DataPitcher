@@ -43,9 +43,11 @@ public static class EndpointGroups
         .ProducesProblem(StatusCodes.Status400BadRequest)
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status403Forbidden)
+        .ProducesProblem(StatusCodes.Status404NotFound)
+        .ProducesProblem(StatusCodes.Status409Conflict)
         .ProducesProblem(StatusCodes.Status500InternalServerError);
 
-    private static async Task<ProblemHttpResult?> AuthorizeResourceAsync(
+    internal static async Task<ProblemHttpResult?> AuthorizeResourceAsync(
         HttpContext context, IAuthorizationService authorizationService, ClaimsPrincipal user, ApiResource resource, Permission permission)
     {
         var result = await authorizationService.AuthorizeAsync(user, resource, new ResourcePermissionRequirement(permission));
@@ -109,6 +111,8 @@ public static class EndpointGroups
         if (string.IsNullOrWhiteSpace(request.IfMatch))
             return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "If-Match is required.");
         if (await AuthorizeResourceAsync(context, authorizationService, user, new PlanResource(planId), Permissions.PlansWrite) is { } problem) return problem;
+        if (request.SourceConnectionId is Guid sourceConnectionId && await AuthorizeResourceAsync(context, authorizationService, user, new ConnectionResource(sourceConnectionId), Permissions.ConnectionsRead) is { } sourceProblem) return sourceProblem;
+        if (request.TargetConnectionId is Guid targetConnectionId && await AuthorizeResourceAsync(context, authorizationService, user, new ConnectionResource(targetConnectionId), Permissions.ConnectionsRead) is { } targetProblem) return targetProblem;
         return TypedResults.Ok(await application.SavePlanAsync(planId, request, cancellationToken));
     }
 
@@ -143,8 +147,19 @@ public static class EndpointGroups
             return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Idempotency key is required.");
         if (await AuthorizeResourceAsync(context, authorizationService, user, new PlanResource(planId), Permissions.TransfersStart) is { } problem) return problem;
 
-        var receipt = await application.StartJobAsync(planId, values.ToString(), cancellationToken);
-        return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
+        try
+        {
+            var receipt = await application.StartJobAsync(planId, values.ToString(), cancellationToken);
+            return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
+        }
+        catch (PlanNotFoundException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, title: exception.Message);
+        }
+        catch (PlanNotSealedException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: exception.Message);
+        }
     }
 
     private static async Task<Results<Ok<JobResponse>, ProblemHttpResult>> GetJobAsync(

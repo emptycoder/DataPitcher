@@ -9,6 +9,9 @@ using DataPitcher.Infrastructure.Selections;
 
 namespace DataPitcher.Api.Contracts;
 
+public sealed class PlanNotFoundException() : InvalidOperationException("Plan was not found.");
+public sealed class PlanNotSealedException() : InvalidOperationException("Plan must be sealed before starting a job.");
+
 /// <summary>
 /// Production <see cref="IDataPitcherApplication"/> delegating to the real control-database stores and connection
 /// services. Connection, schema-scan/snapshot, and job workflows are backed by durable, tested Infrastructure
@@ -74,7 +77,10 @@ public sealed class DataPitcherApplication(
 
     public async Task<PlanResponse> SavePlanAsync(Guid planId, SavePlanRequest request, CancellationToken cancellationToken)
     {
-        var record = await plans.SaveAsync(planId, request.DisplayName, request.OperatorNote, request.IfMatch, cancellationToken);
+        if (request.SelectionId is Guid selectionId && await selections.FindAsync(selectionId, cancellationToken) is null) throw new ArgumentException("Selection was not found.", nameof(request));
+        if (request.SourceConnectionId is Guid sourceConnectionId) _ = await connections.GetSummaryAsync(sourceConnectionId, cancellationToken);
+        if (request.TargetConnectionId is Guid targetConnectionId) _ = await connections.GetSummaryAsync(targetConnectionId, cancellationToken);
+        var record = await plans.SaveAsync(planId, request.DisplayName, request.OperatorNote, request.IfMatch, cancellationToken, request.SelectionId, request.SourceConnectionId, request.TargetConnectionId);
         return new PlanResponse(record.PlanId, checked((int)record.Version), record.CanonicalHash, ETag(record.Version));
     }
 
@@ -86,7 +92,10 @@ public sealed class DataPitcherApplication(
 
     public async Task<PlanReviewResponse> GetPlanReviewAsync(Guid planId, CancellationToken cancellationToken)
     {
-        var record = await plans.FindAsync(planId, cancellationToken) ?? throw new InvalidOperationException("Plan was not found.");
+        var record = await plans.FindAsync(planId, cancellationToken) ?? throw new PlanNotFoundException();
+        var selection = record.SelectionId is Guid selectionId ? await selections.FindAsync(selectionId, cancellationToken) ?? throw new ArgumentException("Selection was not found.") : null;
+        var source = record.SourceConnectionId is Guid sourceConnectionId ? ToConnectionResponse(await connections.GetSummaryAsync(sourceConnectionId, cancellationToken)) : null;
+        var target = record.TargetConnectionId is Guid targetConnectionId ? ToConnectionResponse(await connections.GetSummaryAsync(targetConnectionId, cancellationToken)) : null;
         var notSealed = new PlanReviewMessageResponse("plan_not_sealed", "This plan has not completed sealing.");
         return new PlanReviewResponse(
             record.PlanId,
@@ -99,16 +108,21 @@ public sealed class DataPitcherApplication(
             [],
             [],
             [],
-            [notSealed]);
+            [notSealed],
+            selection is null ? null : new PlanReviewSelectionResponse(selection.SelectionId, selection.DisplayName, selection.ConnectionId, selection.SnapshotId),
+            source,
+            target);
     }
 
     public Task<InclusionPathResponse> GetPlanInclusionPathAsync(Guid planId, InclusionPathRequest request, CancellationToken cancellationToken) =>
         throw new InvalidOperationException("Inclusion-path lookup requires a sealed transfer plan with a computed dependency closure, which is not yet wired.");
 
-    public Task<OperationReceiptResponse> StartJobAsync(Guid planId, string idempotencyKey, CancellationToken cancellationToken)
+    public async Task<OperationReceiptResponse> StartJobAsync(Guid planId, string idempotencyKey, CancellationToken cancellationToken)
     {
+        _ = await plans.FindAsync(planId, cancellationToken) ?? throw new PlanNotFoundException();
+        if (await plans.LoadContentAsync(planId, cancellationToken) is null) throw new PlanNotSealedException();
         var result = jobs.Start(new StartJobRequest(planId, idempotencyKey));
-        return Task.FromResult(Receipt(planId: planId, jobId: result.Job.JobId));
+        return Receipt(planId: planId, jobId: result.Job.JobId);
     }
 
     public async Task<JobResponse> GetJobAsync(Guid jobId, CancellationToken cancellationToken)

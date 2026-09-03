@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using DataPitcher.Api.Contracts;
 using DataPitcher.Api.Endpoints;
 using Xunit;
@@ -121,6 +122,53 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task SavePlan_WithAssociations_PassesThemToTheApplication()
+    {
+        var planId = Guid.NewGuid();
+        var selectionId = Guid.NewGuid();
+        var sourceConnectionId = Guid.NewGuid();
+        var targetConnectionId = Guid.NewGuid();
+        var request = new SavePlanRequest("My plan", null, "etag-0", selectionId, sourceConnectionId, targetConnectionId);
+
+        using var response = await _client.PutAsJsonAsync($"/api/plans/{planId}", request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(selectionId, _factory.Application.LastPlanRequest?.SelectionId);
+        Assert.Equal(sourceConnectionId, _factory.Application.LastPlanRequest?.SourceConnectionId);
+        Assert.Equal(targetConnectionId, _factory.Application.LastPlanRequest?.TargetConnectionId);
+    }
+
+    [Fact]
+    public async Task SavePlan_WhenSourceConnectionAccessIsDenied_Returns403WithoutSaving()
+    {
+        var sourceConnectionId = Guid.NewGuid();
+        var invocations = _factory.Application.Invocations.Count;
+        var request = new SavePlanRequest("My plan", null, "etag-0", Guid.NewGuid(), sourceConnectionId, Guid.NewGuid());
+        using var message = new HttpRequestMessage(HttpMethod.Put, $"/api/plans/{Guid.NewGuid()}") { Content = JsonContent.Create(request) };
+        message.Headers.Add("X-Test-Denied-Resource", sourceConnectionId.ToString());
+
+        using var response = await _client.SendAsync(message, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(invocations, _factory.Application.Invocations.Count);
+    }
+
+    [Fact]
+    public async Task SavePlan_WhenTargetConnectionAccessIsDenied_Returns403WithoutSaving()
+    {
+        var targetConnectionId = Guid.NewGuid();
+        var invocations = _factory.Application.Invocations.Count;
+        var request = new SavePlanRequest("My plan", null, "etag-0", Guid.NewGuid(), Guid.NewGuid(), targetConnectionId);
+        using var message = new HttpRequestMessage(HttpMethod.Put, $"/api/plans/{Guid.NewGuid()}") { Content = JsonContent.Create(request) };
+        message.Headers.Add("X-Test-Denied-Resource", targetConnectionId.ToString());
+
+        using var response = await _client.SendAsync(message, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(invocations, _factory.Application.Invocations.Count);
+    }
+
+    [Fact]
     public async Task QueuePlanSeal_UsesPlanIdentifier()
     {
         var planId = Guid.NewGuid();
@@ -148,6 +196,46 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
         using var response = await _client.PostAsync($"/api/plans/{Guid.NewGuid()}/jobs", null, CancellationToken.None);
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
+    }
+
+    [Fact]
+    public async Task StartJob_WhenPlanIsUnsealed_ReturnsConflict()
+    {
+        _factory.Application.StartJobException = new PlanNotSealedException();
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/plans/{Guid.NewGuid()}/jobs");
+            request.Headers.Add("Idempotency-Key", "request-unsealed");
+            using var response = await _client.SendAsync(request, CancellationToken.None);
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Equal("Plan must be sealed before starting a job.", problem.RootElement.GetProperty("title").GetString());
+        }
+        finally
+        {
+            _factory.Application.StartJobException = null;
+        }
+    }
+
+    [Fact]
+    public async Task StartJob_WhenPlanDoesNotExist_ReturnsNotFound()
+    {
+        _factory.Application.StartJobException = new PlanNotFoundException();
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/plans/{Guid.NewGuid()}/jobs");
+            request.Headers.Add("Idempotency-Key", "request-missing");
+            using var response = await _client.SendAsync(request, CancellationToken.None);
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.Equal("Plan was not found.", problem.RootElement.GetProperty("title").GetString());
+        }
+        finally
+        {
+            _factory.Application.StartJobException = null;
+        }
     }
 
     [Fact]
