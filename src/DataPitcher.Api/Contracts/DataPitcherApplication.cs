@@ -8,6 +8,7 @@ using DataPitcher.Infrastructure.Persistence;
 using DataPitcher.Infrastructure.Plans;
 using DataPitcher.Infrastructure.Schema;
 using DataPitcher.Infrastructure.Selections;
+using DataPitcher.Providers.SqlServer;
 
 namespace DataPitcher.Api.Contracts;
 

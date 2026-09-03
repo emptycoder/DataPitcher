@@ -6,11 +6,11 @@ using DataPitcher.Core.Plans;
 using DataPitcher.Core.Schema;
 using DataPitcher.Core.Selection;
 using DataPitcher.Infrastructure.Connections;
+using DataPitcher.Infrastructure.Plans;
 using DataPitcher.Infrastructure.Schema;
 using DataPitcher.Infrastructure.Selections;
-using DataPitcher.Providers.SqlServer;
 
-namespace DataPitcher.Infrastructure.Plans;
+namespace DataPitcher.Providers.SqlServer;
 
 public sealed class PlanSealingService(PlanStore plans, SelectionStore selections, ConnectionProfileStore connections, SchemaSnapshotStore snapshots, ISecretReferenceResolver secrets)
 {
@@ -54,7 +54,7 @@ public sealed class PlanSealingService(PlanStore plans, SelectionStore selection
 
     private static TransferPlanContent Content(SelectionRecord selection, StoredSchemaSnapshot snapshot, SchemaSnapshotContent sourceSchema, SchemaSnapshotContent targetSchema, DataPitcher.Core.Connections.ConnectionProfile source, DataPitcher.Core.Connections.ConnectionProfile target, TableDefinition root, IReadOnlyCollection<ClosureRelationship> relationships, IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys, ClosureResult closure, string parameterHash)
     {
-        var tables = closure.Rows.GroupBy(row => row.Table).OrderBy(group => group.Key.Schema, StringComparer.Ordinal).ThenBy(group => group.Key.Name, StringComparer.Ordinal).Select(group =>
+        var tables = closure.Rows.GroupBy(row => row.Table).OrderByDescending(group => group.Min(row => row.Generation)).ThenBy(group => group.Key.Schema, StringComparer.Ordinal).ThenBy(group => group.Key.Name, StringComparer.Ordinal).Select(group =>
         {
             var address = Address(group.Key);
             var count = group.LongCount();
