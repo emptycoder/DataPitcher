@@ -1,128 +1,450 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
-import { HttpError, requestJson } from '../../api/http';
-import type { AuthenticationAdapter } from '../../auth/authAdapter';
+import { useMutation } from '@tanstack/react-query';
+import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import type { SnapshotTable } from '../../api/connections';
+import { formatNumber } from '../../api/format';
+import { describeError, isNotWired } from '../../api/problem';
+import {
+  coerceParameterValue,
+  parameterNamesIn,
+  selectionsApi,
+  validateParameterValue,
+  valueKinds,
+  type Compilation,
+  type ParameterValue,
+  type SelectionRequestBody,
+  type ValueKind,
+} from '../../api/selections';
+import { useAuth } from '../../auth/AuthContext';
 import { usePermissions } from '../../auth/permissions';
-import { Button, DataTable, Field, InlineError, LoadingIndicator } from '../../ui';
+import { navigate, useLocationSearch } from '../../app/router';
+import { registryActions } from '../../stores/registryStore';
+import { useSourceConnectionId } from '../../stores/sessionStore';
+import { Alert, Badge, Button, Card, CardHeader, Code, DataTable, Field, PageHeader, ProgressBar, Select, TextInput, cx } from '../../ui';
+import { Icons } from '../../ui/icons';
+import { useToast } from '../../ui/toast';
+import { tableKey } from '../schema/SchemaGraph';
+import { useConnections, useSnapshot, useSnapshots } from '../shared/queries';
 
-export type SelectionWorkbenchScreenProps = Readonly<{ authentication: AuthenticationAdapter }>;
+type ParameterDraft = Readonly<{ name: string; kind: ValueKind; raw: string }>;
 
-type Connection = Readonly<{ connectionId: string; displayName: string }>;
-type SnapshotSummary = Readonly<{ snapshotId: string; hash: string; capturedAtUtc: string }>;
-type SnapshotTable = Readonly<{ schema: string; name: string; columns: readonly { name: string }[]; primaryKey: { name: string; columns: readonly string[] } | null }>;
-type Snapshot = Readonly<{ hash: string; tables: readonly SnapshotTable[] }>;
-type SavedSelection = Readonly<{ selectionId: string; displayName: string; mode: string }>;
-type SavedSelections = Readonly<{ selections: readonly SavedSelection[] }>;
-
-const savedSelectionsKey = ['saved-selections'] as const;
-
-function tableId(table: SnapshotTable) {
-  return `${table.schema}.${table.name}`;
+function defaultSql(table: SnapshotTable) {
+  const columns = (table.primaryKey?.columns ?? []).join(', ');
+  return `SELECT ${columns || '*'}\nFROM ${table.schema}.${table.name}\nWHERE 1 = 1\n`;
 }
 
-export function selectionErrorMessage(error: unknown, fallback = 'Unable to save selection.') {
-  if (!(error instanceof HttpError)) return fallback;
-  const messages: Readonly<Record<number, string>> = {
-    400: 'Choose a snapshot root table and stable key before saving.',
-    401: 'Sign in to save selections.',
-    403: 'You do not have permission to save selections.',
-    404: 'The selected connection or schema snapshot was not found.',
-  };
-  return messages[error.status] ?? (error.status >= 500 ? 'The selection service is temporarily unavailable.' : fallback);
-}
+export function SelectionWorkbenchScreen() {
+  const search = useLocationSearch();
+  const { authentication } = useAuth();
+  const { hasPermission, isVerified } = usePermissions();
+  const toast = useToast();
+  const connections = useConnections();
+  const sessionSource = useSourceConnectionId();
 
-export function SelectionWorkbenchScreen({ authentication }: SelectionWorkbenchScreenProps) {
-  const queryClient = useQueryClient();
-  const { hasPermission } = usePermissions();
-  const [connectionId, setConnectionId] = useState('');
-  const [snapshotId, setSnapshotId] = useState('');
-  const [rootId, setRootId] = useState('');
-  const [stableKeyColumns, setStableKeyColumns] = useState<readonly string[]>([]);
-  const [rawSql, setRawSql] = useState('');
-  const [validationError, setValidationError] = useState<string | null>(null);
-  const connections = useQuery({ queryKey: ['connections'], queryFn: ({ signal }) => requestJson<readonly Connection[]>('/api/connections', authentication, { signal }) });
-  const snapshots = useQuery({ queryKey: ['snapshots', connectionId], queryFn: ({ signal }) => requestJson<readonly SnapshotSummary[]>(`/api/connections/${connectionId}/snapshots`, authentication, { signal }), enabled: Boolean(connectionId) });
-  const snapshot = useQuery({ queryKey: ['snapshot', connectionId, snapshotId], queryFn: ({ signal }) => requestJson<Snapshot>(`/api/connections/${connectionId}/snapshots/${snapshotId}`, authentication, { signal }), enabled: Boolean(connectionId && snapshotId) });
-  const savedSelections = useQuery({ queryKey: savedSelectionsKey, queryFn: ({ signal }) => requestJson<SavedSelections>('/api/selections', authentication, { signal }), retry: false });
-  const save = useMutation({
-    mutationFn: (body: unknown) => requestJson<SavedSelection>('/api/selections/save', authentication, { method: 'POST', body }),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: savedSelectionsKey }),
-  });
-  const root = snapshot.data?.tables.find((table) => tableId(table) === rootId) ?? null;
+  // Null means "not chosen yet": defaults come from the URL, the session's source connection, and the latest snapshot.
+  const [connectionChoice, setConnectionId] = useState<string | null>(search.get('connection'));
+  const [snapshotChoice, setSnapshotId] = useState<string | null>(search.get('snapshot'));
+  const [rootKey, setRootKey] = useState(search.get('table') ?? '');
+  const [name, setName] = useState('');
+  const [sql, setSql] = useState('');
+  const [parameterSettings, setParameterSettings] = useState<Readonly<Record<string, Readonly<{ kind: ValueKind; raw: string }>>>>({});
+  const [compilation, setCompilation] = useState<Compilation | null>(null);
+  const [compiledFor, setCompiledFor] = useState<string | null>(null);
+  const [liveNote, setLiveNote] = useState<string | null>(null);
 
-  function selectConnection(value: string) {
-    setConnectionId(value);
-    setSnapshotId('');
-    setRootId('');
-    setStableKeyColumns([]);
+  const connectionId = connectionChoice ?? sessionSource ?? connections.data?.[0]?.connectionId ?? '';
+  const snapshots = useSnapshots(connectionId || null);
+  const snapshotId = snapshotChoice ?? snapshots.data?.[0]?.snapshotId ?? '';
+  const snapshot = useSnapshot(connectionId || null, snapshotId || null);
+
+  const rootTable = useMemo(() => snapshot.data?.tables.find((table) => tableKey(table) === rootKey) ?? null, [snapshot.data, rootKey]);
+  const candidateTables = useMemo(() => (snapshot.data?.tables ?? []).filter((table) => table.primaryKey !== null), [snapshot.data]);
+
+  function chooseRoot(key: string) {
+    setRootKey(key);
+    const table = snapshot.data?.tables.find((item) => tableKey(item) === key);
+    if (table && (!sql.trim() || compiledFor === null)) setSql(defaultSql(table));
+    if (table && !name) setName(`${table.name} selection`);
+    setCompilation(null);
+    setCompiledFor(null);
   }
 
-  function selectSnapshot(value: string) {
-    setSnapshotId(value);
-    setRootId('');
-    setStableKeyColumns([]);
+  // The parameter list follows the @names used in the SQL; kinds and values are remembered per name.
+  const parameters = useMemo<readonly ParameterDraft[]>(
+    () => parameterNamesIn(sql).map((parameterName) => ({ name: parameterName, ...(parameterSettings[parameterName] ?? { kind: 'int', raw: '' }) })),
+    [sql, parameterSettings],
+  );
+  function updateParameter(parameterName: string, patch: Partial<Readonly<{ kind: ValueKind; raw: string }>>) {
+    setParameterSettings((current) => ({ ...current, [parameterName]: { kind: 'int', raw: '', ...current[parameterName], ...patch } }));
   }
 
-  function selectRoot(value: string) {
-    setRootId(value);
-    setStableKeyColumns(snapshot.data?.tables.find((table) => tableId(table) === value)?.primaryKey?.columns ?? []);
-  }
+  const parameterErrors = parameters.map((parameter) => validateParameterValue(parameter.kind, parameter.raw));
+  const parametersValid = parameterErrors.every((error) => error === null);
+  const sqlDirty = compiledFor !== sql;
 
-  function moveStableKey(index: number, direction: number) {
-    setStableKeyColumns((columns) => {
-      const next = [...columns];
-      next.splice(index + direction, 0, next.splice(index, 1)[0]!);
-      return next;
-    });
-  }
-
-  function saveSelection(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!rawSql.trim()) {
-      setValidationError('Enter raw SQL before saving.');
-      return;
-    }
-    setValidationError(null);
-    save.mutate({
+  function body(): SelectionRequestBody {
+    const typed: ParameterValue[] = parameters.map((parameter) => ({ name: parameter.name, kind: parameter.kind, value: coerceParameterValue(parameter.kind, parameter.raw.trim()) }));
+    return {
       mode: 'raw',
       visual: null,
-      rawSql,
-      parameters: [],
+      rawSql: sql,
+      parameters: typed,
       schemaRevision: snapshot.data?.hash ?? '',
       connectionId: connectionId || null,
       snapshotId: snapshotId || null,
-      rootSchema: root?.schema ?? null,
-      rootTable: root?.name ?? null,
-      stableKeyConstraintName: root?.primaryKey?.name ?? null,
-      stableKeyColumns,
-    });
+      rootSchema: rootTable?.schema ?? null,
+      rootTable: rootTable?.name ?? null,
+      stableKeyConstraintName: rootTable?.primaryKey?.name ?? null,
+      stableKeyColumns: rootTable?.primaryKey?.columns ?? null,
+    };
   }
 
+  const compile = useMutation({
+    mutationFn: () => selectionsApi.compile(body(), authentication),
+    onSuccess: (result) => {
+      setCompilation(result);
+      setCompiledFor(sql);
+      setLiveNote(null);
+    },
+    onError: () => {
+      setCompilation(null);
+      setCompiledFor(null);
+    },
+  });
+  const count = useMutation({
+    mutationFn: () => selectionsApi.count(body(), authentication),
+    onError: (error) => setLiveNote(isNotWired(error) ? 'Live row counting is not wired to a source connection on this API build yet. Sealing the plan will validate and execute the query.' : describeError(error)),
+    onSuccess: () => setLiveNote(null),
+  });
+  const preview = useMutation({
+    mutationFn: () => selectionsApi.preview(body(), authentication),
+    onError: (error) => setLiveNote(isNotWired(error) ? 'Live preview is not wired to a source connection on this API build yet. Sealing the plan will validate and execute the query.' : describeError(error)),
+    onSuccess: () => setLiveNote(null),
+  });
+  const save = useMutation({
+    mutationFn: () => selectionsApi.save(body(), authentication),
+    onSuccess: (saved) => {
+      registryActions.upsertSelection({
+        selectionId: saved.selectionId,
+        name: name.trim() || `${rootTable?.name ?? 'Untitled'} selection`,
+        connectionId,
+        snapshotId,
+        rootTable: rootTable ? tableKey(rootTable) : null,
+      });
+      toast.success('Selection saved', 'Next, pair it with a target in a transfer plan.');
+      navigate(`/plans/new?selection=${saved.selectionId}`);
+    },
+    onError: (error) => toast.error('Unable to save the selection', describeError(error)),
+  });
+
+  const checklist = [
+    { label: 'Source connection and snapshot', done: Boolean(connectionId && snapshotId) },
+    { label: 'Root table with a primary key', done: rootTable !== null },
+    { label: 'SQL validated', done: compilation !== null && !sqlDirty },
+    { label: 'Parameters filled in', done: parametersValid },
+  ];
+  const doneCount = checklist.filter((item) => item.done).length;
+  const canSave = checklist.every((item) => item.done) && hasPermission('Selections.Write') && !save.isPending;
+  const canRawSql = !isVerified || hasPermission('Selections.RawSql');
+
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  function onEditorKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      const element = event.currentTarget;
+      const start = element.selectionStart;
+      const end = element.selectionEnd;
+      const next = `${sql.slice(0, start)}  ${sql.slice(end)}`;
+      setSql(next);
+      requestAnimationFrame(() => element.setSelectionRange(start + 2, start + 2));
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && sql.trim()) compile.mutate();
+  }
+  const lineCount = Math.max(1, sql.split('\n').length);
+
   return (
-    <section aria-label="Selection workbench">
-      <h2>Selection workbench</h2>
-      <p>Use raw SQL to identify seed rows. We never infer a table or key from SQL: choose the source snapshot, root table, and stable key that identify each row for dependency closure.</p>
-      <form aria-label="Save selection" onSubmit={saveSelection}>
-        <Field label="Connection"><select value={connectionId} onChange={(event) => selectConnection(event.target.value)}><option value="">Choose connection</option>{connections.data?.map((connection) => <option key={connection.connectionId} value={connection.connectionId}>{connection.displayName}</option>)}</select></Field>
-        <Field label="Snapshot"><select value={snapshotId} disabled={!connectionId} onChange={(event) => selectSnapshot(event.target.value)}><option value="">Choose snapshot</option>{snapshots.data?.map((snapshotSummary) => <option key={snapshotSummary.snapshotId} value={snapshotSummary.snapshotId}>{`${snapshotSummary.hash} (${snapshotSummary.capturedAtUtc})`}</option>)}</select></Field>
-        <Field label="Root table"><select value={rootId} disabled={!snapshotId} onChange={(event) => selectRoot(event.target.value)}><option value="">Choose table with a primary key</option>{snapshot.data?.tables.filter((table) => table.primaryKey !== null).map((table) => <option key={tableId(table)} value={tableId(table)}>{tableId(table)}</option>)}</select></Field>
-        {root?.primaryKey ? <section aria-label="Stable key"><p>Stable key constraint: {root.primaryKey.name}</p><ol aria-label="Stable key columns">{stableKeyColumns.map((column, index) => <li key={column}>{column} <Button disabled={index === 0} aria-label={`Move ${column} earlier`} onClick={() => moveStableKey(index, -1)}>Earlier</Button><Button disabled={index === stableKeyColumns.length - 1} aria-label={`Move ${column} later`} onClick={() => moveStableKey(index, 1)}>Later</Button></li>)}</ol></section> : <p>Choose a root table to state its stable key.</p>}
-        <Field label="Raw SQL"><textarea value={rawSql} rows={8} onChange={(event) => setRawSql(event.target.value)} /></Field>
-        <Button type="submit" disabled={save.isPending || !hasPermission('Selections.Write')}>Save selection</Button>
-      </form>
-      {validationError ? <InlineError>{validationError}</InlineError> : null}
-      {save.isError ? <InlineError>{selectionErrorMessage(save.error)}</InlineError> : null}
-      {save.isSuccess ? <p role="status">Selection saved.</p> : null}
-      <section aria-label="Preview"><h3>Preview</h3><p>Preview is temporarily unavailable.</p></section>
-      <section aria-label="Count seed rows"><h3>Count seed rows</h3><p>Counting seed rows is temporarily unavailable.</p></section>
-      <section aria-label="Visual query builder"><h3>Visual query builder</h3><p>The visual query builder is temporarily unavailable. Use raw SQL.</p></section>
-      <section aria-label="Saved selections">
-        <h3>Saved selections</h3>
-        {savedSelections.isPending ? <LoadingIndicator label="Loading saved selections." /> : null}
-        {savedSelections.isError ? <InlineError>{selectionErrorMessage(savedSelections.error, 'Unable to load saved selections.')}</InlineError> : null}
-        {savedSelections.data?.selections.length === 0 ? <p>No saved selections.</p> : null}
-        {savedSelections.data && savedSelections.data.selections.length > 0 ? <DataTable><thead><tr><th scope="col">Selection</th><th scope="col">Mode</th></tr></thead><tbody>{savedSelections.data.selections.map((selection) => <tr key={selection.selectionId}><td>{selection.displayName}</td><td>{selection.mode}</td></tr>)}</tbody></DataTable> : null}
-      </section>
-    </section>
+    <>
+      <PageHeader
+        actions={
+          <Button disabled={!canSave} icon={<Icons.Check size={16} />} loading={save.isPending} onClick={() => save.mutate()} variant="primary">
+            Save selection
+          </Button>
+        }
+        description="Write a SELECT that returns the root table's stable key columns. Only those rows and their required parents move."
+        eyebrow="Selection workbench"
+        title={name || 'New selection'}
+      />
+
+      <div className="grid gap-5 xl:grid-cols-[320px_1fr_300px]">
+        {/* Scope */}
+        <div className="grid content-start gap-4">
+          <Card>
+            <CardHeader icon={<Icons.Database size={16} />} title="Scope" />
+            <div className="grid gap-4">
+              <Field label="Source connection" required>
+                <Select
+                  onChange={(event) => {
+                    setConnectionId(event.target.value);
+                    setSnapshotId(null);
+                    setRootKey('');
+                  }}
+                  value={connectionId}
+                >
+                  <option value="">Choose…</option>
+                  {(connections.data ?? []).map((connection) => (
+                    <option key={connection.connectionId} value={connection.connectionId}>
+                      {connection.displayName}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field hint={snapshots.data && snapshots.data.length === 0 ? 'No snapshot yet. Scan the schema from Connections.' : undefined} label="Schema snapshot" required>
+                <Select
+                  disabled={!connectionId}
+                  onChange={(event) => {
+                    setSnapshotId(event.target.value);
+                    setRootKey('');
+                  }}
+                  value={snapshotId}
+                >
+                  <option value="">Choose…</option>
+                  {(snapshots.data ?? []).map((item, index) => (
+                    <option key={item.snapshotId} value={item.snapshotId}>
+                      {index === 0 ? 'Latest · ' : ''}
+                      {item.hash.slice(0, 10)}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field hint="Only tables with a primary key can be a root." label="Root table" required>
+                <Select disabled={!snapshot.data} onChange={(event) => chooseRoot(event.target.value)} value={rootKey}>
+                  <option value="">Choose…</option>
+                  {candidateTables.map((table) => (
+                    <option key={tableKey(table)} value={tableKey(table)}>
+                      {tableKey(table)}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              {rootTable ? (
+                <div className="rounded-xl bg-surface-2 p-3 text-[13px]">
+                  <div className="flex items-center gap-1.5 font-semibold text-fg">
+                    <Icons.Key className="text-accent" size={14} /> Stable key
+                  </div>
+                  <div className="mt-1 font-mono text-[12px] text-fg-muted">{rootTable.primaryKey!.name}</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {rootTable.primaryKey!.columns.map((column) => (
+                      <Badge key={column} tone="accent">
+                        {column}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <Field label="Selection name">
+                <TextInput onChange={(event) => setName(event.target.value)} placeholder="e.g. Orders for customer 42" value={name} />
+              </Field>
+            </div>
+          </Card>
+        </div>
+
+        {/* Editor */}
+        <div className="grid content-start gap-4">
+          <Card padded={false}>
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+              <div className="flex items-center gap-2 text-[13px] font-semibold text-fg">
+                <Icons.Code size={15} /> Raw SQL
+                {compilation && !sqlDirty ? (
+                  <Badge dot tone="success">
+                    Validated
+                  </Badge>
+                ) : sql.trim() ? (
+                  <Badge dot tone="warning">
+                    Not validated
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="hidden text-[11px] text-fg-faint sm:inline">⌘/Ctrl + Enter to validate</span>
+                <Button disabled={!sql.trim() || !canRawSql} icon={<Icons.Check size={14} />} loading={compile.isPending} onClick={() => compile.mutate()} size="sm" variant="primary">
+                  Validate
+                </Button>
+              </div>
+            </div>
+            <div className="relative flex bg-surface font-mono text-[13px] leading-6">
+              <div aria-hidden="true" className="w-11 shrink-0 border-r border-border bg-surface-2 py-3 text-right text-fg-faint select-none">
+                {Array.from({ length: lineCount }, (_, index) => (
+                  <div className="pr-2" key={index}>
+                    {index + 1}
+                  </div>
+                ))}
+              </div>
+              <textarea
+                aria-label="Selection SQL"
+                className="dp-editor min-h-72 flex-1 resize-y bg-transparent px-4 py-3 text-fg outline-none placeholder:text-fg-faint"
+                disabled={!canRawSql}
+                onChange={(event) => setSql(event.target.value)}
+                onKeyDown={onEditorKey}
+                placeholder={rootTable ? undefined : 'Choose a root table to start from a template, or write SQL that returns the root key columns.'}
+                ref={editorRef}
+                spellCheck={false}
+                value={sql}
+              />
+            </div>
+            {!canRawSql ? <div className="border-t border-border px-4 py-2 text-xs text-warning">Editing raw SQL requires the Selections.RawSql permission.</div> : null}
+          </Card>
+
+          {compile.isError ? (
+            <Alert title="SQL rejected" tone="danger">
+              {isNotWired(compile.error)
+                ? 'The safety validator rejected this statement. Use a single SELECT with no data-modifying keywords, comments, or batch separators.'
+                : describeError(compile.error)}
+            </Alert>
+          ) : null}
+          {compilation && !sqlDirty && compilation.warnings.length > 0 ? (
+            <Alert title="Warnings" tone="warning">
+              <ul className="list-disc pl-4">
+                {compilation.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            </Alert>
+          ) : null}
+
+          <Card>
+            <CardHeader
+              description={parameters.length === 0 ? 'Reference parameters as @name in the SQL to add them here.' : 'Values are sent typed. They never leave this form until you save.'}
+              icon={<Icons.Zap size={16} />}
+              title={`Parameters${parameters.length ? ` (${parameters.length})` : ''}`}
+            />
+            {parameters.length > 0 ? (
+              <DataTable>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Kind</th>
+                    <th>Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parameters.map((parameter, index) => (
+                    <tr key={parameter.name}>
+                      <td className="font-mono text-[12.5px]">@{parameter.name}</td>
+                      <td className="w-40">
+                        <Select
+                          aria-label={`Kind of @${parameter.name}`}
+                          onChange={(event) => updateParameter(parameter.name, { kind: event.target.value as ValueKind })}
+                          value={parameter.kind}
+                        >
+                          {valueKinds.map((kind) => (
+                            <option key={kind} value={kind}>
+                              {kind}
+                            </option>
+                          ))}
+                        </Select>
+                      </td>
+                      <td>
+                        <TextInput
+                          aria-invalid={parameterErrors[index] !== null}
+                          aria-label={`Value of @${parameter.name}`}
+                          className="font-mono"
+                          onChange={(event) => updateParameter(parameter.name, { raw: event.target.value })}
+                          placeholder={parameter.kind === 'boolean' ? 'true / false' : parameter.kind === 'date' ? 'YYYY-MM-DD' : ''}
+                          value={parameter.raw}
+                        />
+                        {parameterErrors[index] ? <div className="mt-1 text-xs text-danger">{parameterErrors[index]}</div> : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </DataTable>
+            ) : null}
+            {count.data ? (
+              <p className="mt-3 text-sm text-fg">
+                <strong className="tnum">{formatNumber(count.data.distinctStableKeyCount)}</strong> distinct root keys.
+              </p>
+            ) : null}
+            {preview.data ? (
+              <div className="mt-3">
+                <DataTable>
+                  <thead>
+                    <tr>
+                      {preview.data.columns.map((column) => (
+                        <th key={column}>{column}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.data.rows.map((row, index) => (
+                      <tr key={index}>
+                        {preview.data.columns.map((column) => (
+                          <td className="font-mono text-[12px]" key={column}>
+                            {String(row[column] ?? 'NULL')}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </DataTable>
+                {preview.data.hasMore ? <p className="mt-2 text-xs text-fg-faint">More rows exist.</p> : null}
+              </div>
+            ) : null}
+            {liveNote ? (
+              <Alert className="mt-3" tone="info">
+                {liveNote}
+              </Alert>
+            ) : null}
+            <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
+              <Button disabled={!sql.trim()} icon={<Icons.Activity size={14} />} loading={count.isPending} onClick={() => count.mutate()} size="sm">
+                Count keys
+              </Button>
+              <Button disabled={!sql.trim()} icon={<Icons.Eye size={14} />} loading={preview.isPending} onClick={() => preview.mutate()} size="sm">
+                Preview rows
+              </Button>
+              <span className="self-center text-xs text-fg-faint">Live checks run against the source connection.</span>
+            </div>
+          </Card>
+        </div>
+
+        {/* Checklist */}
+        <div className="grid content-start gap-4">
+          <Card>
+            <CardHeader icon={<Icons.Sparkles size={16} />} title="Ready to save?" />
+            <ProgressBar detail={`${doneCount} of ${checklist.length}`} label="Checklist" size="sm" tone={doneCount === checklist.length ? 'success' : 'accent'} value={doneCount / checklist.length} />
+            <ul className="mt-4 grid gap-2">
+              {checklist.map((item) => (
+                <li className={cx('flex items-center gap-2.5 text-[13px]', item.done ? 'text-fg' : 'text-fg-muted')} key={item.label}>
+                  <span className={cx('flex size-5 shrink-0 items-center justify-center rounded-full', item.done ? 'bg-success text-white' : 'border border-border-strong')}>
+                    {item.done ? <Icons.Check size={12} strokeWidth={3} /> : null}
+                  </span>
+                  {item.label}
+                </li>
+              ))}
+            </ul>
+            <Button block className="mt-5" disabled={!canSave} icon={<Icons.Check size={16} />} loading={save.isPending} onClick={() => save.mutate()} variant="primary">
+              Save selection
+            </Button>
+          </Card>
+          <Card className="text-[13px] text-fg-muted">
+            <div className="mb-2 flex items-center gap-2 font-semibold text-fg">
+              <Icons.Info size={15} /> How selection works
+            </div>
+            <ul className="grid gap-2">
+              <li>
+                Return the root&apos;s stable key columns (its primary key). Extra columns are ignored.
+              </li>
+              <li>
+                Rows referenced through foreign keys are added automatically. Child rows are <em>not</em>.
+              </li>
+              <li>
+                Joins only help find keys. Joined tables never become transfer roots.
+              </li>
+              <li>
+                The statement must be a single read-only <Code>SELECT</Code>.
+              </li>
+            </ul>
+          </Card>
+        </div>
+      </div>
+    </>
   );
 }

@@ -1,0 +1,75 @@
+import { useQuery } from '@tanstack/react-query';
+import { connectionsApi } from '../../api/connections';
+import { isActive, jobsApi } from '../../api/jobs';
+import { queryKeys } from '../../api/keys';
+import { plansApi } from '../../api/plans';
+import { selectionsApi } from '../../api/selections';
+import { useAuth } from '../../auth/AuthContext';
+
+export function useConnections() {
+  const { authentication } = useAuth();
+  return useQuery({ queryKey: queryKeys.connections, queryFn: ({ signal }) => connectionsApi.list(authentication, signal) });
+}
+
+export function useProviders() {
+  return useQuery({ queryKey: queryKeys.providers, queryFn: ({ signal }) => connectionsApi.providers(signal), staleTime: Infinity });
+}
+
+export function useSnapshots(connectionId: string | null) {
+  const { authentication } = useAuth();
+  return useQuery({
+    queryKey: queryKeys.snapshots(connectionId ?? ''),
+    queryFn: ({ signal }) => connectionsApi.snapshots(connectionId!, authentication, signal),
+    enabled: connectionId !== null && connectionId !== '',
+  });
+}
+
+export function useSnapshot(connectionId: string | null, snapshotId: string | null) {
+  const { authentication } = useAuth();
+  return useQuery({
+    queryKey: queryKeys.snapshot(connectionId ?? '', snapshotId ?? ''),
+    queryFn: ({ signal }) => connectionsApi.snapshot(connectionId!, snapshotId!, authentication, signal),
+    enabled: Boolean(connectionId && snapshotId),
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useSelections() {
+  const { authentication } = useAuth();
+  return useQuery({ queryKey: queryKeys.selections, queryFn: ({ signal }) => selectionsApi.list(authentication, signal) });
+}
+
+export function usePlanReview(planId: string | null, options: Readonly<{ enabled?: boolean; refetchIntervalMs?: number }> = {}) {
+  const { authentication } = useAuth();
+  return useQuery({
+    queryKey: queryKeys.planReview(planId ?? ''),
+    queryFn: ({ signal }) => plansApi.review(planId!, authentication, signal),
+    enabled: Boolean(planId) && (options.enabled ?? true),
+    retry: false,
+    refetchInterval: options.refetchIntervalMs,
+  });
+}
+
+export function useJobs(options: Readonly<{ live?: boolean }> = {}) {
+  const { authentication } = useAuth();
+  return useQuery({
+    queryKey: queryKeys.jobs,
+    queryFn: ({ signal }) => jobsApi.list(authentication, signal),
+    refetchInterval: (query) => {
+      if (options.live === false) return false;
+      const jobs = query.state.data;
+      return jobs?.some((job) => isActive(job.state)) ? 2_000 : 15_000;
+    },
+  });
+}
+
+export function useJob(jobId: string | null, options: Readonly<{ refetchIntervalMs?: number | false }> = {}) {
+  const { authentication } = useAuth();
+  return useQuery({
+    queryKey: queryKeys.job(jobId ?? ''),
+    queryFn: ({ signal }) => jobsApi.get(jobId!, authentication, signal),
+    enabled: Boolean(jobId),
+    retry: false,
+    refetchInterval: options.refetchIntervalMs ?? false,
+  });
+}

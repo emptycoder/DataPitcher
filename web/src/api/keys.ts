@@ -1,0 +1,13 @@
+export const queryKeys = {
+  providers: ['providers'] as const,
+  connections: ['connections'] as const,
+  snapshots: (connectionId: string) => ['connections', connectionId, 'snapshots'] as const,
+  snapshot: (connectionId: string, snapshotId: string) => ['connections', connectionId, 'snapshots', snapshotId] as const,
+  operation: (operationId: string) => ['operations', operationId] as const,
+  selections: ['selections'] as const,
+  workbenchSchema: ['selections', 'workbench-schema'] as const,
+  planReview: (planId: string) => ['plans', planId, 'review'] as const,
+  planGraph: (planId: string) => ['plans', planId, 'graph'] as const,
+  jobs: ['jobs'] as const,
+  job: (jobId: string) => ['jobs', jobId] as const,
+};

@@ -67,6 +67,9 @@ public sealed class DataPitcherApplication(
         );
     }
 
+    public Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken) =>
+        connections.DeleteAsync(connectionId, ifMatch, cancellationToken);
+
     public async Task<OperationReceiptResponse> QueueConnectionCheckAsync(
         Guid connectionId,
         CancellationToken cancellationToken
@@ -169,6 +172,9 @@ public sealed class DataPitcherApplication(
         );
         return new SelectionResponse(record.SelectionId, record.Version, ETag(record.Version));
     }
+
+    public Task DeleteSelectionAsync(Guid selectionId, string ifMatch, CancellationToken cancellationToken) =>
+        selections.DeleteAsync(selectionId, ifMatch, cancellationToken);
 
     public async Task<OperationReceiptResponse> QueueSelectionEvaluationAsync(
         Guid selectionId,

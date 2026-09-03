@@ -1,44 +1,41 @@
-import { afterEach, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { Button, DataTable, Field, InlineError, LoadingIndicator, StatusBadge, TextInput } from './index';
+import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/react';
+import { ProgressBar, StatusBadge, Stepper, humanizeState, toneForState } from './index';
 
 afterEach(cleanup);
 
-it('renders accessible button and text input primitives', () => {
-  let clicks = 0;
-  render(<><Button onClick={() => { clicks += 1; }}>Save</Button><TextInput aria-label="Connection name" /></>);
+describe('ui primitives', () => {
+  it('renders determinate and indeterminate progress bars', () => {
+    render(<ProgressBar label="Rows" showPercent value={0.256} />);
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '25.6');
+    expect(screen.getByText('26%')).toBeInTheDocument();
+    cleanup();
+    render(<ProgressBar label="Working" value={null} />);
+    expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+  });
 
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  expect(clicks).toBe(1);
-  expect(screen.getByRole('button', { name: 'Save' })).toHaveAttribute('type', 'button');
-  expect(screen.getByRole('textbox', { name: 'Connection name' })).toHaveAttribute('type', 'text');
-});
+  it('maps states to tones and labels', () => {
+    expect(toneForState('Healthy')).toBe('success');
+    expect(toneForState('running')).toBe('info');
+    expect(toneForState('Paused')).toBe('warning');
+    expect(toneForState('VerificationFailed')).toBe('danger');
+    expect(humanizeState('VerificationFailed')).toBe('Verification failed');
+    expect(humanizeState('queued')).toBe('Queued');
+    render(<StatusBadge state="running" />);
+    expect(screen.getByRole('status')).toHaveTextContent('Running');
+  });
 
-it('ties field labels to generated and supplied input ids', () => {
-  render(<><Field label="Generated"><TextInput /></Field><Field label="Supplied"><TextInput id="connection-name" /></Field></>);
-
-  expect(screen.getByLabelText('Generated')).toHaveAttribute('data-ui', 'text-input');
-  expect(screen.getByLabelText('Supplied')).toHaveAttribute('id', 'connection-name');
-});
-
-it('renders a semantic data table', () => {
-  render(<DataTable><caption>Connections</caption><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Warehouse</td></tr></tbody></DataTable>);
-
-  expect(screen.getByRole('table', { name: 'Connections' })).toHaveTextContent('Warehouse');
-});
-
-it.each([
-  ['Healthy', 'success'], ['Queued', 'info'], ['Degraded', 'warning'], ['Failed', 'danger'], ['Unknown', 'neutral'],
-])('conveys %s state with a %s badge tone', (state, tone) => {
-  render(<StatusBadge state={state} />);
-
-  expect(screen.getByRole('status')).toHaveAttribute('data-tone', tone);
-});
-
-it('renders inline errors and loading status accessibly', () => {
-  render(<><InlineError>Unable to save.</InlineError><LoadingIndicator label="Loading connections" /></>);
-
-  expect(screen.getByRole('alert')).toHaveTextContent('Unable to save.');
-  expect(screen.getByRole('status')).toHaveAttribute('aria-busy', 'true');
-  expect(screen.getByRole('status')).toHaveTextContent('Loading connections');
+  it('renders stepper steps in order', () => {
+    render(
+      <Stepper
+        steps={[
+          { key: 'a', label: 'Connect', status: 'done' },
+          { key: 'b', label: 'Scan', status: 'active' },
+          { key: 'c', label: 'Seal', status: 'todo' },
+        ]}
+      />,
+    );
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+    expect(screen.getByText('Scan')).toBeInTheDocument();
+  });
 });

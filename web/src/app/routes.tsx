@@ -1,54 +1,44 @@
 import type { ReactNode } from 'react';
-import type { AuthenticationAdapter } from '../auth/authAdapter';
 import { ConnectionsScreen } from '../features/connections/ConnectionsScreen';
-import { PlanReview } from '../features/plans/PlanReview';
-import { PlanSeal } from '../features/plans/PlanSeal';
-import { PlanReviewScreen } from '../features/plans/PlanReviewScreen';
-import { SchemaBrowserScreen } from '../features/schema/SchemaBrowserScreen';
+import { OverviewScreen } from '../features/overview/OverviewScreen';
+import { PlanBuilderScreen } from '../features/plans/PlanBuilderScreen';
+import { PlanDetailScreen } from '../features/plans/PlanDetailScreen';
+import { PlansScreen } from '../features/plans/PlansScreen';
+import { SchemaExplorerScreen } from '../features/schema/SchemaExplorerScreen';
+import { SelectionsScreen } from '../features/selections/SelectionsScreen';
 import { SelectionWorkbenchScreen } from '../features/selections/SelectionWorkbenchScreen';
-import { JobDetailScreen, JobsListScreen } from '../features/jobs/JobsScreens';
-import { TransferMonitorScreen } from '../features/transfers/TransferMonitorScreen';
-import { GraphScreen } from '../features/graph/GraphScreen';
-import { navigate } from './router';
+import { TransferDetailScreen } from '../features/transfers/TransferDetailScreen';
+import { TransfersScreen } from '../features/transfers/TransfersScreen';
+import type { IconName } from '../ui/icons';
 import type { PathRoute, RouteParams } from './routeMatch';
 
-export type RouteContext = Readonly<{ authentication: AuthenticationAdapter }>;
-export type RouteRecord = PathRoute & Readonly<{ label: string; render: (params: RouteParams, context: RouteContext) => ReactNode }>;
-
-const reconnectScheduler = { setTimeout: (work: () => void, delay: number) => window.setTimeout(work, delay), clearTimeout: (handle: unknown) => window.clearTimeout(handle as number) };
-
-function connectionsRoute(_: RouteParams, context: RouteContext) {
-  return <ConnectionsScreen request={fetch} authentication={context.authentication} />;
-}
-
-function dependencyGraphRoute(params: RouteParams, context: RouteContext) {
-  return <GraphScreen planId={params.planId ?? null} authentication={context.authentication} />;
-}
-
-function planReviewRoute(params: RouteParams, context: RouteContext) {
-  return <PlanReviewScreen planId={params.planId ?? null} request={fetch} authentication={context.authentication} onJobStarted={(jobId) => navigate(`/transfer-monitor/${jobId}`)} />;
-}
-
-function selectionWorkbenchRoute(_: RouteParams, context: RouteContext) {
-  return <SelectionWorkbenchScreen authentication={context.authentication} />;
-}
-
-function transferMonitorRoute(params: RouteParams, context: RouteContext) {
-  return <TransferMonitorScreen jobId={params.jobId ?? null} request={fetch} authentication={context.authentication} clock={Date.now} scheduler={reconnectScheduler} />;
-}
-
-function jobsRoute(params: RouteParams, context: RouteContext) {
-  return params.jobId ? <JobDetailScreen jobId={params.jobId} authentication={context.authentication} /> : <JobsListScreen />;
-}
+export type RouteRecord = PathRoute & Readonly<{ render: (params: RouteParams) => ReactNode; nav?: Readonly<{ label: string; icon: IconName }> }>;
 
 export const routes = [
-  { path: '/connections', label: 'Connections', render: connectionsRoute },
-  { path: '/dependency-graph/:planId?', label: 'Schema graph', render: dependencyGraphRoute },
-  { path: '/selection-workbench', label: 'Selection workbench', render: selectionWorkbenchRoute },
-  { path: '/plan-review/:planId?', label: 'Plan review', render: planReviewRoute },
-  { path: '/plans/:planId/review', label: 'Plan review', render: (params, context) => <PlanReview planId={params.planId!} authentication={context.authentication} /> },
-  { path: '/plans/:planId/seal', label: 'Seal plan', render: (params, context) => <PlanSeal planId={params.planId!} authentication={context.authentication} /> },
-  { path: '/transfer-monitor/:jobId?', label: 'Transfer monitor', render: transferMonitorRoute },
-  { path: '/jobs/:jobId?', label: 'Transfer jobs', render: jobsRoute },
-  { path: '/schema-browser', label: 'Schema browser', render: (_params, { authentication }) => <SchemaBrowserScreen authentication={authentication} /> },
+  { path: '/', nav: { label: 'Overview', icon: 'Home' }, render: () => <OverviewScreen /> },
+  { path: '/connections', nav: { label: 'Connections', icon: 'Plug' }, render: () => <ConnectionsScreen /> },
+  {
+    path: '/schema/:connectionId?/:snapshotId?',
+    nav: { label: 'Schema', icon: 'Schema' },
+    render: (params) => <SchemaExplorerScreen connectionId={params.connectionId ?? null} snapshotId={params.snapshotId ?? null} />,
+  },
+  { path: '/selections', nav: { label: 'Selections', icon: 'Filter' }, render: () => <SelectionsScreen /> },
+  { path: '/selections/new', render: () => <SelectionWorkbenchScreen /> },
+  { path: '/plans', nav: { label: 'Plans', icon: 'Clipboard' }, render: () => <PlansScreen /> },
+  { path: '/plans/new', render: () => <PlanBuilderScreen planId={null} /> },
+  { path: '/plans/:planId/edit', render: (params) => <PlanBuilderScreen planId={params.planId!} /> },
+  { path: '/plans/:planId', render: (params) => <PlanDetailScreen planId={params.planId!} /> },
+  { path: '/transfers', nav: { label: 'Transfers', icon: 'Rocket' }, render: () => <TransfersScreen /> },
+  { path: '/transfers/:jobId', render: (params) => <TransferDetailScreen jobId={params.jobId!} /> },
 ] satisfies readonly RouteRecord[];
+
+export const navRoutes = routes.filter((route) => route.nav !== undefined);
+
+export function navPath(route: RouteRecord) {
+  return route.path.replace(/(\/:\w+\?)+$/, '') || '/';
+}
+
+export function isNavActive(route: RouteRecord, pathname: string) {
+  const base = navPath(route);
+  return base === '/' ? pathname === '/' : pathname === base || pathname.startsWith(`${base}/`);
+}

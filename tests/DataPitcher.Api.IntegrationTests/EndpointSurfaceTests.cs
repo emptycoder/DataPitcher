@@ -55,6 +55,28 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task DeleteConnection_WithIfMatch_ReturnsNoContent()
+    {
+        var connectionId = Guid.NewGuid();
+        using var request = new HttpRequestMessage(HttpMethod.Delete, $"/api/connections/{connectionId}");
+        request.Headers.TryAddWithoutValidation("If-Match", "\"1\"");
+
+        using var response = await _client.SendAsync(request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Contains("DeleteConnectionAsync", _factory.Application.Invocations);
+    }
+
+    [Fact]
+    public async Task DeleteConnection_WhenIfMatchIsMissing_ReturnsValidationProblemDetails()
+    {
+        using var response = await _client.DeleteAsync($"/api/connections/{Guid.NewGuid()}", CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
+    }
+
+    [Fact]
     public async Task QueueConnectionCheck_ReturnsAcceptedReceipt()
     {
         var connectionId = Guid.NewGuid();
@@ -404,6 +426,26 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var selection = await response.Content.ReadFromJsonAsync<SelectionResponse>();
         Assert.Equal(selectionId, selection!.SelectionId);
+    }
+
+    [Fact]
+    public async Task DeleteSelection_WithIfMatch_ReturnsNoContent()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, $"/api/selections/{Guid.NewGuid()}");
+        request.Headers.TryAddWithoutValidation("If-Match", "\"1\"");
+
+        using var response = await _client.SendAsync(request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Contains("DeleteSelectionAsync", _factory.Application.Invocations);
+    }
+
+    [Fact]
+    public async Task DeleteSelection_WhenIfMatchIsMissing_ReturnsValidationProblemDetails()
+    {
+        using var response = await _client.DeleteAsync($"/api/selections/{Guid.NewGuid()}", CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]

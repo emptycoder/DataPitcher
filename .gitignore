@@ -11,3 +11,6 @@ web/node_modules/
 web/dist/
 web/coverage/
 web/*.tsbuildinfo
+
+# API control database created at runtime
+src/DataPitcher.Api/data/

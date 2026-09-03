@@ -109,6 +109,22 @@ public sealed class SelectionStore(ControlDatabase database, IClock clock)
         );
     }
 
+    public Task DeleteAsync(Guid selectionId, string ifMatch, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        using var transaction = db.BeginTransaction();
+        var affected = db.Execute(
+            "DELETE FROM Selections WHERE SelectionId = @selectionId AND Version = @version",
+            new DataParameter("selectionId", selectionId.ToString()),
+            new DataParameter("version", ParseVersion(ifMatch))
+        );
+        if (affected != 1)
+            throw new SelectionVersionMismatchException();
+        transaction.Commit();
+        return Task.CompletedTask;
+    }
+
     public Task<SelectionRecord?> FindAsync(Guid selectionId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

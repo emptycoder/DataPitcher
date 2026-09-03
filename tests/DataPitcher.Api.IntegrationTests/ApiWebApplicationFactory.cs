@@ -209,6 +209,9 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
             () => new ConnectionResponse(Guid.NewGuid(), request.DisplayName, request.ProviderId, "Unknown", "etag-1")
         );
 
+    public Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(DeleteConnectionAsync), cancellationToken, () => connectionId);
+
     public Task<OperationReceiptResponse> QueueConnectionCheckAsync(
         Guid connectionId,
         CancellationToken cancellationToken
@@ -273,6 +276,9 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
             cancellationToken,
             () => new SelectionResponse(selectionId, 1, "etag-1")
         );
+
+    public Task DeleteSelectionAsync(Guid selectionId, string ifMatch, CancellationToken cancellationToken) =>
+        ObserveAsync(nameof(DeleteSelectionAsync), cancellationToken, () => selectionId);
 
     public Task<OperationReceiptResponse> QueueSelectionEvaluationAsync(
         Guid selectionId,

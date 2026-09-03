@@ -6,6 +6,7 @@ using DataPitcher.Api.Events;
 using DataPitcher.Core.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Mvc;
 
 namespace DataPitcher.Api.Endpoints;
 
@@ -21,6 +22,11 @@ public static class EndpointGroups
         );
         WithStandardProblems(
             connections.MapPost("", CreateConnectionAsync).RequireAuthorization(ApiPolicyNames.ConnectionsWrite)
+        );
+        WithStandardProblems(
+            connections
+                .MapDelete("/{connectionId:guid}", DeleteConnectionAsync)
+                .RequireAuthorization(ApiPolicyNames.ConnectionsWrite)
         );
         WithStandardProblems(
             connections
@@ -51,6 +57,11 @@ public static class EndpointGroups
         WithStandardProblems(
             selections
                 .MapPut("/{selectionId:guid}", SaveSelectionAsync)
+                .RequireAuthorization(ApiPolicyNames.SelectionsWrite)
+        );
+        WithStandardProblems(
+            selections
+                .MapDelete("/{selectionId:guid}", DeleteSelectionAsync)
                 .RequireAuthorization(ApiPolicyNames.SelectionsWrite)
         );
         WithStandardProblems(
@@ -133,6 +144,40 @@ public static class EndpointGroups
         if (string.IsNullOrWhiteSpace(request.IfMatch))
             return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "If-Match is required.");
         return TypedResults.Ok(await application.CreateConnectionAsync(request, cancellationToken));
+    }
+
+    private static async Task<Results<NoContent, ProblemHttpResult>> DeleteConnectionAsync(
+        Guid connectionId,
+        [FromHeader(Name = "If-Match")] string? ifMatch,
+        HttpContext context,
+        ClaimsPrincipal user,
+        IAuthorizationService authorizationService,
+        IDataPitcherApplication application,
+        CancellationToken cancellationToken
+    )
+    {
+        if (string.IsNullOrWhiteSpace(ifMatch))
+            return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "If-Match is required.");
+        if (
+            await AuthorizeResourceAsync(
+                context,
+                authorizationService,
+                user,
+                new ConnectionResource(connectionId),
+                Permissions.ConnectionsWrite
+            ) is
+            { } problem
+        )
+            return problem;
+        try
+        {
+            await application.DeleteConnectionAsync(connectionId, ifMatch, cancellationToken);
+            return TypedResults.NoContent();
+        }
+        catch (InvalidOperationException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: exception.Message);
+        }
     }
 
     private static async Task<Results<Accepted<OperationReceiptResponse>, ProblemHttpResult>> QueueConnectionCheckAsync(
@@ -268,6 +313,26 @@ public static class EndpointGroups
         if (string.IsNullOrWhiteSpace(request.IfMatch))
             return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "If-Match is required.");
         return TypedResults.Ok(await application.SaveSelectionAsync(selectionId, request, cancellationToken));
+    }
+
+    private static async Task<Results<NoContent, ProblemHttpResult>> DeleteSelectionAsync(
+        Guid selectionId,
+        [FromHeader(Name = "If-Match")] string? ifMatch,
+        IDataPitcherApplication application,
+        CancellationToken cancellationToken
+    )
+    {
+        if (string.IsNullOrWhiteSpace(ifMatch))
+            return TypedResults.Problem(statusCode: StatusCodes.Status400BadRequest, title: "If-Match is required.");
+        try
+        {
+            await application.DeleteSelectionAsync(selectionId, ifMatch, cancellationToken);
+            return TypedResults.NoContent();
+        }
+        catch (InvalidOperationException exception)
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: exception.Message);
+        }
     }
 
     private static async Task<Accepted<OperationReceiptResponse>> QueueSelectionEvaluationAsync(

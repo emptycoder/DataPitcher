@@ -7,6 +7,7 @@ public interface IDataPitcherApplication
         CreateConnectionRequest request,
         CancellationToken cancellationToken
     );
+    Task DeleteConnectionAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueConnectionCheckAsync(Guid connectionId, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueSchemaScanAsync(Guid connectionId, CancellationToken cancellationToken);
     Task<IReadOnlyList<SchemaSnapshotSummaryResponse>> ListSnapshotsAsync(
@@ -29,6 +30,7 @@ public interface IDataPitcherApplication
         SaveSelectionRequest request,
         CancellationToken cancellationToken
     );
+    Task DeleteSelectionAsync(Guid selectionId, string ifMatch, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueueSelectionEvaluationAsync(Guid selectionId, CancellationToken cancellationToken);
     Task<PlanResponse> SavePlanAsync(Guid planId, SavePlanRequest request, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueuePlanSealAsync(Guid planId, CancellationToken cancellationToken);
