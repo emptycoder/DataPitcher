@@ -263,7 +263,8 @@ public sealed class DataPitcherApplication(
                     .Required.Select(capability => capability.ToString())
                     .Order(StringComparer.Ordinal)
                     .ToArray(),
-                Redact(exception.GetBaseException().Message, connectionString)
+                Redact(exception.GetBaseException().Message, connectionString),
+                ConnectionFailureHints.Explain(exception.GetBaseException().Message) is { } hint ? [hint] : []
             );
         }
     }
