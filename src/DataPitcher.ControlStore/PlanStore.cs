@@ -23,7 +23,7 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var now = Stamp(clock.UtcNow);
         var existing = Find(db, planId);
@@ -89,7 +89,7 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
     public Task<PlanRecord?> FindAsync(Guid planId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var row = Find(db, planId);
         return Task.FromResult(row is null ? null : ToRecord(row));
     }
@@ -97,7 +97,7 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
     public Task SealAsync(Guid planId, TransferPlanContent content, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var now = Stamp(clock.UtcNow);
         var affected = db.Execute(
             "UPDATE Plans SET ContentJson = @contentJson, SealedUtc = @sealedUtc, CanonicalHash = @canonicalHash, UpdatedUtc = @updatedUtc WHERE PlanId = @planId",
@@ -115,7 +115,7 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
     public Task<TransferPlanContent?> LoadContentAsync(Guid planId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var contentJson = db.Scalar<string>(
             "SELECT ContentJson FROM Plans WHERE PlanId = @planId",
             new ControlParameter("planId", planId.ToString())

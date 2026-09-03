@@ -26,7 +26,7 @@ public sealed class SelectionStore(ControlDatabase database, IClock clock) : ISe
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var now = Stamp(clock.UtcNow);
         var stableKeyColumnsJson = stableKeyColumns is null ? null : JsonSerializer.Serialize(stableKeyColumns);
@@ -103,7 +103,7 @@ public sealed class SelectionStore(ControlDatabase database, IClock clock) : ISe
     public Task DeleteAsync(Guid selectionId, string ifMatch, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var affected = db.Execute(
             "DELETE FROM Selections WHERE SelectionId = @selectionId AND Version = @version",
@@ -119,7 +119,7 @@ public sealed class SelectionStore(ControlDatabase database, IClock clock) : ISe
     public Task<SelectionRecord?> FindAsync(Guid selectionId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var row = Find(db, selectionId);
         return Task.FromResult(row is null ? null : ToRecord(row));
     }
@@ -127,7 +127,7 @@ public sealed class SelectionStore(ControlDatabase database, IClock clock) : ISe
     public Task<IReadOnlyList<SelectionRecord>> ListAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         IReadOnlyList<SelectionRecord> records = db.Query(SelectColumns, Map)
             .OrderBy(row => row.DisplayName, StringComparer.Ordinal)
             .ThenBy(row => row.SelectionId, StringComparer.Ordinal)

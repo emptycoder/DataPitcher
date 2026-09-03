@@ -5,7 +5,6 @@ using DataPitcher.Core.Connections;
 using DataPitcher.Core.Schema;
 using DataPitcher.Core.Time;
 using DataPitcher.Providers.SqlServer;
-using LinqToDB.Data;
 using Xunit;
 
 namespace DataPitcher.Providers.SqlServer.IntegrationTests;
@@ -67,7 +66,7 @@ public sealed class SqlServerPlanSealingTests(SqlServerClosureFixture fixture)
             using (var control = database.Open())
                 control.Execute(
                     "INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)",
-                    new DataParameter[]
+                    new ControlParameter[]
                     {
                         new("snapshotId", snapshotId.ToString()),
                         new("connectionId", source.ConnectionId.ToString()),

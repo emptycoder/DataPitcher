@@ -4,7 +4,6 @@ using DataPitcher.Application.Connections;
 using DataPitcher.ControlStore;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Plans;
-using LinqToDB.Data;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -23,47 +22,6 @@ public sealed class ConnectionProfileStoreTests
         Assert.Same(reference, draft.SecretReference);
         Assert.Equal("app", draft.BusinessSchema);
         Assert.Equal("__datapitcher", draft.StagingSchema);
-    }
-
-    [Fact]
-    public void SchemaRows_PreserveOnlyScanAndSnapshotMetadata()
-    {
-        var connectionId = Guid.NewGuid().ToString();
-        var scan = new SchemaScanRow
-        {
-            ScanId = Guid.NewGuid().ToString(),
-            ConnectionId = connectionId,
-            IdempotencyKey = "scan-01",
-            State = "Queued",
-            SnapshotId = Guid.NewGuid().ToString(),
-            SnapshotHash = "hash",
-            FailureCode = "schema_scan_failed",
-            CreatedUtc = "created",
-            UpdatedUtc = "updated",
-        };
-        var snapshot = new SchemaSnapshotRow
-        {
-            SnapshotId = Guid.NewGuid().ToString(),
-            ConnectionId = connectionId,
-            SnapshotHash = "hash",
-            ContentJson = "{}",
-            CreatedUtc = "created",
-        };
-
-        Assert.Equal("scan-01", scan.IdempotencyKey);
-        Assert.Equal("Queued", scan.State);
-        Assert.NotNull(scan.ScanId);
-        Assert.Equal(connectionId, scan.ConnectionId);
-        Assert.NotNull(scan.SnapshotId);
-        Assert.Equal("hash", scan.SnapshotHash);
-        Assert.Equal("schema_scan_failed", scan.FailureCode);
-        Assert.Equal("created", scan.CreatedUtc);
-        Assert.Equal("updated", scan.UpdatedUtc);
-        Assert.NotNull(snapshot.SnapshotId);
-        Assert.Equal(connectionId, snapshot.ConnectionId);
-        Assert.Equal("hash", snapshot.SnapshotHash);
-        Assert.Equal("{}", snapshot.ContentJson);
-        Assert.Equal("created", snapshot.CreatedUtc);
     }
 
     [Fact]
@@ -210,7 +168,7 @@ public sealed class ConnectionProfileStoreTests
         {
             db.Execute(
                 "INSERT INTO SchemaScans (ScanId, ConnectionId, IdempotencyKey, State, CreatedUtc, UpdatedUtc) VALUES (@scanId, @connectionId, @idempotencyKey, @state, @createdUtc, @updatedUtc)",
-                new DataParameter[]
+                new ControlParameter[]
                 {
                     new("scanId", Guid.NewGuid().ToString()),
                     new("connectionId", created.ConnectionId.ToString()),
@@ -222,7 +180,7 @@ public sealed class ConnectionProfileStoreTests
             );
             db.Execute(
                 "INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)",
-                new DataParameter[]
+                new ControlParameter[]
                 {
                     new("snapshotId", Guid.NewGuid().ToString()),
                     new("connectionId", created.ConnectionId.ToString()),

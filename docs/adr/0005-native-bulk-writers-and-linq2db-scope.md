@@ -6,7 +6,11 @@ Native provider bulk writers are required for transfer writes; LINQ to DB remain
 
 ## Status
 
-Accepted. This ADR overrides the specification's LINQ to DB bulk-copy allowance.
+Accepted, amended 2026-09-03. The original decision kept LINQ to DB as the query and control-database baseline; the amendment below removes it entirely. This ADR overrides the specification's LINQ to DB bulk-copy allowance.
+
+## Amendment (2026-09-03): no ORM anywhere
+
+In practice LINQ to DB was used only for the SQLite control database, where its query features went unused (every store already wrote raw SQL), while the providers had implemented catalog reading, selection execution, staging and bulk writing on their native drivers. Keeping the library therefore bought nothing and blurred the layering. The control database is now accessed natively through Microsoft.Data.Sqlite by the `DataPitcher.ControlStore` library, which implements repository contracts defined in Core without SQL notions so that non-relational or file-based stores can implement them later. Providers reference Core only and use Microsoft.Data.SqlClient and Npgsql directly. Architecture tests forbid data-access packages outside ControlStore and the provider projects. References to LINQ to DB in the sections below describe the situation when the decision was taken.
 
 ## Date
 

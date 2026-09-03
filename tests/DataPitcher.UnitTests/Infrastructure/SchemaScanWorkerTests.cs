@@ -4,7 +4,6 @@ using DataPitcher.Application.Schema;
 using DataPitcher.ControlStore;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Schema;
-using LinqToDB.Data;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;
@@ -217,7 +216,7 @@ public sealed class SchemaScanWorkerTests
         using (var db = fixture.Database.Open())
             db.Execute(
                 "UPDATE ConnectionProfiles SET SecretReferenceKind = 'invalid' WHERE ConnectionId = @connectionId",
-                new DataParameter("connectionId", profile.ConnectionId.ToString())
+                new ControlParameter("connectionId", profile.ConnectionId.ToString())
             );
         var worker = new SchemaScanWorker(
             snapshots,
@@ -331,7 +330,7 @@ public sealed class SchemaScanWorkerTests
         using (var db = fixture.Database.Open())
             db.Execute(
                 "INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)",
-                new DataParameter[]
+                new ControlParameter[]
                 {
                     new("snapshotId", snapshotId.ToString()),
                     new("connectionId", profile.ConnectionId.ToString()),

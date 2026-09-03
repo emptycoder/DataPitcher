@@ -115,7 +115,7 @@ exhaustive.)
 3. The authoritative resume checkpoint lives in the target database inside the
    apply transaction; the control database mirror must never be consulted for
    correctness (ADR 0001).
-4. LINQ to DB is excluded from the transfer write path because its bulk copy
+4. No ORM is used anywhere (amended 2026-09-03): the control store uses Microsoft.Data.Sqlite natively and providers use their native drivers, because LINQ to DB bulk copy
    silently degrades under some conditions and does not report which strategy
    it actually used (ADR 0005).
 5. StrictExact verification is blocked when triggers exist on a planned target

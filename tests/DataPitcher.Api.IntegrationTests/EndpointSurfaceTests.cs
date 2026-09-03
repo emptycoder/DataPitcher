@@ -12,7 +12,6 @@ using DataPitcher.ControlStore;
 using DataPitcher.Core.Authorization;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Plans;
-using LinqToDB.Data;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
@@ -328,7 +327,7 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
         using var database = _factory.Services.GetRequiredService<ControlDatabase>().Open();
         database.Execute(
             "INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)",
-            new DataParameter[]
+            new ControlParameter[]
             {
                 new("snapshotId", Guid.NewGuid().ToString()),
                 new("connectionId", connectionId.ToString()),

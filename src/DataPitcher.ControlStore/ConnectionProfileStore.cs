@@ -31,7 +31,7 @@ public sealed class ConnectionProfileStore(
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var now = Stamp(clock.UtcNow);
         var row = new Row(
@@ -77,14 +77,14 @@ public sealed class ConnectionProfileStore(
     public Task<ConnectionProfileSummary> GetSummaryAsync(Guid connectionId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         return Task.FromResult(ToSummary(GetRow(db, connectionId)));
     }
 
     public Task<IReadOnlyList<ConnectionProfileSummary>> ListSummariesAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         IReadOnlyList<ConnectionProfileSummary> summaries = db.Query(SelectColumns, Map)
             .OrderBy(profile => profile.DisplayName, StringComparer.Ordinal)
             .ThenBy(profile => profile.ConnectionId, StringComparer.Ordinal)
@@ -101,7 +101,7 @@ public sealed class ConnectionProfileStore(
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var existing = GetRow(db, connectionId);
         var version = ParseEtag(ifMatch);
@@ -137,7 +137,7 @@ public sealed class ConnectionProfileStore(
     public Task DeleteAsync(Guid connectionId, string ifMatch, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var affected = db.Execute(
             "DELETE FROM ConnectionProfiles WHERE ConnectionId = @connectionId AND Version = @version",
@@ -153,7 +153,7 @@ public sealed class ConnectionProfileStore(
     public Task<ConnectionProfile> GetProfileAsync(Guid connectionId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         return Task.FromResult(ToProfile(GetRow(db, connectionId)));
     }
 
@@ -166,7 +166,7 @@ public sealed class ConnectionProfileStore(
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var profile = GetRow(db, connectionId);
         var available = JsonSerializer.Serialize(
@@ -202,7 +202,7 @@ public sealed class ConnectionProfileStore(
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var affected = db.Execute(
             "UPDATE ConnectionProfiles SET HealthState = @healthState, AssessmentMode = @assessmentMode, AssessmentRole = @assessmentRole, Version = Version + 1, UpdatedUtc = @updatedUtc WHERE ConnectionId = @connectionId",
             new ControlParameter("healthState", ConnectionHealthState.Checking.ToString()),

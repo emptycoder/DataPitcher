@@ -101,7 +101,7 @@ Discovery uses a constant, or provider-documented bounded, number of metadata qu
 
 The graph contains one node per base table and one directed foreign-key edge from child to parent. Adjacency is indexed in both directions. Tarjan's algorithm identifies strongly connected components; those components form a condensed directed acyclic graph with topological layers. Graph topology is returned to clients separately from all layout coordinates.
 
-LINQ to DB schema discovery is a portable baseline only. Provider catalog queries augment it; ADR 0005 records what LINQ to DB does not provide and a result it returns that must not be trusted.
+Schema discovery is provider-native: each provider project reads its own catalog with its native driver (Microsoft.Data.SqlClient, Npgsql) and projects the result onto the Core schema model. No ORM sits between DataPitcher and any database; ADR 0005 records why.
 
 ## 6. Staging workspaces
 
@@ -113,7 +113,7 @@ If durable source staging permission is unavailable, DataPitcher uses session-sc
 
 ## 7. Control database
 
-The default control database is SQLite through LINQ to DB. It stores connection-profile metadata and secret references; non-secret authentication-provider metadata; external identity mappings; group-to-role mappings; schema snapshots; saved selections and versions; plan metadata and hashes; staging object mappings; job and table-job state; batch-checkpoint mirrors; audit events; verification results; and error summaries. It does not store business row payloads by default. Migrations are explicit versioned SQL scripts using a `SchemaVersion` table; no ORM is introduced merely for migrations.
+The default control database is SQLite accessed natively through Microsoft.Data.Sqlite by the `DataPitcher.ControlStore` library, which implements the Core repository contracts. It stores connection-profile metadata and secret references; non-secret authentication-provider metadata; external identity mappings; group-to-role mappings; schema snapshots; saved selections and versions; plan metadata and hashes; staging object mappings; job and table-job state; batch-checkpoint mirrors; audit events; verification results; and error summaries. It does not store business row payloads by default. Migrations are explicit versioned SQL scripts using a `SchemaVersion` table; no ORM is introduced merely for migrations.
 
 The authoritative resume checkpoint lives in the target database. The control database holds only a derived mirror and must never be consulted for a correctness decision. ADR 0001 defines the target checkpoint and fencing rules.
 
@@ -151,7 +151,7 @@ The API uses Minimal API route groups and typed request and response records. Qu
 | 0002 | Exact-set verification captures committed direct writes, with bounded integrity checks and explicit limits. | Defines exact-set verification scope, limits, and transfer-mode guarantees. |
 | 0003 | Referential cycles are resolved from the planned row graph, with provider-specific capabilities applied only to the cycle-breaking edge set. | Defines the provider-specific strategy for referential cycles. |
 | 0004 | DataPitcher computes one demand-driven closure that consults target state during expansion. | Adopts one demand-driven closure and supersedes the two-phase design. |
-| 0005 | Native provider bulk writers are required for transfer writes; LINQ to DB remains the portable query and schema baseline. | Requires native bulk writers and records limits of LINQ to DB. |
+| 0005 | Native provider bulk writers are required for transfer writes; amended 2026-09-03 so that every database access uses the native driver and no ORM is referenced. | Requires native drivers throughout and records the limits that led there. |
 | 0006 | DataPitcher uses provider-specific authentication at the HTTP boundary, normalized immutable identities, and permission-based authorization. | Defines authentication-provider and authorization architecture. |
 | 0007 | Frontend architecture isolates server, interaction, adapter, and derived layout state so the dependency graph remains usable and handwritten code can meet the coverage requirement. | Defines frontend boundaries and coverage isolation. |
 

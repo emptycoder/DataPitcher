@@ -7,7 +7,6 @@ using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
 using DataPitcher.Core.Transfer;
 using DataPitcher.UnitTests.Infrastructure;
-using LinqToDB.Data;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Worker;
@@ -39,7 +38,7 @@ public sealed class JobWorkerTests
             lease.FenceToken,
             db.Query<long>(
                     "SELECT FenceToken FROM JobLeases WHERE JobId = @jobId",
-                    new DataParameter("jobId", jobId.ToString())
+                    new ControlParameter("jobId", jobId.ToString())
                 )
                 .Single()
         );
@@ -47,7 +46,7 @@ public sealed class JobWorkerTests
             fixture.Clock.UtcNow.Add(ttl).ToString("O"),
             db.Query<string>(
                     "SELECT ExpiresUtc FROM JobLeases WHERE JobId = @jobId",
-                    new DataParameter("jobId", jobId.ToString())
+                    new ControlParameter("jobId", jobId.ToString())
                 )
                 .Single()
         );

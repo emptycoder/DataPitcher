@@ -2,8 +2,6 @@ using DataPitcher.Application.Worker;
 using DataPitcher.ControlStore;
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
-using LinqToDB;
-using LinqToDB.Data;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;
@@ -223,7 +221,7 @@ public sealed class JobStoreRecoveryTests
             "NonResumableInterrupted",
             db.Query<string>(
                     "SELECT FailureCode FROM Jobs WHERE JobId = @jobId",
-                    new DataParameter("jobId", failed.JobId.ToString())
+                    new ControlParameter("jobId", failed.JobId.ToString())
                 )
                 .Single()
         );
@@ -254,7 +252,7 @@ public sealed class JobStoreRecoveryTests
         Assert.Null(
             db.Query<string?>(
                     "SELECT OwnerId FROM JobLeases WHERE JobId = @jobId",
-                    new DataParameter("jobId", job.JobId.ToString())
+                    new ControlParameter("jobId", job.JobId.ToString())
                 )
                 .Single()
         );
@@ -282,8 +280,8 @@ public sealed class JobStoreRecoveryTests
             2,
             db.Query<long>(
                     "SELECT LastCommittedBatchSequence FROM BatchCheckpointMirrors WHERE JobId = @jobId AND RunId = @runId",
-                    new DataParameter("jobId", job.ToString()),
-                    new DataParameter("runId", run.ToString())
+                    new ControlParameter("jobId", job.ToString()),
+                    new ControlParameter("runId", run.ToString())
                 )
                 .Single()
         );
@@ -305,43 +303,54 @@ public sealed class JobStoreRecoveryTests
             1,
             db.Query<long>(
                     "SELECT COUNT(*) FROM BatchCheckpointMirrors WHERE JobId = @jobId AND RunId = @runId AND LastCommittedStableKey IS NULL",
-                    new DataParameter("jobId", job.ToString()),
-                    new DataParameter("runId", run.ToString())
+                    new ControlParameter("jobId", job.ToString()),
+                    new ControlParameter("runId", run.ToString())
                 )
                 .Single()
         );
     }
 
     [Fact]
-    public void BatchCheckpointMirrorRow_WhenPersisted_MapsEveryDerivedCheckpointValue()
+    public void BatchCheckpointMirror_WhenPersisted_RoundTripsEveryDerivedCheckpointValue()
     {
         using var fixture = new ControlDatabaseFixture();
         fixture.Migrator.Apply();
         var job = fixture.SeedJob();
-        var row = new BatchCheckpointMirrorRow
-        {
-            JobId = job.ToString(),
-            RunId = Guid.NewGuid().ToString(),
-            LastCommittedBatchSequence = 2,
-            LastCommittedStableKey = "Id=2",
-            CumulativeRowCount = 20,
-            SealedManifestHash = "seal",
-            FenceToken = 3,
-            UpdatedUtc = fixture.Clock.UtcNow.ToString("O"),
-        };
+        var runId = Guid.NewGuid().ToString();
+        var updated = fixture.Clock.UtcNow.ToString("O");
 
         using var db = fixture.Database.Open();
-        db.Insert(row);
-        var persisted = db.GetTable<BatchCheckpointMirrorRow>().Single();
+        db.Execute(
+            "INSERT INTO BatchCheckpointMirrors (JobId, RunId, LastCommittedBatchSequence, LastCommittedStableKey, CumulativeRowCount, SealedManifestHash, FenceToken, UpdatedUtc) VALUES (@job, @run, 2, 'Id=2', 20, 'seal', 3, @updated)",
+            new ControlParameter("job", job.ToString()),
+            new ControlParameter("run", runId),
+            new ControlParameter("updated", updated)
+        );
+        var persisted = Assert.Single(
+            db.Query(
+                "SELECT JobId, RunId, LastCommittedBatchSequence, LastCommittedStableKey, CumulativeRowCount, SealedManifestHash, FenceToken, UpdatedUtc FROM BatchCheckpointMirrors",
+                reader =>
+                    (
+                        JobId: reader.GetString(0),
+                        RunId: reader.GetString(1),
+                        Sequence: reader.GetInt64(2),
+                        Key: reader.GetString(3),
+                        Rows: reader.GetInt64(4),
+                        Seal: reader.GetString(5),
+                        Fence: reader.GetInt64(6),
+                        Updated: reader.GetString(7)
+                    )
+            )
+        );
 
-        Assert.Equal(row.JobId, persisted.JobId);
-        Assert.Equal(row.RunId, persisted.RunId);
-        Assert.Equal(row.LastCommittedBatchSequence, persisted.LastCommittedBatchSequence);
-        Assert.Equal(row.LastCommittedStableKey, persisted.LastCommittedStableKey);
-        Assert.Equal(row.CumulativeRowCount, persisted.CumulativeRowCount);
-        Assert.Equal(row.SealedManifestHash, persisted.SealedManifestHash);
-        Assert.Equal(row.FenceToken, persisted.FenceToken);
-        Assert.Equal(row.UpdatedUtc, persisted.UpdatedUtc);
+        Assert.Equal(job.ToString(), persisted.JobId);
+        Assert.Equal(runId, persisted.RunId);
+        Assert.Equal(2, persisted.Sequence);
+        Assert.Equal("Id=2", persisted.Key);
+        Assert.Equal(20, persisted.Rows);
+        Assert.Equal("seal", persisted.Seal);
+        Assert.Equal(3, persisted.Fence);
+        Assert.Equal(updated, persisted.Updated);
     }
 
     private static async Task<StartJobResult> StartAfterAsync(Task barrier, JobStore store, StartJobRequest request)

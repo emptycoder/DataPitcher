@@ -16,7 +16,7 @@ public sealed class JobEventStore(ControlDatabase database, IClock clock, IJobEv
     public Task<JobEvent> AppendAsync(JobEventAppend append, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         db.Execute(EnsureStreamSql, new ControlParameter("job", append.JobId.ToString()));
         var eventId = db.Query<long>(NextEventIdSql, new ControlParameter("job", append.JobId.ToString())).Single();
@@ -45,7 +45,7 @@ public sealed class JobEventStore(ControlDatabase database, IClock clock, IJobEv
     public async Task<JobEventPage> ReadAfterAsync(Guid jobId, long? lastEventId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var streams = await db.QueryAsync(
             "SELECT OldestAvailableEventId FROM JobEventStreams WHERE JobId = @job",
             reader => reader.GetInt64(0),
@@ -76,7 +76,7 @@ public sealed class JobEventStore(ControlDatabase database, IClock clock, IJobEv
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(oldestAvailableEventId, 1);
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         db.Execute(EnsureStreamSql, new ControlParameter("job", jobId.ToString()));
         var nextEventId = db.Query<long>(NextEventIdSql, new ControlParameter("job", jobId.ToString())).Single();

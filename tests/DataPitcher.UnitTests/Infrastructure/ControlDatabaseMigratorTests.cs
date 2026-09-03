@@ -1,5 +1,4 @@
 using DataPitcher.ControlStore;
-using LinqToDB.Data;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;

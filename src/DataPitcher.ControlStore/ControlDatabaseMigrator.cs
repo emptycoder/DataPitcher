@@ -36,7 +36,7 @@ public sealed class ControlDatabaseMigrator(ControlDatabase database, IClock clo
 
     public void Apply()
     {
-        using var db = database.OpenNative();
+        using var db = database.Open();
         db.Execute(
             "CREATE TABLE IF NOT EXISTS SchemaVersion (Version INTEGER NOT NULL PRIMARY KEY, AppliedUtc TEXT NOT NULL);"
         );

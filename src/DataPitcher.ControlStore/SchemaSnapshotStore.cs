@@ -23,7 +23,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var row = new ScanRecord(
             Guid.NewGuid().ToString(),
@@ -63,7 +63,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<SchemaScan> GetScanAsync(Guid connectionId, Guid scanId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         return Task.FromResult(
             ToScan(
                 db.Single(
@@ -79,7 +79,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<IReadOnlyList<StoredSchemaSnapshot>> ListAsync(Guid connectionId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         IReadOnlyList<StoredSchemaSnapshot> snapshots = db.Query(
                 SnapshotSelect + " WHERE ConnectionId = @connectionId ORDER BY CreatedUtc DESC, SnapshotId ASC",
                 ReadSnapshot,
@@ -93,7 +93,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<SchemaScan?> FindScanAsync(Guid scanId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var scan = db.Single(
             ScanSelect + " WHERE ScanId = @scanId",
             ReadScan,
@@ -105,7 +105,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<StoredSchemaSnapshot> GetAsync(Guid connectionId, Guid snapshotId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var row =
             db.Single(
                 SnapshotSelect + " WHERE ConnectionId = @connectionId AND SnapshotId = @snapshotId",
@@ -123,7 +123,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var row = db.Single(
             SnapshotSelect + " WHERE ConnectionId = @connectionId AND SnapshotId = @snapshotId",
             ReadSnapshot,
@@ -140,7 +140,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var row = db.Query(
                 SnapshotSelect
                     + " WHERE ConnectionId = @connectionId AND SnapshotHash = @snapshotHash ORDER BY CreatedUtc ASC, SnapshotId ASC LIMIT 1",
@@ -237,7 +237,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<StoredSchemaSnapshot?> GetLatestAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var row = db.Query(SnapshotSelect + " ORDER BY CreatedUtc DESC, rowid ASC LIMIT 1", ReadSnapshot)
             .FirstOrDefault();
         if (row is null)
@@ -248,7 +248,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task<SchemaScan?> ClaimNextAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var row = db.Query(
                 ScanSelect + " WHERE State = @queued ORDER BY CreatedUtc ASC, ScanId ASC LIMIT 1",
@@ -274,7 +274,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task CompleteAsync(SchemaScan scan, SchemaSnapshotContent content, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var snapshot = new SnapshotRecord(
             Guid.NewGuid().ToString(),
@@ -307,7 +307,7 @@ public sealed class SchemaSnapshotStore(ControlDatabase database, IClock clock) 
     public Task FailAsync(Guid scanId, string failureCode, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         db.Execute(
             "UPDATE SchemaScans SET State = @state, FailureCode = @failureCode, UpdatedUtc = @updatedUtc WHERE ScanId = @scanId AND State = @running",
             new ControlParameter("state", SchemaScanState.Failed.ToString()),

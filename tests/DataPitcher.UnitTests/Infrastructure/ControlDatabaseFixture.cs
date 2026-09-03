@@ -1,6 +1,5 @@
 using DataPitcher.ControlStore;
 using DataPitcher.Core.Time;
-using LinqToDB.Data;
 
 namespace DataPitcher.UnitTests.Infrastructure;
 

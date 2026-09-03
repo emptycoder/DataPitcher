@@ -21,7 +21,7 @@ public sealed class LeaseStore(ControlDatabase database, IClock clock) : ILeaseS
         var now = clock.UtcNow;
         var expires = now.Add(ttl);
         Validate(ownerId, ttl);
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var affected = await db.ExecuteAsync(
             AcquireSql,
             cancellationToken,
@@ -43,7 +43,7 @@ public sealed class LeaseStore(ControlDatabase database, IClock clock) : ILeaseS
         var now = clock.UtcNow;
         var expires = now.Add(ttl);
         Validate(ownerId, ttl);
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var affected = db.Execute(AcquireSql, Parameters(jobId, ownerId, null, now, expires));
         return affected == 1 ? ReadGrant(db, jobId, ownerId, ttl, now) : null;
     }
@@ -54,7 +54,7 @@ public sealed class LeaseStore(ControlDatabase database, IClock clock) : ILeaseS
         var now = clock.UtcNow;
         if (now < lease.RenewAfterUtc)
             return lease;
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var expires = now.Add(ttl);
         var affected = db.Execute(
             "UPDATE JobLeases SET ExpiresUtc = @expiresUtc WHERE JobId = @jobId AND OwnerId = @ownerId AND FenceToken = @fenceToken AND ExpiresUtc > @nowUtc",

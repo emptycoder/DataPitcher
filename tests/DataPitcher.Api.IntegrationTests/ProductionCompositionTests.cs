@@ -15,7 +15,6 @@ using DataPitcher.Core.Plans;
 using DataPitcher.Core.Time;
 using DataPitcher.Providers.PostgreSql;
 using DataPitcher.Providers.SqlServer;
-using LinqToDB.Data;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -484,7 +483,7 @@ public sealed class ProductionCompositionTests
         using (var database = fixture.Database.Open())
             database.Execute(
                 "UPDATE SchemaScans SET State = @state, SnapshotId = @snapshotId, FailureCode = @failureCode WHERE ScanId = @scanId",
-                new DataParameter[]
+                new ControlParameter[]
                 {
                     new("state", state),
                     new(
@@ -537,7 +536,7 @@ public sealed class ProductionCompositionTests
         using (var database = fixture.Database.Open())
             database.Execute(
                 "UPDATE Jobs SET State = @state, FailureCode = @failureCode WHERE JobId = @jobId",
-                new DataParameter[]
+                new ControlParameter[]
                 {
                     new("state", state),
                     new("failureCode", failureCode),
@@ -703,7 +702,7 @@ public sealed class ProductionCompositionTests
             using var database = Database.Open();
             database.Execute(
                 "INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)",
-                new DataParameter[]
+                new ControlParameter[]
                 {
                     new("snapshotId", snapshotId.ToString()),
                     new("connectionId", connectionId.ToString()),
@@ -724,7 +723,7 @@ public sealed class ProductionCompositionTests
             using var database = Database.Open();
             database.Execute(
                 "UPDATE Plans SET CanonicalHash = @hash WHERE PlanId = @planId",
-                new DataParameter[] { new("hash", hash), new("planId", planId.ToString()) }
+                new ControlParameter[] { new("hash", hash), new("planId", planId.ToString()) }
             );
         }
 

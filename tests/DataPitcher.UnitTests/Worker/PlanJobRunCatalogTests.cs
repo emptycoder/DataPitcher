@@ -6,7 +6,6 @@ using DataPitcher.Core.Plans;
 using DataPitcher.Core.Transfer;
 using DataPitcher.UnitTests.Infrastructure;
 using DataPitcher.UnitTests.Plans;
-using LinqToDB.Data;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Worker;
@@ -37,8 +36,8 @@ public sealed class PlanJobRunCatalogTests
         using (var db = fixture.Database.Open())
             db.Execute(
                 "UPDATE Plans SET CanonicalHash = @hash WHERE PlanId = @planId",
-                new DataParameter("hash", "stored-seal"),
-                new DataParameter("planId", planId.ToString())
+                new ControlParameter("hash", "stored-seal"),
+                new ControlParameter("planId", planId.ToString())
             );
         var job = new TransferJob(Guid.NewGuid(), Guid.NewGuid(), planId, "job", DataPitcher.Core.Jobs.JobState.Queued);
         IJobRunCatalog catalog = new PlanJobRunCatalog(plans);

@@ -18,7 +18,7 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
     {
         if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
             throw new ArgumentException("Idempotency key is required.", nameof(request));
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var now = Stamp(clock.UtcNow);
         var jobId = Guid.NewGuid();
@@ -72,7 +72,7 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
         CancellationToken cancellationToken
     )
     {
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var candidates = await db.QueryAsync(
             SelectJob + " WHERE State IN (@queued, @preparing, @running, @pausing) ORDER BY UpdatedUtc",
             ReadJob,
@@ -93,7 +93,7 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
 
     public async Task<JobState> GetStateAsync(Guid jobId, CancellationToken cancellationToken)
     {
-        using var db = database.OpenNative();
+        using var db = database.Open();
         var job = await FindAsync(db, jobId, cancellationToken);
         return Require(job).State;
     }
@@ -134,7 +134,7 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
 
     public JobTransitionResult TryTransition(LeaseGrant lease, JobState to)
     {
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var job = Require(Find(db, lease.JobId));
         var from = job.State;
@@ -158,26 +158,26 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
 
     public TransferJob Get(Guid jobId)
     {
-        using var db = database.OpenNative();
+        using var db = database.Open();
         return Require(Find(db, jobId));
     }
 
     public TransferJob? Find(Guid jobId)
     {
-        using var db = database.OpenNative();
+        using var db = database.Open();
         return Find(db, jobId);
     }
 
     public IReadOnlyList<TransferJob> List(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var db = database.OpenNative();
+        using var db = database.Open();
         return db.Query(SelectJob + " ORDER BY CreatedUtc DESC, JobId ASC", ReadJob);
     }
 
     public IReadOnlyList<(JobState From, JobState To)> GetHistory(Guid jobId)
     {
-        using var db = database.OpenNative();
+        using var db = database.Open();
         return db.Query(
             "SELECT FromState, ToState FROM JobStateTransitions WHERE JobId = @jobId ORDER BY OccurredUtc",
             reader => (Enum.Parse<JobState>(reader.GetString(0)), Enum.Parse<JobState>(reader.GetString(1))),
@@ -187,7 +187,7 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
 
     private async Task TransitionOperatorIntentAsync(Guid jobId, JobState to, CancellationToken cancellationToken)
     {
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var job = Require(await FindAsync(db, jobId, cancellationToken));
         var from = job.State;
@@ -215,7 +215,7 @@ public sealed class JobStore(ControlDatabase database, IClock clock) : IJobRepos
         CancellationToken cancellationToken
     )
     {
-        using var db = database.OpenNative();
+        using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var job = Require(await FindAsync(db, lease.JobId, cancellationToken));
         var from = job.State;
