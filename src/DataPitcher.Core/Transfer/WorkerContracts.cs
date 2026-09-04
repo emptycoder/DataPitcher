@@ -1,6 +1,7 @@
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
+using DataPitcher.Core.Schema;
 
 namespace DataPitcher.Core.Transfer;
 
@@ -55,6 +56,11 @@ public enum TransferUnitKind
     DeferredColumns,
 }
 
+/// <summary>
+/// Rows travel with the source column names they were projected with, in order. The write side owns only the target
+/// and cannot know which source columns were left out of the projection (computed and generated ones), so it must
+/// never rebuild positions from the plan; it looks values up by name here.
+/// </summary>
 public sealed record TransferUnit(
     long BatchSequence,
     StableKey LastStableKey,
@@ -62,11 +68,30 @@ public sealed record TransferUnit(
     TransferUnitKind Kind,
     long BytesTransferred = 0,
     TableAddress? Table = null,
-    IReadOnlyList<TransferRow>? Rows = null
+    IReadOnlyList<TransferRow>? Rows = null,
+    IReadOnlyList<string>? Columns = null
 )
 {
     public bool CanPauseAfterCommit =>
         Kind is TransferUnitKind.Batch or TransferUnitKind.AtomicComponent or TransferUnitKind.DeferredColumns;
+
+    public object? Value(TransferRow row, string column)
+    {
+        var columns =
+            Columns
+            ?? throw new InvalidOperationException("The transfer unit carries rows without their column names.");
+        var table = Table is null ? "the table" : Table.Schema + "." + Table.Name;
+        for (var index = 0; index < columns.Count; index++)
+            if (DatabaseNames.Equals(columns[index], column))
+                return index < row.Values.Count
+                    ? row.Values[index]
+                    : throw new InvalidOperationException(
+                        $"Row of {table} has {row.Values.Count} value(s) but column {column} is at position {index + 1} of the projection."
+                    );
+        throw new InvalidOperationException(
+            $"Source column {column} of {table} was not read; a computed or generated column supplies no value and cannot feed a target column."
+        );
+    }
 }
 
 public enum TargetMutationKind

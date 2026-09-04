@@ -300,6 +300,74 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     }
 
     [Fact]
+    public async Task Transfer_WhenTheSourceHasAComputedColumnBeforeOtherColumns_WritesEveryValueToItsOwnColumn()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE dbo.worker_persons (id int NOT NULL CONSTRAINT PK_worker_persons PRIMARY KEY, first_name nvarchar(32) NOT NULL, full_name AS (first_name + N' ' + last_name), last_name nvarchar(32) NOT NULL, code nvarchar(8) NOT NULL);";
+        await scope.ExecuteAsync(
+            ddl + " INSERT dbo.worker_persons (id, first_name, last_name, code) VALUES (1, N'Jane', N'Doe', N'C1');"
+        );
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(
+            scope,
+            "worker_persons",
+            "PK_worker_persons",
+            "SELECT * FROM dbo.worker_persons"
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal(
+            "Doe",
+            await scope.ScalarTargetAsync<string>("SELECT last_name FROM dbo.worker_persons WHERE id = 1")
+        );
+        Assert.Equal("C1", await scope.ScalarTargetAsync<string>("SELECT code FROM dbo.worker_persons WHERE id = 1"));
+        Assert.Equal(
+            "Jane Doe",
+            await scope.ScalarTargetAsync<string>("SELECT full_name FROM dbo.worker_persons WHERE id = 1")
+        );
+    }
+
+    [Fact]
+    public async Task Transfer_WhenTheSourceHasARowVersionColumnBeforeOtherColumns_WritesEveryValueToItsOwnColumn()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE dbo.worker_stamps (id int NOT NULL CONSTRAINT PK_worker_stamps PRIMARY KEY, stamp rowversion NOT NULL, a nvarchar(8) NOT NULL, b nvarchar(8) NOT NULL, c nvarchar(8) NOT NULL);";
+        await scope.ExecuteAsync(ddl + " INSERT dbo.worker_stamps (id, a, b, c) VALUES (1, N'A', N'B', N'C');");
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(scope, "worker_stamps", "PK_worker_stamps", "SELECT * FROM dbo.worker_stamps");
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal("A", await scope.ScalarTargetAsync<string>("SELECT a FROM dbo.worker_stamps WHERE id = 1"));
+        Assert.Equal("B", await scope.ScalarTargetAsync<string>("SELECT b FROM dbo.worker_stamps WHERE id = 1"));
+        Assert.Equal("C", await scope.ScalarTargetAsync<string>("SELECT c FROM dbo.worker_stamps WHERE id = 1"));
+    }
+
+    [Fact]
+    public async Task Transfer_WhenTheStableKeyIsSpelledInAnotherCaseThanTheColumn_WritesTheRows()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE dbo.worker_cased (Id int NOT NULL CONSTRAINT PK_worker_cased PRIMARY KEY, Code nvarchar(8) NOT NULL);";
+        await scope.ExecuteAsync(ddl + " INSERT dbo.worker_cased VALUES (1, N'C1');");
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(
+            scope,
+            "worker_cased",
+            "PK_worker_cased",
+            "SELECT * FROM dbo.worker_cased",
+            keyColumn: "id"
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal("C1", await scope.ScalarTargetAsync<string>("SELECT Code FROM dbo.worker_cased WHERE Id = 1"));
+    }
+
+    [Fact]
     public async Task Reseal_WhenASourceRowWasAddedAfterATransfer_SkipsOnlyTheRowTheTargetAlreadyHas()
     {
         await using var scope = await fixture.CreateScopeAsync();

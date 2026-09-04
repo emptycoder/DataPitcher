@@ -205,7 +205,8 @@ public sealed class PostgreSqlRunSessions(
                 _phase == TransferPhase.Rows ? TransferUnitKind.Batch : TransferUnitKind.DeferredColumns,
                 bytes,
                 planTable.Mapping.Source,
-                rows
+                rows,
+                source.InsertColumns.Select(column => column.Name).ToArray()
             );
         }
 
@@ -354,10 +355,9 @@ public sealed class PostgreSqlRunSessions(
                         column.IsStableKey || deferredTargets.Contains(column.Name, DatabaseNames.Comparer)
                     )
                 );
-                var deferredSources = stableKey.Columns.Concat(planTable.BackfilledColumns).ToArray();
                 var backfill = new PostgreSqlTransferBatch(
                     BatchSequence.ProviderFromWorker(unit.BatchSequence),
-                    rows.Select(row => TargetRow(row, deferredSources, mappings, subset)),
+                    rows.Select(row => TargetRow(unit, row, mappings, subset)),
                     TargetKey(unit.LastStableKey, mappings),
                     Policy(content, planTable)
                 );
@@ -366,10 +366,9 @@ public sealed class PostgreSqlRunSessions(
             }
             else
             {
-                var sourceColumns = SourceColumns(planTable, stableKey);
                 var batch = new PostgreSqlTransferBatch(
                     BatchSequence.ProviderFromWorker(unit.BatchSequence),
-                    rows.Select(row => TargetRow(row, sourceColumns, mappings, target)),
+                    rows.Select(row => TargetRow(unit, row, mappings, target)),
                     TargetKey(unit.LastStableKey, mappings),
                     Policy(content, planTable)
                 );
@@ -495,17 +494,6 @@ public sealed class PostgreSqlRunSessions(
                 )
         );
 
-    private static string[] SourceColumns(PlanTable table, StableKeyDefinition stableKey) =>
-        stableKey
-            .Columns.Concat(
-                table
-                    .Mapping.Columns.Where(mapping =>
-                        !stableKey.Columns.Contains(mapping.Source, DatabaseNames.Comparer)
-                    )
-                    .Select(mapping => mapping.Source)
-            )
-            .ToArray();
-
     private static long PayloadBytes(object? value) =>
         value switch
         {
@@ -550,8 +538,8 @@ public sealed class PostgreSqlRunSessions(
         );
 
     private static PostgreSqlTransferRow TargetRow(
+        TransferUnit unit,
         TransferRow row,
-        IReadOnlyList<string> sourceColumns,
         IReadOnlyList<ColumnMapping> mappings,
         PostgreSqlWriteTable target
     )
@@ -559,12 +547,7 @@ public sealed class PostgreSqlRunSessions(
         var values = target.InsertColumns.ToDictionary(
             column => column.Name,
             column =>
-                row.Values[
-                    Array.IndexOf(
-                        sourceColumns.ToArray(),
-                        mappings.Single(mapping => DatabaseNames.Equals(mapping.Target, column.Name)).Source
-                    )
-                ],
+                unit.Value(row, mappings.Single(mapping => DatabaseNames.Equals(mapping.Target, column.Name)).Source),
             DatabaseNames.Comparer
         );
         return new PostgreSqlTransferRow(

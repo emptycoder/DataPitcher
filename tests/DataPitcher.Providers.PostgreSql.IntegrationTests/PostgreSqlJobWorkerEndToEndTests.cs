@@ -300,6 +300,45 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
     }
 
     [Fact]
+    public async Task Transfer_WhenTheSourceHasAGeneratedColumnBeforeOtherColumns_WritesEveryValueToItsOwnColumn()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE worker_persons (id integer NOT NULL CONSTRAINT pk_worker_persons PRIMARY KEY, first_name text NOT NULL, full_name text GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED, last_name text NOT NULL, code text NOT NULL);";
+        await scope.ExecuteAsync(
+            ddl + " INSERT INTO worker_persons (id, first_name, last_name, code) VALUES (1, 'Jane', 'Doe', 'C1');"
+        );
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(scope, "worker_persons", "pk_worker_persons", "SELECT * FROM worker_persons");
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal("Doe", await scope.ScalarTargetAsync<string>("SELECT last_name FROM worker_persons WHERE id = 1"));
+        Assert.Equal("C1", await scope.ScalarTargetAsync<string>("SELECT code FROM worker_persons WHERE id = 1"));
+        Assert.Equal(
+            "Jane Doe",
+            await scope.ScalarTargetAsync<string>("SELECT full_name FROM worker_persons WHERE id = 1")
+        );
+    }
+
+    [Fact]
+    public async Task Transfer_WhenTheSourceHasAGeneratedColumnRightAfterTheKey_WritesEveryValueToItsOwnColumn()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE worker_stamps (id integer NOT NULL CONSTRAINT pk_worker_stamps PRIMARY KEY, doubled integer GENERATED ALWAYS AS (id * 2) STORED, a text NOT NULL, b text NOT NULL, c text NOT NULL);";
+        await scope.ExecuteAsync(ddl + " INSERT INTO worker_stamps (id, a, b, c) VALUES (1, 'A', 'B', 'C');");
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(scope, "worker_stamps", "pk_worker_stamps", "SELECT * FROM worker_stamps");
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal("A", await scope.ScalarTargetAsync<string>("SELECT a FROM worker_stamps WHERE id = 1"));
+        Assert.Equal("B", await scope.ScalarTargetAsync<string>("SELECT b FROM worker_stamps WHERE id = 1"));
+        Assert.Equal("C", await scope.ScalarTargetAsync<string>("SELECT c FROM worker_stamps WHERE id = 1"));
+    }
+
+    [Fact]
     public async Task Reseal_WhenASourceRowWasAddedAfterATransfer_SkipsOnlyTheRowTheTargetAlreadyHas()
     {
         await using var scope = await fixture.CreateScopeAsync();

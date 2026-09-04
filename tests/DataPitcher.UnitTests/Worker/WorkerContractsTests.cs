@@ -46,6 +46,62 @@ public sealed class WorkerContractsTests
     }
 
     [Fact]
+    public void TransferUnit_Value_ResolvesByColumnNameNotByPositionInTheSourceTable()
+    {
+        // The read side projects only insertable columns: 'full' is computed and absent, so 'last' sits at index 2,
+        // not at its table position 3. A positional lookup against the table would hand 'code' back for 'last'.
+        var row = new TransferRow([1, "Jane", "Doe", "C1"], 0);
+        var unit = new TransferUnit(
+            1,
+            new StableKey([new KeyComponent("id", 1)]),
+            1,
+            TransferUnitKind.Batch,
+            Rows: [row],
+            Columns: ["id", "first", "last", "code"]
+        );
+
+        Assert.Equal("Doe", unit.Value(row, "last"));
+        Assert.Equal("C1", unit.Value(row, "code"));
+    }
+
+    [Fact]
+    public void TransferUnit_Value_MatchesColumnNamesWithoutRegardToCase()
+    {
+        var row = new TransferRow([7, "x"], 0);
+        var unit = new TransferUnit(
+            1,
+            new StableKey([new KeyComponent("id", 7)]),
+            1,
+            TransferUnitKind.Batch,
+            Rows: [row],
+            Columns: ["Id", "Code"]
+        );
+
+        Assert.Equal(7, unit.Value(row, "id"));
+        Assert.Equal("x", unit.Value(row, "CODE"));
+    }
+
+    [Fact]
+    public void TransferUnit_Value_WhenTheColumnWasNotRead_ThrowsNamingIt()
+    {
+        var row = new TransferRow([1, "Jane"], 0);
+        var unit = new TransferUnit(
+            1,
+            new StableKey([new KeyComponent("id", 1)]),
+            1,
+            TransferUnitKind.Batch,
+            Table: new TableAddress("dbo", "People"),
+            Rows: [row],
+            Columns: ["id", "first"]
+        );
+
+        var exception = Assert.Throws<InvalidOperationException>(() => unit.Value(row, "full"));
+
+        Assert.Contains("full", exception.Message);
+        Assert.Contains("dbo.People", exception.Message);
+    }
+
+    [Fact]
     public void TransferProgressContracts_WhenBatchIsCommitted_PreserveByteCounts()
     {
         var unit = new TransferUnit(
