@@ -23,23 +23,25 @@ public static class PostgreSqlUniqueKeyCollisions
         NpgsqlDataSource source,
         NpgsqlDataSource target,
         Guid planId,
-        TableDefinition table,
+        TableMapping mapping,
         IReadOnlyList<string> stableKeys,
         CancellationToken cancellationToken
     )
     {
         var shape = await new PostgreSqlTransferSchemaReader(target).ReadAsync(
-            table.Schema,
-            table.Name,
-            stableKeys,
+            mapping.Target.Schema,
+            mapping.Target.Name,
+            stableKeys.Select(column => Target(mapping, column)).ToArray(),
             cancellationToken
         );
-        var address = new TableAddress(table.Schema, table.Name);
+        var mapped = mapping.Columns.Select(column => column.Target).ToHashSet(DatabaseNames.Comparer);
+        var address = mapping.Source;
         var result = new List<UniqueKeyCollision>();
-        foreach (var unique in shape.UniqueKeys)
+        // A unique key over a column the plan does not write cannot collide on the rows' account.
+        foreach (var unique in shape.UniqueKeys.Where(key => key.All(column => mapped.Contains(column.Name))))
         {
             var columns = shape.StableKeyColumns.Concat(unique).DistinctBy(column => column.Name).ToArray();
-            var candidates = await ReadPlannedAsync(source, planId, shape, columns, cancellationToken);
+            var candidates = await ReadPlannedAsync(source, planId, mapping, shape, columns, cancellationToken);
             var collision = await ProbeAsync(target, shape, unique, columns, candidates, cancellationToken);
             if (collision.Rows > 0)
                 result.Add(
@@ -54,9 +56,11 @@ public static class PostgreSqlUniqueKeyCollisions
         return result;
     }
 
+    /// <summary>The planned rows' values for these target columns, read from the source columns the plan maps to them.</summary>
     private static async Task<List<object?[]>> ReadPlannedAsync(
         NpgsqlDataSource source,
         Guid planId,
+        TableMapping mapping,
         PostgreSqlWriteTable shape,
         IReadOnlyList<PostgreSqlWriteColumn> columns,
         CancellationToken cancellationToken
@@ -64,16 +68,20 @@ public static class PostgreSqlUniqueKeyCollisions
     {
         var sql =
             "SELECT "
-            + string.Join(", ", columns.Select(column => "s." + PostgreSqlIdentifier.Quote(column.Name)))
+            + string.Join(
+                ", ",
+                columns.Select(column => "s." + PostgreSqlIdentifier.Quote(Source(mapping, column.Name)))
+            )
             + " FROM "
-            + PostgreSqlIdentifier.Qualified(shape.Target.Schema, shape.Target.Name)
+            + PostgreSqlIdentifier.Qualified(mapping.Source.Schema, mapping.Source.Name)
             + " s JOIN "
-            + PostgreSqlStagingTables.Qualified(PostgreSqlStagingTables.SourceTableName(planId, shape.Target))
+            + PostgreSqlStagingTables.Qualified(PostgreSqlStagingTables.SourceTableName(planId, mapping.Source))
             + " f ON f.__included AND "
             + string.Join(
                 " AND ",
                 shape.StableKeyColumns.Select(
-                    (column, index) => "s." + PostgreSqlIdentifier.Quote(column.Name) + " = f.k" + index
+                    (column, index) =>
+                        "s." + PostgreSqlIdentifier.Quote(Source(mapping, column.Name)) + " = f.k" + index
                 )
             );
         var rows = new List<object?[]>();
@@ -177,6 +185,12 @@ public static class PostgreSqlUniqueKeyCollisions
     }
 
     /// <summary>"id=5 (source) -> id=9 (target)" for the stable key columns read twice from the same row.</summary>
+    private static string Target(TableMapping mapping, string source) =>
+        mapping.Columns.Single(column => DatabaseNames.Equals(column.Source, source)).Target;
+
+    private static string Source(TableMapping mapping, string target) =>
+        mapping.Columns.Single(column => DatabaseNames.Equals(column.Target, target)).Source;
+
     internal static string Describe(IReadOnlyList<PostgreSqlWriteColumn> keys, System.Data.IDataRecord record) =>
         string.Join(", ", keys.Select((column, index) => column.Name + "=" + record.GetValue(index)))
         + " (source) -> "

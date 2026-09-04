@@ -1,0 +1,1 @@
+ALTER TABLE Plans ADD COLUMN MappingJson TEXT NULL;

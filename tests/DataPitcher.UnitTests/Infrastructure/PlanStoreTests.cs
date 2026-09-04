@@ -1,5 +1,7 @@
+using System.Text.Json;
 using DataPitcher.Application.Plans;
 using DataPitcher.ControlStore;
+using DataPitcher.Core.Plans;
 using Xunit;
 
 namespace DataPitcher.UnitTests.Infrastructure;
@@ -32,6 +34,43 @@ public sealed class PlanStoreTests
         Assert.Equal(selectionId, plan!.SelectionId);
         Assert.Equal(sourceConnectionId, plan.SourceConnectionId);
         Assert.Equal(targetConnectionId, plan.TargetConnectionId);
+    }
+
+    [Fact]
+    public async Task SaveAsync_PersistsColumnMappingOverridesAndClearsThemWhenNoneAreGiven()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        fixture.Migrator.Apply();
+        var store = new PlanStore(fixture.Database, fixture.Clock);
+        var planId = Guid.NewGuid();
+        var overrides = new[]
+        {
+            new TableMappingOverride(
+                new TableAddress("dbo", "Orders"),
+                new TableAddress("sales", "OrderHeader"),
+                [new ColumnMappingOverride("Note", "Remark"), new ColumnMappingOverride("Legacy", null)]
+            ),
+        };
+
+        var created = await store.SaveAsync(
+            planId,
+            "Plan",
+            null,
+            "\"0\"",
+            CancellationToken.None,
+            mappingOverrides: overrides
+        );
+        var stored = await store.FindAsync(planId, CancellationToken.None);
+        var cleared = await store.SaveAsync(planId, "Plan", null, "\"1\"", CancellationToken.None);
+        var afterClear = await store.FindAsync(planId, CancellationToken.None);
+
+        Assert.Equal(JsonSerializer.Serialize(overrides), JsonSerializer.Serialize(created.MappingOverrides));
+        var table = Assert.Single(stored!.MappingOverrides!);
+        Assert.Equal(new TableAddress("sales", "OrderHeader"), table.Target);
+        Assert.Equal("Remark", table.Columns.Single(column => column.Source == "Note").Target);
+        Assert.Null(table.Columns.Single(column => column.Source == "Legacy").Target);
+        Assert.Null(cleared.MappingOverrides);
+        Assert.Null(afterClear!.MappingOverrides);
     }
 
     [Fact]

@@ -400,6 +400,63 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
             () => SealException is null ? Receipt(planId: planId) : throw SealException
         );
 
+    public Task<PlanMappingResponse> GetPlanMappingAsync(Guid planId, CancellationToken cancellationToken) =>
+        ObserveAsync(
+            nameof(GetPlanMappingAsync),
+            cancellationToken,
+            () =>
+                new PlanMappingResponse(
+                    planId,
+                    4,
+                    "\"4\"",
+                    null,
+                    [],
+                    [
+                        new PlanMappingTableResponse(
+                            new PlanReviewAddressResponse("dbo", "Orders"),
+                            new PlanReviewAddressResponse("dbo", "Orders"),
+                            true,
+                            true,
+                            ["Id", "Note"],
+                            [
+                                new PlanMappingColumnResponse(
+                                    "Id",
+                                    "int",
+                                    false,
+                                    "Id",
+                                    "int",
+                                    false,
+                                    true,
+                                    false,
+                                    "default",
+                                    []
+                                ),
+                                new PlanMappingColumnResponse(
+                                    "Comment",
+                                    "nvarchar(100)",
+                                    true,
+                                    null,
+                                    null,
+                                    null,
+                                    false,
+                                    false,
+                                    "unmapped",
+                                    [
+                                        new PlanMappingProblemResponse(
+                                            "column_unmapped",
+                                            "dbo.Orders.Comment has no target column.",
+                                            false
+                                        ),
+                                    ]
+                                ),
+                            ],
+                            [new PlanMappingTargetColumnResponse("Note", "nvarchar(100)", true, [])],
+                            []
+                        ),
+                    ]
+                )
+        );
+
     public Task<PlanReviewResponse> GetPlanReviewAsync(Guid planId, CancellationToken cancellationToken) =>
         ObserveAsync(
             nameof(GetPlanReviewAsync),

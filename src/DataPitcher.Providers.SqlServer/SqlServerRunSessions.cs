@@ -270,13 +270,32 @@ public sealed class SqlServerRunSessions(
         {
             var address = (planTable.Mapping.Target.Schema, planTable.Mapping.Target.Name);
             if (!_targets.TryGetValue(address, out var target))
-                target = _targets[address] = await new SqlServerTransferSchemaReader(connectionString).ReadAsync(
-                    planTable.Mapping.Target.Schema,
-                    planTable.Mapping.Target.Name,
-                    targetKeys,
-                    cancellationToken
+                target = _targets[address] = Mapped(
+                    await new SqlServerTransferSchemaReader(connectionString).ReadAsync(
+                        planTable.Mapping.Target.Schema,
+                        planTable.Mapping.Target.Name,
+                        targetKeys,
+                        cancellationToken
+                    ),
+                    planTable
                 );
             return target;
+        }
+
+        /// <summary>
+        /// Only the target columns the plan maps are written; the rest keep their defaults. A unique key over an
+        /// unmapped column cannot be judged from the rows and is left to the target.
+        /// </summary>
+        private static SqlServerWriteTable Mapped(SqlServerWriteTable shape, PlanTable planTable)
+        {
+            var mapped = planTable.Mapping.Columns.Select(mapping => mapping.Target).ToHashSet(DatabaseNames.Comparer);
+            return new SqlServerWriteTable(
+                shape.Target,
+                shape.Columns.Where(column => mapped.Contains(column.Name)),
+                shape
+                    .UniqueKeys.Where(key => key.All(column => mapped.Contains(column.Name)))
+                    .Select(key => key.Select(column => column.Name).ToArray())
+            );
         }
 
         public async Task<RecoverySnapshot> AcquireFenceReadCheckpointAndJournalAsync(

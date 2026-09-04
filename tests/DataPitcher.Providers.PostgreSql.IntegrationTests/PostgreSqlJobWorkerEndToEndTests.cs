@@ -269,6 +269,37 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
     }
 
     [Fact]
+    public async Task Transfer_WhenThePlanMapsARenamedColumnAndExcludesAnother_WritesWhatTheMappingSays()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync(
+            "CREATE TABLE worker_people (id integer NOT NULL CONSTRAINT pk_worker_people PRIMARY KEY, name text NOT NULL, legacy text NULL);"
+                + " INSERT INTO worker_people VALUES (1, 'Ann', 'old');"
+        );
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE worker_people (id integer NOT NULL CONSTRAINT pk_worker_people PRIMARY KEY, full_name text NOT NULL, note text NULL);"
+        );
+
+        var job = await RunTransferAsync(
+            scope,
+            "worker_people",
+            "pk_worker_people",
+            "SELECT * FROM worker_people",
+            mappings:
+            [
+                new PlanTableMappingRequest(
+                    new PlanReviewAddressResponse(scope.Schema, "worker_people"),
+                    null,
+                    [new PlanColumnMappingRequest("name", "full_name"), new PlanColumnMappingRequest("legacy", null)]
+                ),
+            ]
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal("Ann", await scope.ScalarTargetAsync<string>("SELECT full_name FROM worker_people WHERE id = 1"));
+    }
+
+    [Fact]
     public async Task Reseal_WhenASourceRowWasAddedAfterATransfer_SkipsOnlyTheRowTheTargetAlreadyHas()
     {
         await using var scope = await fixture.CreateScopeAsync();
@@ -551,7 +582,8 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
         string sql,
         Func<IServiceProvider, Guid, Task>? afterSeal = null,
         string? businessSchema = null,
-        Func<IServiceProvider, Guid, TransferJob, Task<TransferJob>>? afterRun = null
+        Func<IServiceProvider, Guid, TransferJob, Task<TransferJob>>? afterRun = null,
+        IReadOnlyList<PlanTableMappingRequest>? mappings = null
     )
     {
         businessSchema ??= scope.Schema;
@@ -646,7 +678,8 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
                     "\"0\"",
                     selectionId,
                     source.ConnectionId,
-                    target.ConnectionId
+                    target.ConnectionId,
+                    mappings
                 ),
                 CancellationToken.None
             );

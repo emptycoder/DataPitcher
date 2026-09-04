@@ -56,6 +56,7 @@ public interface IDataPitcherApplication
     Task<PlanDetailsResponse> GetPlanDetailsAsync(Guid planId, CancellationToken cancellationToken);
     Task<OperationReceiptResponse> QueuePlanSealAsync(Guid planId, CancellationToken cancellationToken);
     Task<PlanReviewResponse> GetPlanReviewAsync(Guid planId, CancellationToken cancellationToken);
+    Task<PlanMappingResponse> GetPlanMappingAsync(Guid planId, CancellationToken cancellationToken);
     Task<InclusionPathResponse> GetPlanInclusionPathAsync(
         Guid planId,
         InclusionPathRequest request,

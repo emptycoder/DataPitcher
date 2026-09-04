@@ -691,6 +691,53 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task GetPlanMapping_ReturnsThePrefilledMappingWithItsProblems()
+    {
+        var planId = Guid.NewGuid();
+
+        using var response = await _client.GetAsync($"/api/plans/{planId}/mapping", CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var mapping = await response.Content.ReadFromJsonAsync<PlanMappingResponse>(
+            cancellationToken: CancellationToken.None
+        );
+        var table = Assert.Single(mapping!.Tables);
+        Assert.Equal("Orders", table.Source.Name);
+        Assert.Equal("unmapped", table.Columns.Single(column => column.Source == "Comment").Origin);
+        Assert.Equal(
+            "column_unmapped",
+            Assert.Single(table.Columns.Single(column => column.Source == "Comment").Problems).Code
+        );
+    }
+
+    [Fact]
+    public async Task SavePlan_WithColumnMappings_PassesThemToTheApplication()
+    {
+        var planId = Guid.NewGuid();
+        var request = new SavePlanRequest(
+            null,
+            null,
+            "etag-1",
+            Mappings:
+            [
+                new PlanTableMappingRequest(
+                    new PlanReviewAddressResponse("dbo", "Orders"),
+                    null,
+                    [new PlanColumnMappingRequest("Comment", "Note"), new PlanColumnMappingRequest("Legacy", null)]
+                ),
+            ]
+        );
+
+        using var response = await _client.PutAsJsonAsync($"/api/plans/{planId}", request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var table = Assert.Single(_factory.Application.LastPlanRequest!.Mappings!);
+        Assert.Equal("Orders", table.Source.Name);
+        Assert.Equal("Note", table.Columns.Single(column => column.Source == "Comment").Target);
+        Assert.Null(table.Columns.Single(column => column.Source == "Legacy").Target);
+    }
+
+    [Fact]
     public async Task SavePlan_WithAssociations_PassesThemToTheApplication()
     {
         var planId = Guid.NewGuid();

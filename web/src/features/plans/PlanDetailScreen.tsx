@@ -34,9 +34,10 @@ import { useToast } from '../../ui/toast';
 import { ProviderMark } from '../connections/ConnectionsScreen';
 import type { SchemaGraphProjection, SchemaTableAddress } from '../graph/graphLayout';
 import { SchemaGraph, tableKey, type NodeTone } from '../schema/SchemaGraph';
-import { usePlan, usePlanReview } from '../shared/queries';
+import { usePlan, usePlanMapping, usePlanReview } from '../shared/queries';
+import { MappingPanel, problemCounts } from './MappingPanel';
 
-type Tab = 'tables' | 'graph' | 'checks' | 'trace';
+type Tab = 'tables' | 'mapping' | 'graph' | 'checks' | 'trace';
 
 export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
   const { authentication } = useAuth();
@@ -47,6 +48,13 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
   const selectionNames = useSelectionRegistry();
   const stored = usePlan(planId);
   const review = usePlanReview(planId);
+  const mapping = usePlanMapping(planId);
+  const mappingProblems = mapping.data
+    ? problemCounts([
+        ...mapping.data.problems,
+        ...mapping.data.tables.flatMap((table) => [...table.problems, ...table.columns.flatMap((column) => column.problems), ...table.targetOnlyColumns.flatMap((column) => column.problems)]),
+      ])
+    : null;
   const [tab, setTab] = useState<Tab>('tables');
   const [confirming, setConfirming] = useState(false);
   const idempotencyKey = useRef<string | null>(null);
@@ -226,6 +234,7 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
         className="mb-4 w-fit"
         items={[
           { value: 'tables', label: 'Transfer set', count: plan.tables.length },
+          { value: 'mapping', label: 'Column mapping', count: mappingProblems ? mappingProblems.blockers + mappingProblems.warnings : undefined },
           { value: 'graph', label: 'Dependency graph' },
           { value: 'checks', label: 'Checks', count: plan.conflicts.length + plan.cycles.length + plan.startPreconditions.length },
           { value: 'trace', label: 'Why is this row included?' },
@@ -234,6 +243,7 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
         value={tab}
       />
       {tab === 'tables' ? <TransferSet plan={plan} /> : null}
+      {tab === 'mapping' ? <MappingPanel planId={planId} sealed={sealed} /> : null}
       {tab === 'graph' ? <PlanGraphPanel plan={plan} planId={planId} /> : null}
       {tab === 'checks' ? <ChecksPanel plan={plan} /> : null}
       {tab === 'trace' ? <InclusionPathPanel plan={plan} planId={planId} /> : null}

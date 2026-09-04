@@ -12,7 +12,9 @@ public sealed record PlanRecord(
     Guid? TargetConnectionId = null,
     /// <summary>Why the last sealing attempt failed, until the plan is sealed or edited again.</summary>
     string? SealFailureCode = null,
-    string? SealFailureDetail = null
+    string? SealFailureDetail = null,
+    /// <summary>The operator's column-mapping choices; everything not listed here is mapped by name.</summary>
+    IReadOnlyList<TableMappingOverride>? MappingOverrides = null
 );
 
 public sealed class PlanVersionMismatchException : InvalidOperationException
@@ -31,7 +33,8 @@ public interface IPlanRepository
         CancellationToken cancellationToken,
         Guid? selectionId = null,
         Guid? sourceConnectionId = null,
-        Guid? targetConnectionId = null
+        Guid? targetConnectionId = null,
+        IReadOnlyList<TableMappingOverride>? mappingOverrides = null
     );
 
     Task<PlanRecord?> FindAsync(Guid planId, CancellationToken cancellationToken);

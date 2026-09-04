@@ -70,6 +70,22 @@ Sealing stages the discovered keys in DataPitcher-owned tables in the source and
 
 Sealing always validates against the snapshot the selection was saved with. It never substitutes a newer scan. When the source schema no longer matches that snapshot, sealing refuses and tells the operator to scan the source, open the selection in the workbench, choose the current snapshot under "Schema snapshot", save, and seal again.
 
+### 8. The column mapping is explicit, prefilled, and checked before sealing
+
+Every reachable table's columns are mapped to the target by name, without regard to case, and the operator can change any of them on the plan page: a different target column, a different target table, or no transfer at all. The choices are stored on the plan as overrides; everything not overridden keeps its default, so a plan with no choices behaves exactly as before. The mapping is reviewed from the selection's own schema snapshot and the target's latest snapshot, and every problem the target would raise is shown before sealing and repeated as a refusal (`mapping_invalid`) at sealing:
+
+| Problem | Severity |
+| --- | --- |
+| A stable-key or followed foreign-key column has no target | blocker |
+| An override names a target column the table does not have | blocker |
+| Two source columns aim at one target column | blocker |
+| A source column has no target of the same name (its values are dropped) | warning |
+| A NOT NULL target column receives no source column | warning |
+| Types differ, or a nullable source feeds a NOT NULL target | warning |
+| The target snapshot lacks the table or is missing altogether (mapping unchecked) | warning |
+
+The transfer writes only the mapped target columns and lets the target fill the rest; a unique key over an unmapped column is left to the target to enforce. Seal-time collision checks and verification read source columns through the mapping.
+
 ## Consequences
 
 An operator can trust that a Succeeded job moved the planned set and nothing else, and that a plan which could not be proven was refused with a reason rather than approximated. The cost is that more situations refuse: a running job blocks re-sealing, a collision blocks a plan that previously would have skipped a row, and a stale plan must be sealed again after upgrading.

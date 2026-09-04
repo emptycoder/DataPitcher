@@ -41,6 +41,53 @@ export const PlanReviewSchema = z.object({
 export type PlanReview = z.infer<typeof PlanReviewSchema>;
 export type PlanTable = PlanReview['tables'][number];
 
+const ProblemSchema = z.object({ code: z.string(), message: z.string(), isBlocker: z.boolean() });
+
+/** The column mapping as sealing will apply it: prefilled by name, the operator's overrides on top, every problem the target would raise. */
+export const PlanMappingSchema = z.object({
+  planId: z.string(),
+  version: z.number(),
+  eTag: z.string(),
+  targetSnapshotId: z.string().nullable(),
+  problems: z.array(ProblemSchema),
+  tables: z.array(
+    z.object({
+      source: AddressSchema,
+      target: AddressSchema,
+      targetExists: z.boolean(),
+      isRoot: z.boolean(),
+      targetColumns: z.array(z.string()),
+      columns: z.array(
+        z.object({
+          source: z.string(),
+          sourceType: z.string(),
+          sourceNullable: z.boolean(),
+          target: z.string().nullable(),
+          targetType: z.string().nullable(),
+          targetNullable: z.boolean().nullable(),
+          isKey: z.boolean(),
+          isForeignKey: z.boolean(),
+          origin: z.string(),
+          problems: z.array(ProblemSchema),
+        }),
+      ),
+      targetOnlyColumns: z.array(z.object({ name: z.string(), type: z.string(), isNullable: z.boolean(), problems: z.array(ProblemSchema) })),
+      problems: z.array(ProblemSchema),
+    }),
+  ),
+});
+export type PlanMapping = z.infer<typeof PlanMappingSchema>;
+export type PlanMappingTable = PlanMapping['tables'][number];
+export type PlanMappingColumn = PlanMappingTable['columns'][number];
+export type MappingProblem = z.infer<typeof ProblemSchema>;
+
+/** One table's overrides as the API stores them; a null column target means "do not transfer". */
+export type PlanTableMappingInput = Readonly<{
+  source: Readonly<{ schema: string; name: string }>;
+  target: Readonly<{ schema: string; name: string }> | null;
+  columns: readonly Readonly<{ source: string; target: string | null }>[];
+}>;
+
 export const PlanResponseSchema = z.object({ planId: z.string(), version: z.number(), canonicalHash: z.string().nullable(), eTag: z.string() });
 export type PlanResponse = z.infer<typeof PlanResponseSchema>;
 
@@ -68,6 +115,8 @@ export type SavePlanInput = Readonly<{
   selectionId: string | null;
   sourceConnectionId: string | null;
   targetConnectionId: string | null;
+  /** Omit to keep the stored mapping; an empty list returns every table to its defaults. */
+  mappings?: readonly PlanTableMappingInput[];
 }>;
 
 /** The editable plan record, read back so forms prefill from the API rather than from this browser's registry. */
@@ -95,6 +144,8 @@ export const plansApi = {
     requestJson<unknown>(`/api/plans/${planId}/seal`, auth, { method: 'POST' }).then((data) => OperationReceiptSchema.parse(data)),
   review: (planId: string, auth: AuthenticationAdapter, signal?: AbortSignal) =>
     requestJson<unknown>(`/api/plans/${planId}/review`, auth, { signal }).then((data) => PlanReviewSchema.parse(data)),
+  mapping: (planId: string, auth: AuthenticationAdapter, signal?: AbortSignal) =>
+    requestJson<unknown>(`/api/plans/${planId}/mapping`, auth, { signal }).then((data) => PlanMappingSchema.parse(data)),
   inclusionPath: (planId: string, table: string, stableKey: string, auth: AuthenticationAdapter) =>
     requestJson<unknown>(`/api/plans/${planId}/inclusion-paths`, auth, { method: 'POST', body: { table, stableKey } }).then((data) => InclusionPathSchema.parse(data)),
   graph: (planId: string, auth: AuthenticationAdapter, signal?: AbortSignal) =>

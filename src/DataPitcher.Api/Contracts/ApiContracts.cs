@@ -194,7 +194,17 @@ public sealed record SavePlanRequest(
     string IfMatch,
     Guid? SelectionId = null,
     Guid? SourceConnectionId = null,
-    Guid? TargetConnectionId = null
+    Guid? TargetConnectionId = null,
+    /// <summary>Column-mapping choices; null keeps the stored ones, an empty list returns every table to its defaults.</summary>
+    IReadOnlyList<PlanTableMappingRequest>? Mappings = null
+);
+
+public sealed record PlanColumnMappingRequest(string Source, string? Target);
+
+public sealed record PlanTableMappingRequest(
+    PlanReviewAddressResponse Source,
+    PlanReviewAddressResponse? Target,
+    IReadOnlyList<PlanColumnMappingRequest> Columns
 );
 
 /// <summary>The editable record of a plan, read back so a form can be prefilled without a local copy.</summary>
@@ -257,6 +267,52 @@ public sealed record PlanReviewSelectionResponse(
     string DisplayName,
     Guid? ConnectionId,
     Guid? SnapshotId
+);
+
+public sealed record PlanMappingProblemResponse(string Code, string Message, bool IsBlocker);
+
+public sealed record PlanMappingColumnResponse(
+    string Source,
+    string SourceType,
+    bool SourceNullable,
+    string? Target,
+    string? TargetType,
+    bool? TargetNullable,
+    bool IsKey,
+    bool IsForeignKey,
+    string Origin,
+    IReadOnlyList<PlanMappingProblemResponse> Problems
+);
+
+public sealed record PlanMappingTargetColumnResponse(
+    string Name,
+    string Type,
+    bool IsNullable,
+    IReadOnlyList<PlanMappingProblemResponse> Problems
+);
+
+public sealed record PlanMappingTableResponse(
+    PlanReviewAddressResponse Source,
+    PlanReviewAddressResponse Target,
+    bool TargetExists,
+    bool IsRoot,
+    IReadOnlyList<string> TargetColumns,
+    IReadOnlyList<PlanMappingColumnResponse> Columns,
+    IReadOnlyList<PlanMappingTargetColumnResponse> TargetOnlyColumns,
+    IReadOnlyList<PlanMappingProblemResponse> Problems
+);
+
+/// <summary>
+/// The plan's column mapping as the transfer would apply it: prefilled by name from the selection's schema snapshot
+/// and the target's latest snapshot, with the operator's overrides on top and every problem the target would raise.
+/// </summary>
+public sealed record PlanMappingResponse(
+    Guid PlanId,
+    int Version,
+    string ETag,
+    Guid? TargetSnapshotId,
+    IReadOnlyList<PlanMappingProblemResponse> Problems,
+    IReadOnlyList<PlanMappingTableResponse> Tables
 );
 
 public sealed record PlanReviewResponse(

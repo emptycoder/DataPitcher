@@ -85,6 +85,17 @@ export function usePlanReview(planId: string | null, options: Readonly<{ enabled
   });
 }
 
+/** The plan's column mapping, prefilled by the API and carrying every problem the target would raise. */
+export function usePlanMapping(planId: string | null) {
+  const { authentication } = useAuth();
+  return useQuery({
+    queryKey: queryKeys.planMapping(planId ?? ''),
+    queryFn: ({ signal }) => plansApi.mapping(planId!, authentication, signal),
+    enabled: Boolean(planId),
+    retry: false,
+  });
+}
+
 export function useJobs(options: Readonly<{ live?: boolean }> = {}) {
   const { authentication } = useAuth();
   return useQuery({

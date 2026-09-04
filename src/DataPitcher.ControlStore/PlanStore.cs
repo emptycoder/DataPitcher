@@ -9,7 +9,7 @@ namespace DataPitcher.ControlStore;
 public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRepository
 {
     private const string SelectColumns =
-        "SELECT PlanId, DisplayName, OperatorNote, Version, CanonicalHash, UpdatedUtc, SelectionId, SourceConnectionId, TargetConnectionId, SealFailureCode, SealFailureDetail FROM Plans";
+        "SELECT PlanId, DisplayName, OperatorNote, Version, CanonicalHash, UpdatedUtc, SelectionId, SourceConnectionId, TargetConnectionId, SealFailureCode, SealFailureDetail, MappingJson FROM Plans";
 
     public Task<PlanRecord> SaveAsync(
         Guid planId,
@@ -19,13 +19,15 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
         CancellationToken cancellationToken,
         Guid? selectionId = null,
         Guid? sourceConnectionId = null,
-        Guid? targetConnectionId = null
+        Guid? targetConnectionId = null,
+        IReadOnlyList<TableMappingOverride>? mappingOverrides = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var db = database.Open();
         using var transaction = db.BeginTransaction();
         var now = Stamp(clock.UtcNow);
+        var mappingJson = mappingOverrides is { Count: > 0 } ? JsonSerializer.Serialize(mappingOverrides) : null;
         var existing = Find(db, planId);
         if (existing is null)
         {
@@ -40,10 +42,11 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
                 sourceConnectionId?.ToString(),
                 targetConnectionId?.ToString(),
                 null,
-                null
+                null,
+                mappingJson
             );
             db.Execute(
-                "INSERT INTO Plans (PlanId, DisplayName, OperatorNote, Version, CanonicalHash, ContentJson, SealedUtc, CreatedUtc, UpdatedUtc, SelectionId, SourceConnectionId, TargetConnectionId) VALUES (@planId, @displayName, @operatorNote, @version, NULL, NULL, NULL, @createdUtc, @updatedUtc, @selectionId, @sourceConnectionId, @targetConnectionId)",
+                "INSERT INTO Plans (PlanId, DisplayName, OperatorNote, Version, CanonicalHash, ContentJson, SealedUtc, CreatedUtc, UpdatedUtc, SelectionId, SourceConnectionId, TargetConnectionId, MappingJson) VALUES (@planId, @displayName, @operatorNote, @version, NULL, NULL, NULL, @createdUtc, @updatedUtc, @selectionId, @sourceConnectionId, @targetConnectionId, @mappingJson)",
                 new ControlParameter("planId", row.PlanId),
                 new ControlParameter("displayName", row.DisplayName),
                 new ControlParameter("operatorNote", row.OperatorNote),
@@ -52,7 +55,8 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
                 new ControlParameter("updatedUtc", now),
                 new ControlParameter("selectionId", row.SelectionId),
                 new ControlParameter("sourceConnectionId", row.SourceConnectionId),
-                new ControlParameter("targetConnectionId", row.TargetConnectionId)
+                new ControlParameter("targetConnectionId", row.TargetConnectionId),
+                new ControlParameter("mappingJson", row.MappingJson)
             );
             transaction.Commit();
             return Task.FromResult(ToRecord(row));
@@ -60,12 +64,13 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
         if (existing.Version != ParseVersion(ifMatch))
             throw new PlanVersionMismatchException();
         var affected = db.Execute(
-            "UPDATE Plans SET DisplayName = @displayName, OperatorNote = @operatorNote, SelectionId = @selectionId, SourceConnectionId = @sourceConnectionId, TargetConnectionId = @targetConnectionId, Version = Version + 1, CanonicalHash = NULL, SealFailureCode = NULL, SealFailureDetail = NULL, UpdatedUtc = @updatedUtc WHERE PlanId = @planId AND Version = @version",
+            "UPDATE Plans SET DisplayName = @displayName, OperatorNote = @operatorNote, SelectionId = @selectionId, SourceConnectionId = @sourceConnectionId, TargetConnectionId = @targetConnectionId, MappingJson = @mappingJson, Version = Version + 1, CanonicalHash = NULL, SealFailureCode = NULL, SealFailureDetail = NULL, UpdatedUtc = @updatedUtc WHERE PlanId = @planId AND Version = @version",
             new ControlParameter("displayName", displayName),
             new ControlParameter("operatorNote", operatorNote),
             new ControlParameter("selectionId", selectionId?.ToString()),
             new ControlParameter("sourceConnectionId", sourceConnectionId?.ToString()),
             new ControlParameter("targetConnectionId", targetConnectionId?.ToString()),
+            new ControlParameter("mappingJson", mappingJson),
             new ControlParameter("updatedUtc", now),
             new ControlParameter("planId", planId.ToString()),
             new ControlParameter("version", existing.Version)
@@ -83,7 +88,8 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
                 clock.UtcNow,
                 selectionId,
                 sourceConnectionId,
-                targetConnectionId
+                targetConnectionId,
+                MappingOverrides: mappingOverrides is { Count: > 0 } ? mappingOverrides : null
             )
         );
     }
@@ -158,7 +164,8 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
             reader.IsDBNull(7) ? null : reader.GetString(7),
             reader.IsDBNull(8) ? null : reader.GetString(8),
             reader.IsDBNull(9) ? null : reader.GetString(9),
-            reader.IsDBNull(10) ? null : reader.GetString(10)
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            reader.IsDBNull(11) ? null : reader.GetString(11)
         );
 
     private static PlanRecord ToRecord(Row row) =>
@@ -173,7 +180,10 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
             row.SourceConnectionId is null ? null : Guid.Parse(row.SourceConnectionId),
             row.TargetConnectionId is null ? null : Guid.Parse(row.TargetConnectionId),
             row.SealFailureCode,
-            row.SealFailureDetail
+            row.SealFailureDetail,
+            row.MappingJson is null
+                ? null
+                : JsonSerializer.Deserialize<IReadOnlyList<TableMappingOverride>>(row.MappingJson)
         );
 
     private static long ParseVersion(string ifMatch) =>
@@ -195,6 +205,7 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
         string? SourceConnectionId,
         string? TargetConnectionId,
         string? SealFailureCode,
-        string? SealFailureDetail
+        string? SealFailureDetail,
+        string? MappingJson
     );
 }

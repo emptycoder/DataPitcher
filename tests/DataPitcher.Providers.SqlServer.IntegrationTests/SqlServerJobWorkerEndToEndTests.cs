@@ -266,6 +266,40 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     }
 
     [Fact]
+    public async Task Transfer_WhenThePlanMapsARenamedColumnAndExcludesAnother_WritesWhatTheMappingSays()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync(
+            "CREATE TABLE dbo.worker_people (id int NOT NULL CONSTRAINT PK_worker_people PRIMARY KEY, name nvarchar(64) NOT NULL, legacy nvarchar(64) NULL);"
+                + " INSERT dbo.worker_people VALUES (1, N'Ann', N'old');"
+        );
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE dbo.worker_people (id int NOT NULL CONSTRAINT PK_worker_people PRIMARY KEY, full_name nvarchar(64) NOT NULL, note nvarchar(64) NULL);"
+        );
+
+        var job = await RunTransferAsync(
+            scope,
+            "worker_people",
+            "PK_worker_people",
+            "SELECT * FROM dbo.worker_people",
+            mappings:
+            [
+                new PlanTableMappingRequest(
+                    new PlanReviewAddressResponse("dbo", "worker_people"),
+                    null,
+                    [new PlanColumnMappingRequest("name", "full_name"), new PlanColumnMappingRequest("legacy", null)]
+                ),
+            ]
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal(
+            "Ann",
+            await scope.ScalarTargetAsync<string>("SELECT full_name FROM dbo.worker_people WHERE id = 1")
+        );
+    }
+
+    [Fact]
     public async Task Reseal_WhenASourceRowWasAddedAfterATransfer_SkipsOnlyTheRowTheTargetAlreadyHas()
     {
         await using var scope = await fixture.CreateScopeAsync();
@@ -608,7 +642,8 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
         string? sourceConnectionString = null,
         string businessSchema = "dbo",
         string keyColumn = "id",
-        Func<IServiceProvider, Guid, TransferJob, Task<TransferJob>>? afterRun = null
+        Func<IServiceProvider, Guid, TransferJob, Task<TransferJob>>? afterRun = null,
+        IReadOnlyList<PlanTableMappingRequest>? mappings = null
     )
     {
         await EnableSnapshotIsolationAsync(scope.SourceAdminConnectionString, scope.Database);
@@ -701,7 +736,8 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
                     "\"0\"",
                     selectionId,
                     source.ConnectionId,
-                    target.ConnectionId
+                    target.ConnectionId,
+                    mappings
                 ),
                 CancellationToken.None
             );

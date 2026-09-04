@@ -309,6 +309,52 @@ public sealed class PlanSealingServiceTests
     }
 
     [Fact]
+    public async Task SealAsync_WritesTheOperatorsColumnMappingIntoThePlan()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        // The target spells the child's foreign-key column differently; the operator mapped it.
+        session.TargetSchema = Renamed(session.SourceSchema, "C", "PId", "ParentRef");
+        var (service, plans, planId) = await ArrangeAsync(
+            fixture,
+            session,
+            mappingOverrides:
+            [
+                new TableMappingOverride(
+                    new TableAddress("dbo", "C"),
+                    null,
+                    [new ColumnMappingOverride("PId", "ParentRef")]
+                ),
+            ]
+        );
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        var child = content.Tables.Single(table => table.Mapping.Source.Name == "C");
+        Assert.Equal("ParentRef", child.Mapping.Columns.Single(column => column.Source == "PId").Target);
+        Assert.Empty(content.Warnings);
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenTheMappingLeavesAForeignKeyColumnWithoutATarget_RefusesNamingIt()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.TargetSchema = Renamed(session.SourceSchema, "C", "PId", "ParentRef");
+        var (service, _, planId) = await ArrangeAsync(fixture, session);
+
+        var exception = await Assert.ThrowsAsync<MappingInvalidException>(() =>
+            service.SealAsync(planId, CancellationToken.None)
+        );
+
+        Assert.Contains("dbo.C.PId carries a foreign key", exception.Message);
+        Assert.Contains("Fix the mapping on the plan page", exception.Message);
+    }
+
+    [Fact]
     public async Task SealAsync_WhenEverySelectedRowAlreadyExistsInTheTarget_SealsAnEmptyPlanAndSaysWhy()
     {
         using var fixture = new ControlDatabaseFixture();
@@ -372,7 +418,8 @@ public sealed class PlanSealingServiceTests
         ControlDatabaseFixture fixture,
         FakeSealingSession session,
         SchemaSnapshotContent? selectionSnapshot = null,
-        bool currentScanExists = false
+        bool currentScanExists = false,
+        IReadOnlyList<TableMappingOverride>? mappingOverrides = null
     )
     {
         fixture.Migrator.Apply();
@@ -407,7 +454,8 @@ public sealed class PlanSealingServiceTests
             CancellationToken.None,
             selectionId,
             source.ConnectionId,
-            target.ConnectionId
+            target.ConnectionId,
+            mappingOverrides
         );
         var service = new PlanSealingService(
             plans,
@@ -420,6 +468,29 @@ public sealed class PlanSealingServiceTests
         );
         return (service, plans, planId);
     }
+
+    /// <summary>The same schema with one column of one table spelled differently, as a target often is.</summary>
+    private static SchemaSnapshotContent Renamed(
+        SchemaSnapshotContent schema,
+        string table,
+        string column,
+        string renamed
+    ) =>
+        new(
+            schema.Tables.Select(candidate =>
+                candidate.Name == table
+                    ? new SchemaTable(
+                        candidate.Schema,
+                        candidate.Name,
+                        candidate.Columns.Select(item => item.Name == column ? item with { Name = renamed } : item),
+                        candidate.PrimaryKey,
+                        candidate.UniqueConstraints
+                    )
+                    : candidate
+            ),
+            schema.ForeignKeys,
+            schema.DatabaseIdentity
+        );
 
     private static Guid InsertSnapshot(ControlDatabaseFixture fixture, Guid connectionId, SchemaSnapshotContent content)
     {
@@ -512,6 +583,7 @@ public sealed class PlanSealingServiceTests
         public Task<IReadOnlyCollection<UniqueKeyCollision>> FindUniqueKeyCollisionsAsync(
             IReadOnlyCollection<TableDefinition> planned,
             IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+            IReadOnlyDictionary<TableDefinition, TableMapping> mappings,
             Guid planId,
             CancellationToken cancellationToken
         ) => Task.FromResult(Collisions);

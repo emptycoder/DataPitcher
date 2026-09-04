@@ -55,6 +55,7 @@ public interface ISealingSession : IAsyncDisposable
     Task<IReadOnlyCollection<UniqueKeyCollision>> FindUniqueKeyCollisionsAsync(
         IReadOnlyCollection<TableDefinition> planned,
         IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+        IReadOnlyDictionary<TableDefinition, TableMapping> mappings,
         Guid planId,
         CancellationToken cancellationToken
     );

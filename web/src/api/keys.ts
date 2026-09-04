@@ -10,6 +10,7 @@ export const queryKeys = {
   workbenchSchema: ['selections', 'workbench-schema'] as const,
   plan: (planId: string) => ['plans', planId] as const,
   planReview: (planId: string) => ['plans', planId, 'review'] as const,
+  planMapping: (planId: string) => ['plans', planId, 'mapping'] as const,
   planGraph: (planId: string) => ['plans', planId, 'graph'] as const,
   jobs: ['jobs'] as const,
   job: (jobId: string) => ['jobs', jobId] as const,

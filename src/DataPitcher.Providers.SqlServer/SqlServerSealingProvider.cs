@@ -65,6 +65,7 @@ public sealed class SqlServerSealingProvider : ISealingProvider
         public async Task<IReadOnlyCollection<UniqueKeyCollision>> FindUniqueKeyCollisionsAsync(
             IReadOnlyCollection<TableDefinition> planned,
             IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+            IReadOnlyDictionary<TableDefinition, TableMapping> mappings,
             Guid planId,
             CancellationToken cancellationToken
         )
@@ -76,7 +77,7 @@ public sealed class SqlServerSealingProvider : ISealingProvider
                         source,
                         target,
                         planId,
-                        table,
+                        mappings[table],
                         stableKeys[table].Constraint!.Columns,
                         cancellationToken
                     )

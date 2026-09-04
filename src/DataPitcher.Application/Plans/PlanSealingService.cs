@@ -22,6 +22,9 @@ public sealed class IncompleteGraphException(string message) : InvalidOperationE
 /// <summary>Planned rows reference source parents that do not exist while the target enforces the constraint.</summary>
 public sealed class SourceOrphansException(string message) : InvalidOperationException(message);
 
+/// <summary>The plan's column mapping names something the target cannot take; the plan page shows which.</summary>
+public sealed class MappingInvalidException(string message) : InvalidOperationException(message);
+
 /// <summary>Planned rows collide with different target rows on a unique key; verbatim keys cannot merge them.</summary>
 public sealed class UniqueKeyCollisionException(string message) : InvalidOperationException(message);
 
@@ -122,6 +125,14 @@ public sealed class PlanSealingService(
         );
         var relationships = ReachableRelationships(session.SourceForeignKeys, root);
         RequireCompleteGraph(session.SourceUnresolvedForeignKeys, relationships, root);
+        var mapping = PlanMappingResolver.Resolve(
+            session.SourceSchema,
+            session.TargetSchema,
+            new SchemaTableAddress(root.Schema, root.Name),
+            rootKey.Columns,
+            plan.MappingOverrides ?? []
+        );
+        RequireValidMapping(mapping);
         var stableKeys = relationships
             .SelectMany(relationship => new[] { relationship.FromTable, relationship.ToTable })
             .Append(root)
@@ -159,10 +170,17 @@ public sealed class PlanSealingService(
         );
         if (order.Levelled.Count > 0)
             await session.OrderHierarchiesAsync(order.Levelled, stableKeys, planId, cancellationToken);
+        var mappings = depth.Keys.ToDictionary(table => table, table => TableMapping(mapping, table));
         RequireNoUniqueKeyCollisions(
-            await session.FindUniqueKeyCollisionsAsync(depth.Keys.ToArray(), stableKeys, planId, cancellationToken)
+            await session.FindUniqueKeyCollisionsAsync(
+                depth.Keys.ToArray(),
+                stableKeys,
+                mappings,
+                planId,
+                cancellationToken
+            )
         );
-        var warnings = new List<PlanWarning>();
+        var warnings = new List<PlanWarning>(mapping.Warnings);
         // An empty or shrunken plan is legitimate, but the operator has to be told why the rows are not coming.
         if (seeds.Keys.Count == 0)
             warnings.Add(
@@ -188,7 +206,10 @@ public sealed class PlanSealingService(
         );
         warnings.AddRange(Orphans(closure.Orphans, relationships, session.TargetSchema));
         var verification = VerificationStrategy.StrictExact;
-        var blockers = await session.VerificationBlockersAsync(depth.Keys.Select(Address).ToArray(), cancellationToken);
+        var blockers = await session.VerificationBlockersAsync(
+            depth.Keys.Select(table => mappings[table].Target).ToArray(),
+            cancellationToken
+        );
         if (blockers.Count > 0)
         {
             // Never claim a guarantee the target cannot record: exact-set verification needs side-effect-free tables.
@@ -215,7 +236,8 @@ public sealed class PlanSealingService(
             order,
             parameterHash,
             verification,
-            warnings
+            warnings,
+            mapping
         );
         var sealedPlan = new TransferPlanLifecycle(
             new TransferPlanDraft(plan.DisplayName, plan.OperatorNote, "", plan.UpdatedUtc, content)
@@ -237,7 +259,8 @@ public sealed class PlanSealingService(
         ImportOrder order,
         string parameterHash,
         VerificationStrategy verification,
-        IReadOnlyList<PlanWarning> warnings
+        IReadOnlyList<PlanWarning> warnings,
+        PlanMappingReview mapping
     )
     {
         var groups = closure.Rows.GroupBy(row => row.Table).ToArray();
@@ -261,11 +284,7 @@ public sealed class PlanSealingService(
                     .Distinct(DatabaseNames.Comparer)
                     .ToArray();
                 return new PlanTable(
-                    new TableMapping(
-                        address,
-                        address,
-                        group.Key.Columns.Select(column => new ColumnMapping(column.Name, column.Name)).ToArray()
-                    ),
+                    TableMapping(mapping, group.Key),
                     group.Key == root ? PlanTableState.Root : PlanTableState.RequiredDependency,
                     new ManifestCounts(count, count, count, 0),
                     new TopologicalGroup([address]),
@@ -340,6 +359,38 @@ public sealed class PlanSealingService(
     /// correct outcome: inserting violates the key, skipping leaves its children pointing at a key the target never
     /// gets, and merging would need key remapping. Refuse before any batch is written.
     /// </summary>
+    /// <summary>
+    /// The operator saw these problems on the plan page before sealing; sealing repeats them here because the
+    /// transfer would otherwise fail on the target column by column, after rows were already written.
+    /// </summary>
+    private static void RequireValidMapping(PlanMappingReview mapping)
+    {
+        var blockers = mapping.AllProblems.Where(problem => problem.IsBlocker).ToArray();
+        if (blockers.Length == 0)
+            return;
+        throw new MappingInvalidException(
+            "The column mapping cannot be applied to the target: "
+                + string.Join(" ", blockers.Select(problem => problem.Message))
+                + " Fix the mapping on the plan page, then seal the plan again."
+        );
+    }
+
+    /// <summary>The reviewed mapping for a table, or the same names on both sides for a table the review did not reach.</summary>
+    private static TableMapping TableMapping(PlanMappingReview mapping, TableDefinition table)
+    {
+        var address = Address(table);
+        var reviewed = mapping.Tables.FirstOrDefault(candidate =>
+            DatabaseNames.Equals(candidate.Source.Schema, address.Schema)
+            && DatabaseNames.Equals(candidate.Source.Name, address.Name)
+        );
+        return reviewed?.ToMapping()
+            ?? new TableMapping(
+                address,
+                address,
+                table.Columns.Select(column => new ColumnMapping(column.Name, column.Name)).ToArray()
+            );
+    }
+
     private static void RequireNoUniqueKeyCollisions(IReadOnlyCollection<UniqueKeyCollision> collisions)
     {
         if (collisions.Count == 0)

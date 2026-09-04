@@ -546,6 +546,10 @@ public sealed class DataPitcherApplication(
             request.OperatorNote is null ? existing?.OperatorNote
             : string.IsNullOrWhiteSpace(request.OperatorNote) ? null
             : request.OperatorNote;
+        var mappingOverrides =
+            request.Mappings is null ? existing?.MappingOverrides
+            : request.Mappings.Count == 0 ? null
+            : request.Mappings.Select(ToOverride).ToArray();
         var merged = new PlanRecord(
             planId,
             displayName,
@@ -555,9 +559,14 @@ public sealed class DataPitcherApplication(
             existing?.UpdatedUtc ?? default,
             request.SelectionId ?? existing?.SelectionId,
             request.SourceConnectionId ?? existing?.SourceConnectionId,
-            request.TargetConnectionId ?? existing?.TargetConnectionId
+            request.TargetConnectionId ?? existing?.TargetConnectionId,
+            MappingOverrides: mappingOverrides
         );
-        if (existing is not null && merged == existing)
+        if (
+            existing is not null
+            && merged == existing with { MappingOverrides = mappingOverrides }
+            && SameMapping(existing.MappingOverrides, mappingOverrides)
+        )
             return ToPlanResponse(existing);
         var record = await plans.SaveAsync(
             planId,
@@ -567,9 +576,130 @@ public sealed class DataPitcherApplication(
             cancellationToken,
             merged.SelectionId,
             merged.SourceConnectionId,
-            merged.TargetConnectionId
+            merged.TargetConnectionId,
+            merged.MappingOverrides
         );
         return ToPlanResponse(record);
+    }
+
+    private static TableMappingOverride ToOverride(PlanTableMappingRequest request) =>
+        new(
+            new TableAddress(request.Source.Schema, request.Source.Name),
+            request.Target is null ? null : new TableAddress(request.Target.Schema, request.Target.Name),
+            request.Columns.Select(column => new ColumnMappingOverride(column.Source, column.Target)).ToArray()
+        );
+
+    private static bool SameMapping(
+        IReadOnlyList<TableMappingOverride>? left,
+        IReadOnlyList<TableMappingOverride>? right
+    ) => JsonSerializer.Serialize(left ?? []) == JsonSerializer.Serialize(right ?? []);
+
+    public async Task<PlanMappingResponse> GetPlanMappingAsync(Guid planId, CancellationToken cancellationToken)
+    {
+        var record = await plans.FindAsync(planId, cancellationToken) ?? throw new PlanNotFoundException();
+        var resolved = await ResolveMappingAsync(record, cancellationToken);
+        if (resolved is null)
+            return new PlanMappingResponse(
+                record.PlanId,
+                checked((int)record.Version),
+                ETag(record.Version),
+                null,
+                [
+                    new PlanMappingProblemResponse(
+                        "selection_missing",
+                        "Associate a selection that has a root table, a stable key and a schema snapshot; the column mapping is derived from it.",
+                        false
+                    ),
+                ],
+                []
+            );
+        var (review, targetSnapshotId) = resolved.Value;
+        return new PlanMappingResponse(
+            record.PlanId,
+            checked((int)record.Version),
+            ETag(record.Version),
+            targetSnapshotId,
+            review.Problems.Select(ToProblem).ToArray(),
+            review
+                .Tables.Select(table => new PlanMappingTableResponse(
+                    new PlanReviewAddressResponse(table.Source.Schema, table.Source.Name),
+                    new PlanReviewAddressResponse(table.Target.Schema, table.Target.Name),
+                    table.TargetExists,
+                    table.IsRoot,
+                    table
+                        .Columns.Where(column => column.Target is not null)
+                        .Select(column => column.Target!)
+                        .Concat(table.TargetOnlyColumns.Select(column => column.Name))
+                        .Distinct(DatabaseNames.Comparer)
+                        .ToArray(),
+                    table
+                        .Columns.Select(column => new PlanMappingColumnResponse(
+                            column.Source,
+                            column.SourceType,
+                            column.SourceNullable,
+                            column.Target,
+                            column.TargetType,
+                            column.TargetNullable,
+                            column.IsKey,
+                            column.IsForeignKey,
+                            column.Origin,
+                            column.Problems.Select(ToProblem).ToArray()
+                        ))
+                        .ToArray(),
+                    table
+                        .TargetOnlyColumns.Select(column => new PlanMappingTargetColumnResponse(
+                            column.Name,
+                            column.Type,
+                            column.IsNullable,
+                            column.Problems.Select(ToProblem).ToArray()
+                        ))
+                        .ToArray(),
+                    table.Problems.Select(ToProblem).ToArray()
+                ))
+                .ToArray()
+        );
+    }
+
+    private static PlanMappingProblemResponse ToProblem(MappingProblem problem) =>
+        new(problem.Code, problem.Message, problem.IsBlocker);
+
+    /// <summary>
+    /// The mapping as sealing will see it, from the selection's own snapshot and the target's latest one; null while
+    /// the plan lacks a selection that can be mapped.
+    /// </summary>
+    private async Task<(PlanMappingReview Review, Guid? TargetSnapshotId)?> ResolveMappingAsync(
+        PlanRecord record,
+        CancellationToken cancellationToken
+    )
+    {
+        if (record.SelectionId is not Guid selectionId)
+            return null;
+        var selection = await selections.FindAsync(selectionId, cancellationToken);
+        if (
+            selection is null
+            || selection.ConnectionId is not Guid connectionId
+            || selection.SnapshotId is not Guid snapshotId
+            || string.IsNullOrWhiteSpace(selection.RootSchema)
+            || string.IsNullOrWhiteSpace(selection.RootTable)
+            || selection.StableKeyColumns is not { Count: > 0 } keyColumns
+        )
+            return null;
+        var source = await snapshots.FindAsync(connectionId, snapshotId, cancellationToken);
+        if (source is null)
+            return null;
+        var target = record.TargetConnectionId is Guid targetConnectionId
+            ? (await snapshots.ListAsync(targetConnectionId, cancellationToken))
+                .OrderByDescending(snapshot => snapshot.CapturedAtUtc)
+                .FirstOrDefault()
+            : null;
+        var review = PlanMappingResolver.Resolve(
+            source.Content,
+            target?.Content,
+            new SchemaTableAddress(selection.RootSchema, selection.RootTable),
+            keyColumns,
+            record.MappingOverrides ?? []
+        );
+        return (review, target?.SnapshotId);
     }
 
     private static PlanResponse ToPlanResponse(PlanRecord record) =>
@@ -629,6 +759,7 @@ public sealed class DataPitcherApplication(
             SourceOrphansException => "source_orphans",
             UniqueKeyCollisionException => "unique_key_collision",
             PlanInUseException => "plan_in_use",
+            MappingInvalidException => "mapping_invalid",
             InvalidOperationException or NotSupportedException => "seal_rejected",
             _ => "seal_failed",
         };
@@ -745,6 +876,9 @@ public sealed class DataPitcherApplication(
         }
         var notSealed = new PlanReviewMessageResponse("plan_not_sealed", "This plan has not completed sealing.");
         var reasons = new[] { notSealed }.Concat(failed).ToArray();
+        // Mapping problems are shown here, before sealing, so the operator fixes them where the plan is edited.
+        var mapping = (await ResolveMappingAsync(record, cancellationToken))?.Review;
+        var mappingProblems = mapping?.AllProblems.ToArray() ?? [];
         return new PlanReviewResponse(
             record.PlanId,
             checked((int)record.Version),
@@ -755,8 +889,17 @@ public sealed class DataPitcherApplication(
             [],
             [],
             [],
-            [],
-            reasons,
+            mappingProblems
+                .Where(problem => !problem.IsBlocker)
+                .Select(problem => new PlanReviewMessageResponse(problem.Code, problem.Message))
+                .ToArray(),
+            reasons
+                .Concat(
+                    mappingProblems
+                        .Where(problem => problem.IsBlocker)
+                        .Select(problem => new PlanReviewMessageResponse(problem.Code, problem.Message))
+                )
+                .ToArray(),
             selection is null
                 ? null
                 : new PlanReviewSelectionResponse(

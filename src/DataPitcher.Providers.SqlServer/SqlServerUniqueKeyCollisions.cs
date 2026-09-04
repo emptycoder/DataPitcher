@@ -24,23 +24,32 @@ public static class SqlServerUniqueKeyCollisions
         string sourceConnectionString,
         string targetConnectionString,
         Guid planId,
-        TableDefinition table,
+        TableMapping mapping,
         IReadOnlyList<string> stableKeys,
         CancellationToken cancellationToken
     )
     {
         var shape = await new SqlServerTransferSchemaReader(targetConnectionString).ReadAsync(
-            table.Schema,
-            table.Name,
-            stableKeys,
+            mapping.Target.Schema,
+            mapping.Target.Name,
+            stableKeys.Select(column => Target(mapping, column)).ToArray(),
             cancellationToken
         );
-        var address = new TableAddress(table.Schema, table.Name);
+        var mapped = mapping.Columns.Select(column => column.Target).ToHashSet(DatabaseNames.Comparer);
+        var address = mapping.Source;
         var result = new List<UniqueKeyCollision>();
-        foreach (var unique in shape.UniqueKeys)
+        // A unique key over a column the plan does not write cannot collide on the rows' account.
+        foreach (var unique in shape.UniqueKeys.Where(key => key.All(column => mapped.Contains(column.Name))))
         {
             var columns = shape.StableKeyColumns.Concat(unique).DistinctBy(column => column.Name).ToArray();
-            var candidates = await ReadPlannedAsync(sourceConnectionString, planId, shape, columns, cancellationToken);
+            var candidates = await ReadPlannedAsync(
+                sourceConnectionString,
+                planId,
+                mapping,
+                shape,
+                columns,
+                cancellationToken
+            );
             var collision = await ProbeAsync(
                 targetConnectionString,
                 shape,
@@ -62,9 +71,11 @@ public static class SqlServerUniqueKeyCollisions
         return result;
     }
 
+    /// <summary>The planned rows' values for these target columns, read from the source columns the plan maps to them.</summary>
     private static async Task<DataTable> ReadPlannedAsync(
         string sourceConnectionString,
         Guid planId,
+        TableMapping mapping,
         SqlServerWriteTable shape,
         IReadOnlyList<SqlServerWriteColumn> columns,
         CancellationToken cancellationToken
@@ -75,16 +86,17 @@ public static class SqlServerUniqueKeyCollisions
             data.Columns.Add(column.Name, column.ClrType);
         var sql =
             "SELECT "
-            + string.Join(",", columns.Select(column => "s." + SqlServerIdentifier.Quote(column.Name)))
+            + string.Join(",", columns.Select(column => "s." + SqlServerIdentifier.Quote(Source(mapping, column.Name))))
             + " FROM "
-            + SqlServerIdentifier.Qualified(shape.Target.Schema, shape.Target.Name)
+            + SqlServerIdentifier.Qualified(mapping.Source.Schema, mapping.Source.Name)
             + " s JOIN "
-            + SqlServerStagingTables.Qualified(SqlServerStagingTables.SourceTableName(planId, shape.Target))
+            + SqlServerStagingTables.Qualified(SqlServerStagingTables.SourceTableName(planId, mapping.Source))
             + " f ON f.[__included]=1 AND "
             + string.Join(
                 " AND ",
                 shape.StableKeyColumns.Select(
-                    (column, index) => "s." + SqlServerIdentifier.Quote(column.Name) + "=f.[k" + index + "]"
+                    (column, index) =>
+                        "s." + SqlServerIdentifier.Quote(Source(mapping, column.Name)) + "=f.[k" + index + "]"
                 )
             );
         await using var connection = new SqlConnection(sourceConnectionString);
@@ -179,6 +191,12 @@ public static class SqlServerUniqueKeyCollisions
         await drop.ExecuteNonQueryAsync(cancellationToken);
         return (rows, samples);
     }
+
+    private static string Target(TableMapping mapping, string source) =>
+        mapping.Columns.Single(column => DatabaseNames.Equals(column.Source, source)).Target;
+
+    private static string Source(TableMapping mapping, string target) =>
+        mapping.Columns.Single(column => DatabaseNames.Equals(column.Target, target)).Source;
 
     /// <summary>"Id=5 (source) -> Id=9 (target)" for the stable key columns read twice from the same row.</summary>
     internal static string Describe(IReadOnlyList<SqlServerWriteColumn> keys, IDataRecord record) =>

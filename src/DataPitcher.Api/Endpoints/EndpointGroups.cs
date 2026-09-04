@@ -112,6 +112,9 @@ public static class EndpointGroups
             plans.MapPost("/{planId:guid}/seal", QueuePlanSealAsync).RequireAuthorization(ApiPolicyNames.PlansSeal)
         );
         WithStandardProblems(
+            plans.MapGet("/{planId:guid}/mapping", GetPlanMappingAsync).RequireAuthorization(ApiPolicyNames.PlansRead)
+        );
+        WithStandardProblems(
             plans.MapGet("/{planId:guid}/review", GetPlanReviewAsync).RequireAuthorization(ApiPolicyNames.PlansRead)
         );
         WithStandardProblems(
@@ -668,6 +671,29 @@ public static class EndpointGroups
                 extensions: new Dictionary<string, object?> { ["code"] = "seal_failed" }
             );
         }
+    }
+
+    private static async Task<Results<Ok<PlanMappingResponse>, ProblemHttpResult>> GetPlanMappingAsync(
+        Guid planId,
+        HttpContext context,
+        ClaimsPrincipal user,
+        IAuthorizationService authorizationService,
+        IDataPitcherApplication application,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            await AuthorizeResourceAsync(
+                context,
+                authorizationService,
+                user,
+                new PlanResource(planId),
+                Permissions.PlansRead
+            ) is
+            { } problem
+        )
+            return problem;
+        return TypedResults.Ok(await application.GetPlanMappingAsync(planId, cancellationToken));
     }
 
     private static async Task<Results<Ok<PlanReviewResponse>, ProblemHttpResult>> GetPlanReviewAsync(
