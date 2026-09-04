@@ -189,8 +189,8 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
       {plan.blockers.length > 0 ? (
         <Alert className="mb-5" title={sealed ? 'Blocked' : 'Not sealed yet'} tone={sealed ? 'danger' : 'warning'}>
           <ul className={cx(plan.blockers.length > 1 && 'list-disc pl-4')}>
-            {plan.blockers.map((blocker) => (
-              <li key={blocker.code}>
+            {plan.blockers.map((blocker, index) => (
+              <li key={`${blocker.code}:${index}`}>
                 {blocker.message}
                 {!associated && blocker.code === 'plan_not_sealed' ? ' Associate a selection, a source and a target, then seal.' : ''}
               </li>
@@ -201,8 +201,8 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
       {plan.warnings.length > 0 ? (
         <Alert className="mb-5" title="Warnings" tone="warning">
           <ul className="list-disc pl-4">
-            {plan.warnings.map((warning) => (
-              <li key={warning.code}>{warning.message}</li>
+            {plan.warnings.map((warning, index) => (
+              <li key={`${warning.code}:${index}`}>{warning.message}</li>
             ))}
           </ul>
         </Alert>
