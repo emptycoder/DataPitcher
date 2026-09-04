@@ -19,8 +19,9 @@ public sealed class SqlServerTransferSchemaReader(string connectionString)
         CancellationToken cancellationToken
     )
     {
+        // Matched without regard to case; the table's own spelling comes back with it and is what SQL then quotes.
         const string sql =
-            "SELECT c.name,ty.name,c.max_length,c.is_nullable,c.is_identity,c.is_computed,CASE WHEN ty.name='timestamp' THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,c.collation_name,c.precision,c.scale FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id JOIN sys.columns c ON c.object_id=t.object_id JOIN sys.types ty ON ty.user_type_id=c.user_type_id WHERE s.name=@schema AND t.name=@table ORDER BY c.column_id";
+            "SELECT c.name,ty.name,c.max_length,c.is_nullable,c.is_identity,c.is_computed,CASE WHEN ty.name='timestamp' THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END,c.collation_name,c.precision,c.scale,s.name,t.name FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id JOIN sys.columns c ON c.object_id=t.object_id JOIN sys.types ty ON ty.user_type_id=c.user_type_id WHERE LOWER(s.name)=LOWER(@schema) AND LOWER(t.name)=LOWER(@table) ORDER BY c.column_id";
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var command = new SqlCommand(sql, connection);
@@ -28,8 +29,10 @@ public sealed class SqlServerTransferSchemaReader(string connectionString)
         command.Parameters.AddWithValue("@table", table);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var columns = new List<SqlServerWriteColumn>();
+        var actual = new TableAddress(schema, table);
         while (await reader.ReadAsync(cancellationToken))
         {
+            actual = new TableAddress(reader.GetString(10), reader.GetString(11));
             var name = reader.GetString(0);
             var typeName = reader.GetString(1);
             var computed = reader.GetBoolean(5);
@@ -46,7 +49,7 @@ public sealed class SqlServerTransferSchemaReader(string connectionString)
                     ),
                     mapped.Item1,
                     mapped.Item2,
-                    stableKeys.Contains(name, StringComparer.Ordinal),
+                    stableKeys.Contains(name, DatabaseNames.Comparer),
                     reader.GetBoolean(4),
                     computed,
                     rowVersion,
@@ -57,9 +60,9 @@ public sealed class SqlServerTransferSchemaReader(string connectionString)
         }
         await reader.CloseAsync();
         return new SqlServerWriteTable(
-            new TableAddress(schema, table),
+            actual,
             columns,
-            await UniqueKeysAsync(connection, schema, table, cancellationToken)
+            await UniqueKeysAsync(connection, actual.Schema, actual.Name, cancellationToken)
         );
     }
 

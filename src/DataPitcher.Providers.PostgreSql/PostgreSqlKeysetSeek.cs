@@ -50,7 +50,9 @@ public static class PostgreSqlKeysetSeek
                 parameters.Add(
                     new NpgsqlParameter("k" + index, columns[index].ProviderType)
                     {
-                        Value = after.Components.Single(x => x.Column == columns[index].Name).Value!,
+                        Value = after
+                            .Components.Single(x => DatabaseNames.Equals(x.Column, columns[index].Name))
+                            .Value!,
                     }
                 );
         parameters.Add(new NpgsqlParameter("limit", limit));

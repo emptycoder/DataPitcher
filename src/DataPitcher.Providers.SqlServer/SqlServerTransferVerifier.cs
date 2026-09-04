@@ -12,9 +12,10 @@ namespace DataPitcher.Providers.SqlServer;
 
 /// <summary>
 /// Proves a completed run against its plan after the final batch committed: the run read every planned row
-/// (manifest counts equal the sealed counts), the keys it wrote or found equal the manifest (StrictExact), and the
-/// rows it staged resolve every planned foreign key in the target. Bounded to this run's rows; never a table scan
-/// of the target.
+/// (manifest counts equal the sealed counts), every staged row is in the target, the keys it wrote or found equal
+/// the manifest (StrictExact), and the rows it staged resolve every planned foreign key in the target. Bounded to
+/// this run's rows; never a table scan of the target. Table and column names are resolved to the target's own
+/// spelling before they are quoted.
 /// </summary>
 public sealed class SqlServerTransferVerifier(string targetConnectionString)
 {
@@ -25,11 +26,20 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
     )
     {
         var planned = content.Tables.Where(table => table.Manifest.PlannedWrites > 0).ToArray();
+        var reader = new SqlServerTransferSchemaReader(targetConnectionString);
+        var shapes = new Dictionary<TableAddress, SqlServerWriteTable>();
+        foreach (var table in planned)
+            shapes[table.Mapping.Source] = await reader.ReadAsync(
+                table.Mapping.Target.Schema,
+                table.Mapping.Target.Name,
+                KeyColumns(content, table),
+                cancellationToken
+            );
         await using var connection = new SqlConnection(targetConnectionString);
         await connection.OpenAsync(cancellationToken);
-        await VerifyCountsAsync(connection, planned, context, cancellationToken);
+        await VerifyCountsAsync(connection, planned, shapes, context, cancellationToken);
         foreach (var table in planned)
-            await VerifyPresenceAsync(connection, content, table, context, cancellationToken);
+            await VerifyPresenceAsync(connection, shapes[table.Mapping.Source], context, cancellationToken);
         if (content.VerificationStrategy == VerificationStrategy.StrictExact)
             await new SqlServerStrictExact(targetConnectionString).VerifyAsync(context, cancellationToken);
         foreach (var table in planned)
@@ -38,13 +48,35 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
                 Same(relationship.From, table.Mapping.Source)
             )
         )
-            await VerifyRelationshipAsync(connection, content, table, relationship, context, cancellationToken);
+        {
+            var parentPlan = content.Tables.FirstOrDefault(candidate =>
+                Same(candidate.Mapping.Source, relationship.To)
+            );
+            var parent = await reader.ReadAsync(
+                parentPlan?.Mapping.Target.Schema ?? relationship.To.Schema,
+                parentPlan?.Mapping.Target.Name ?? relationship.To.Name,
+                relationship
+                    .ToColumns.Select(column => parentPlan is null ? column : TargetColumn(parentPlan, column))
+                    .ToArray(),
+                cancellationToken
+            );
+            await VerifyRelationshipAsync(
+                connection,
+                shapes[table.Mapping.Source],
+                parent,
+                table,
+                relationship,
+                context,
+                cancellationToken
+            );
+        }
     }
 
     /// <summary>The manifest must hold exactly as many keys per table as sealing counted; fewer means rows were never read.</summary>
     private static async Task VerifyCountsAsync(
         SqlConnection connection,
         IReadOnlyList<PlanTable> planned,
+        IReadOnlyDictionary<TableAddress, SqlServerWriteTable> shapes,
         SqlServerExecutionContext context,
         CancellationToken cancellationToken
     )
@@ -65,8 +97,10 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
         }
         var mismatches = planned
             .Select(table =>
-                (Table: table, Read: counts.GetValueOrDefault((table.Mapping.Target.Schema, table.Mapping.Target.Name)))
-            )
+            {
+                var target = shapes[table.Mapping.Source].Target;
+                return (Table: table, Read: counts.GetValueOrDefault((target.Schema, target.Name)));
+            })
             .Where(item => item.Read != item.Table.Manifest.PlannedWrites)
             .Select(item =>
                 $"{item.Table.Mapping.Target.Schema}.{item.Table.Mapping.Target.Name}: the plan sealed {item.Table.Manifest.PlannedWrites} row(s) but the run moved {item.Read}"
@@ -81,26 +115,21 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
     /// <summary>Every row this run staged must exist in the target now, whatever the ledger says about it.</summary>
     private static async Task VerifyPresenceAsync(
         SqlConnection connection,
-        TransferPlanContent content,
-        PlanTable table,
+        SqlServerWriteTable shape,
         SqlServerExecutionContext context,
         CancellationToken cancellationToken
     )
     {
-        var keyColumns = content
-            .StableKeys.Single(key => Same(key.Table, table.Mapping.Source))
-            .Columns.Select(column => TargetColumn(table, column))
-            .ToArray();
         var sql =
             "SELECT COUNT(*) FROM "
-            + SqlServerBatchStageWriter.StageName(table.Mapping.Target)
+            + SqlServerBatchStageWriter.StageName(shape)
             + " s WHERE s.job_id=@job AND s.run_id=@run AND NOT EXISTS (SELECT 1 FROM "
-            + SqlServerIdentifier.Qualified(table.Mapping.Target.Schema, table.Mapping.Target.Name)
+            + SqlServerIdentifier.Qualified(shape.Target.Schema, shape.Target.Name)
             + " t WHERE "
             + string.Join(
                 " AND ",
-                keyColumns.Select(column =>
-                    "t." + SqlServerIdentifier.Quote(column) + "=s." + SqlServerIdentifier.Quote(column)
+                shape.StableKeyColumns.Select(column =>
+                    "t." + SqlServerIdentifier.Quote(column.Name) + "=s." + SqlServerIdentifier.Quote(column.Name)
                 )
             )
             + ")";
@@ -110,7 +139,7 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
         var missing = (int)(await command.ExecuteScalarAsync(cancellationToken))!;
         if (missing != 0)
             throw new TransferVerificationException(
-                $"{missing} planned row(s) of {table.Mapping.Target.Schema}.{table.Mapping.Target.Name} are not in the target."
+                $"{missing} planned row(s) of {shape.Target.Schema}.{shape.Target.Name} are not in the target."
             );
     }
 
@@ -120,38 +149,28 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
     /// </summary>
     private static async Task VerifyRelationshipAsync(
         SqlConnection connection,
-        TransferPlanContent content,
+        SqlServerWriteTable child,
+        SqlServerWriteTable parent,
         PlanTable table,
         RelationshipPolicy relationship,
         SqlServerExecutionContext context,
         CancellationToken cancellationToken
     )
     {
-        var parent = content.Tables.FirstOrDefault(candidate => Same(candidate.Mapping.Source, relationship.To));
-        var childColumns = relationship.FromColumns.Select(column => TargetColumn(table, column)).ToArray();
-        var parentColumns = relationship
-            .ToColumns.Select(column => parent is null ? column : TargetColumn(parent, column))
+        var childColumns = relationship
+            .FromColumns.Select(column => child.Column(TargetColumn(table, column)).Name)
             .ToArray();
-        var keyColumns = content
-            .StableKeys.Single(key => Same(key.Table, table.Mapping.Source))
-            .Columns.Select(column => TargetColumn(table, column))
-            .ToArray();
-        var stage = SqlServerBatchStageWriter.StageName(table.Mapping.Target);
-        var child = SqlServerIdentifier.Qualified(table.Mapping.Target.Schema, table.Mapping.Target.Name);
-        var parentTable = SqlServerIdentifier.Qualified(
-            parent?.Mapping.Target.Schema ?? relationship.To.Schema,
-            parent?.Mapping.Target.Name ?? relationship.To.Name
-        );
+        var parentColumns = parent.StableKeyColumns.Select(column => column.Name).ToArray();
         var sql =
             "SELECT COUNT(*) FROM "
-            + stage
+            + SqlServerBatchStageWriter.StageName(child)
             + " s JOIN "
-            + child
+            + SqlServerIdentifier.Qualified(child.Target.Schema, child.Target.Name)
             + " c ON "
             + string.Join(
                 " AND ",
-                keyColumns.Select(column =>
-                    "s." + SqlServerIdentifier.Quote(column) + "=c." + SqlServerIdentifier.Quote(column)
+                child.StableKeyColumns.Select(column =>
+                    "s." + SqlServerIdentifier.Quote(column.Name) + "=c." + SqlServerIdentifier.Quote(column.Name)
                 )
             )
             + " WHERE s.job_id=@job AND s.run_id=@run AND "
@@ -160,7 +179,7 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
                 childColumns.Select(column => "c." + SqlServerIdentifier.Quote(column) + " IS NOT NULL")
             )
             + " AND NOT EXISTS (SELECT 1 FROM "
-            + parentTable
+            + SqlServerIdentifier.Qualified(parent.Target.Schema, parent.Target.Name)
             + " p WHERE "
             + string.Join(
                 " AND ",
@@ -181,10 +200,15 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
             );
     }
 
+    private static string[] KeyColumns(TransferPlanContent content, PlanTable table) =>
+        content
+            .StableKeys.Single(key => Same(key.Table, table.Mapping.Source))
+            .Columns.Select(column => TargetColumn(table, column))
+            .ToArray();
+
     private static string TargetColumn(PlanTable table, string sourceColumn) =>
-        table.Mapping.Columns.Single(mapping => StringComparer.Ordinal.Equals(mapping.Source, sourceColumn)).Target;
+        table.Mapping.Columns.Single(mapping => DatabaseNames.Equals(mapping.Source, sourceColumn)).Target;
 
     private static bool Same(TableAddress left, TableAddress right) =>
-        StringComparer.Ordinal.Equals(left.Schema, right.Schema)
-        && StringComparer.Ordinal.Equals(left.Name, right.Name);
+        DatabaseNames.Equals(left.Schema, right.Schema) && DatabaseNames.Equals(left.Name, right.Name);
 }

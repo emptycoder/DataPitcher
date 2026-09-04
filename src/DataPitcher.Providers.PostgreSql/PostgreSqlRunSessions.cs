@@ -212,7 +212,7 @@ public sealed class PostgreSqlRunSessions(
         private static int[] Indexes(PostgreSqlWriteTable source, IReadOnlyList<string> columns) =>
             source
                 .InsertColumns.Select((column, index) => (column.Name, Index: index))
-                .Where(item => columns.Contains(item.Name, StringComparer.Ordinal))
+                .Where(item => columns.Contains(item.Name, DatabaseNames.Comparer))
                 .Select(item => item.Index)
                 .ToArray();
 
@@ -239,7 +239,11 @@ public sealed class PostgreSqlRunSessions(
             for (var index = 0; index < source.StableKeyColumns.Count; index++)
                 command.Parameters.AddWithValue(
                     "p" + index,
-                    key.Components.Single(component => component.Column == source.StableKeyColumns[index].Name).Value!
+                    key
+                        .Components.Single(component =>
+                            DatabaseNames.Equals(component.Column, source.StableKeyColumns[index].Name)
+                        )
+                        .Value!
                 );
             return (int)(await command.ExecuteScalarAsync(cancellationToken))!;
         }
@@ -312,7 +316,7 @@ public sealed class PostgreSqlRunSessions(
             var mappings = planTable.Mapping.Columns;
             var targetKeys = stableKey
                 .Columns.Select(column =>
-                    mappings.Single(mapping => StringComparer.Ordinal.Equals(mapping.Source, column)).Target
+                    mappings.Single(mapping => DatabaseNames.Equals(mapping.Source, column)).Target
                 )
                 .ToArray();
             var target = await TargetAsync(planTable, targetKeys, cancellationToken);
@@ -322,13 +326,13 @@ public sealed class PostgreSqlRunSessions(
                 // Stable key plus the deferred columns only: the values held back to break a cycle.
                 var deferredTargets = planTable
                     .BackfilledColumns.Select(column =>
-                        mappings.Single(mapping => StringComparer.Ordinal.Equals(mapping.Source, column)).Target
+                        mappings.Single(mapping => DatabaseNames.Equals(mapping.Source, column)).Target
                     )
                     .ToArray();
                 var subset = new PostgreSqlWriteTable(
                     target.Target,
                     target.Columns.Where(column =>
-                        column.IsStableKey || deferredTargets.Contains(column.Name, StringComparer.Ordinal)
+                        column.IsStableKey || deferredTargets.Contains(column.Name, DatabaseNames.Comparer)
                     )
                 );
                 var deferredSources = stableKey.Columns.Concat(planTable.BackfilledColumns).ToArray();
@@ -393,9 +397,7 @@ public sealed class PostgreSqlRunSessions(
             var stableKey = StableKey(content, planTable);
             var targetKeys = stableKey
                 .Columns.Select(column =>
-                    planTable
-                        .Mapping.Columns.Single(mapping => StringComparer.Ordinal.Equals(mapping.Source, column))
-                        .Target
+                    planTable.Mapping.Columns.Single(mapping => DatabaseNames.Equals(mapping.Source, column)).Target
                 )
                 .ToArray();
             var target = await TargetAsync(planTable, targetKeys, cancellationToken);
@@ -468,7 +470,7 @@ public sealed class PostgreSqlRunSessions(
                 .Concat(
                     table
                         .Mapping.Columns.Where(mapping =>
-                            !stableKey.Columns.Contains(mapping.Source, StringComparer.Ordinal)
+                            !stableKey.Columns.Contains(mapping.Source, DatabaseNames.Comparer)
                         )
                         .Select(mapping => schema.Column(mapping.Source))
                 )
@@ -479,7 +481,7 @@ public sealed class PostgreSqlRunSessions(
             .Columns.Concat(
                 table
                     .Mapping.Columns.Where(mapping =>
-                        !stableKey.Columns.Contains(mapping.Source, StringComparer.Ordinal)
+                        !stableKey.Columns.Contains(mapping.Source, DatabaseNames.Comparer)
                     )
                     .Select(mapping => mapping.Source)
             )
@@ -497,8 +499,7 @@ public sealed class PostgreSqlRunSessions(
         };
 
     private static bool Same(TableAddress left, TableAddress right) =>
-        StringComparer.Ordinal.Equals(left.Schema, right.Schema)
-        && StringComparer.Ordinal.Equals(left.Name, right.Name);
+        DatabaseNames.Equals(left.Schema, right.Schema) && DatabaseNames.Equals(left.Name, right.Name);
 
     private static PostgreSqlExecutionContext Context(TransferRun run, LeaseGrant lease) =>
         new(run.JobId, run.RunId, lease.FenceToken, run.ManifestSealHash);
@@ -516,7 +517,7 @@ public sealed class PostgreSqlRunSessions(
     private static StableKey TargetKey(StableKey source, IReadOnlyList<ColumnMapping> mappings) =>
         new(
             source.Components.Select(component => new KeyComponent(
-                mappings.Single(mapping => StringComparer.Ordinal.Equals(mapping.Source, component.Column)).Target,
+                mappings.Single(mapping => DatabaseNames.Equals(mapping.Source, component.Column)).Target,
                 component.Value
             ))
         );
@@ -524,7 +525,7 @@ public sealed class PostgreSqlRunSessions(
     private static StableKey SourceKey(StableKey target, IReadOnlyList<ColumnMapping> mappings) =>
         new(
             target.Components.Select(component => new KeyComponent(
-                mappings.Single(mapping => StringComparer.Ordinal.Equals(mapping.Target, component.Column)).Source,
+                mappings.Single(mapping => DatabaseNames.Equals(mapping.Target, component.Column)).Source,
                 component.Value
             ))
         );
@@ -542,10 +543,10 @@ public sealed class PostgreSqlRunSessions(
                 row.Values[
                     Array.IndexOf(
                         sourceColumns.ToArray(),
-                        mappings.Single(mapping => StringComparer.Ordinal.Equals(mapping.Target, column.Name)).Source
+                        mappings.Single(mapping => DatabaseNames.Equals(mapping.Target, column.Name)).Source
                     )
                 ],
-            StringComparer.Ordinal
+            DatabaseNames.Comparer
         );
         return new PostgreSqlTransferRow(
             new StableKey(target.StableKeyColumns.Select(column => new KeyComponent(column.Name, values[column.Name]))),

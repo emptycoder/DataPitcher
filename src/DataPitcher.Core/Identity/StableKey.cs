@@ -3,7 +3,7 @@ namespace DataPitcher.Core.Identity;
 public readonly record struct KeyComponent(string Column, object? Value)
 {
     public bool Equals(KeyComponent other) =>
-        StringComparer.Ordinal.Equals(Column, other.Column)
+        DataPitcher.Core.Schema.DatabaseNames.Equals(Column, other.Column)
         && (
             Value is byte[] bytes && other.Value is byte[] otherBytes
                 ? bytes.AsSpan().SequenceEqual(otherBytes)
@@ -13,7 +13,7 @@ public readonly record struct KeyComponent(string Column, object? Value)
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        hash.Add(Column, StringComparer.Ordinal);
+        hash.Add(Column, DataPitcher.Core.Schema.DatabaseNames.Comparer);
         if (Value is byte[] bytes)
             foreach (var value in bytes)
                 hash.Add(value);
@@ -59,7 +59,7 @@ public sealed class StableKey : IEquatable<StableKey>, IComparable<StableKey>
             return 1;
         foreach (var pair in _components.Zip(other._components))
         {
-            var column = StringComparer.Ordinal.Compare(pair.First.Column, pair.Second.Column);
+            var column = DataPitcher.Core.Schema.DatabaseNames.Comparer.Compare(pair.First.Column, pair.Second.Column);
             if (column != 0)
                 return column;
             var value = CompareValues(pair.First.Value, pair.Second.Value);

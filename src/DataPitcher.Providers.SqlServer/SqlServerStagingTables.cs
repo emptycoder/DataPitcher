@@ -98,7 +98,10 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
             connection
         );
         for (var i = 0; i < columns.Count; i++)
-            command.Parameters.AddWithValue($"@p{i}", key.Components.Single(k => k.Column == columns[i]).Value!);
+            command.Parameters.AddWithValue(
+                $"@p{i}",
+                key.Components.Single(k => DatabaseNames.Equals(k.Column, columns[i])).Value!
+            );
         return Convert.ToInt32(await command.ExecuteScalarAsync(ct));
     }
 
@@ -314,7 +317,7 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
         {
             var row = data.NewRow();
             foreach (var pair in columns.Select((column, i) => (column, i)))
-                row[$"k{pair.i}"] = key.Components.Single(x => x.Column == pair.column).Value!;
+                row[$"k{pair.i}"] = key.Components.Single(x => DatabaseNames.Equals(x.Column, pair.column)).Value!;
             row["__generation"] = 0;
             data.Rows.Add(row);
         }

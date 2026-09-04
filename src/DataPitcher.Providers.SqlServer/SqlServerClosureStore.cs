@@ -65,15 +65,17 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         ValidateKeyTypes(table, keys);
         await _stages.ReplaceTargetCandidatesAsync(table, keys, cancellationToken);
         var columns = KeyColumns(table);
+        var target = TargetDefinition(table);
+        var targetColumns = columns.Select(column => TargetColumn(target, column)).ToArray();
         var select = string.Join(", ", columns.Select((_, i) => $"s.[k{i}]"));
         var join = string.Join(
             " AND ",
-            columns.Select((column, i) => $"s.[k{i}]=t.{SqlServerIdentifier.Quote(column)}")
+            targetColumns.Select((column, i) => $"s.[k{i}]=t.{SqlServerIdentifier.Quote(column)}")
         );
         var sql =
-            $"/* DataPitcher.ProbeTarget */ SELECT {select}, CASE WHEN t.{SqlServerIdentifier.Quote(columns[0])} IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END "
+            $"/* DataPitcher.ProbeTarget */ SELECT {select}, CASE WHEN t.{SqlServerIdentifier.Quote(targetColumns[0])} IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END "
             + $"FROM {SqlServerStagingTables.Qualified(_stages.TargetTableName(table))} s "
-            + $"LEFT JOIN {Qualified(table)} t ON {join}";
+            + $"LEFT JOIN {Qualified(target)} t ON {join}";
         var states = outgoingRelationships.ToDictionary(relationship => relationship, TargetState);
         var result = new Dictionary<StableKey, TargetProbe>();
         await using var connection = new SqlConnection(_stages.TargetConnectionString);
@@ -143,6 +145,20 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
 
     private IReadOnlyList<string> KeyColumns(TableDefinition table) => _keys[table].Constraint!.Columns;
 
+    /// <summary>The target's own spelling of a source table's name, so the probe can be quoted correctly.</summary>
+    /// <summary>The target's own spelling of a key column, matched without regard to case.</summary>
+    private static string TargetColumn(TableDefinition target, string column) =>
+        target.Columns.FirstOrDefault(candidate => DatabaseNames.Equals(candidate.Name, column))?.Name ?? column;
+
+    private TableDefinition TargetDefinition(TableDefinition table) =>
+        _target
+            .Tables.FirstOrDefault(candidate =>
+                DatabaseNames.Equals(candidate.Definition.Schema, table.Schema)
+                && DatabaseNames.Equals(candidate.Definition.Name, table.Name)
+            )
+            ?.Definition
+        ?? table;
+
     private TargetConstraintState TargetState(ClosureRelationship relationship)
     {
         if (relationship.ForeignKey is not { } sourceForeignKey)
@@ -151,8 +167,8 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         var targetForeignKey = _target.ForeignKeys.SingleOrDefault(foreignKey =>
             foreignKey.ChildTable == sourceForeignKey.ChildTable
             && foreignKey.ParentTable == sourceForeignKey.ParentTable
-            && foreignKey.ChildColumns.SequenceEqual(sourceForeignKey.ChildColumns)
-            && foreignKey.ParentColumns.SequenceEqual(sourceForeignKey.ParentColumns)
+            && foreignKey.ChildColumns.SequenceEqual(sourceForeignKey.ChildColumns, DatabaseNames.Comparer)
+            && foreignKey.ParentColumns.SequenceEqual(sourceForeignKey.ParentColumns, DatabaseNames.Comparer)
         );
         return targetForeignKey is null
             ? new TargetConstraintState(relationship.Name, false, false, false)
@@ -180,7 +196,7 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         foreach (var key in keys)
         foreach (var column in columns)
         {
-            var value = key.Components.Single(component => component.Column == column).Value;
+            var value = key.Components.Single(component => DatabaseNames.Equals(component.Column, column)).Value;
             if (value is null || value.GetType() != metadata.Column(column).ClrType)
                 throw new InvalidOperationException("Stable-key CLR type does not match catalog metadata.");
         }

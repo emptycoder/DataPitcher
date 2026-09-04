@@ -42,7 +42,7 @@ public sealed class PostgreSqlWriteTable
         Target = target;
         Columns = Array.AsReadOnly(columns.ToArray());
         StableKeyColumns = Array.AsReadOnly(Columns.Where(x => x.IsStableKey).ToArray());
-        var stable = StableKeyColumns.Select(column => column.Name).ToHashSet(StringComparer.Ordinal);
+        var stable = StableKeyColumns.Select(column => column.Name).ToHashSet(DatabaseNames.Comparer);
         UniqueKeys = Array.AsReadOnly(
             (uniqueKeys ?? [])
                 .Where(key => !stable.SetEquals(key))
@@ -64,8 +64,7 @@ public sealed class PostgreSqlWriteTable
     /// <summary>Other unique keys of the target (constraints and unique indexes); a row colliding on any with a different target row stops the run.</summary>
     public IReadOnlyList<IReadOnlyList<PostgreSqlWriteColumn>> UniqueKeys { get; }
 
-    public PostgreSqlWriteColumn Column(string name) =>
-        Columns.Single(x => StringComparer.Ordinal.Equals(x.Name, name));
+    public PostgreSqlWriteColumn Column(string name) => Columns.Single(x => DatabaseNames.Equals(x.Name, name));
 }
 
 public sealed class PostgreSqlTransferRow
@@ -73,7 +72,7 @@ public sealed class PostgreSqlTransferRow
     public PostgreSqlTransferRow(StableKey stableKey, IReadOnlyDictionary<string, object?> values)
     {
         StableKey = stableKey;
-        Values = new Dictionary<string, object?>(values, StringComparer.Ordinal);
+        Values = new Dictionary<string, object?>(values, DatabaseNames.Comparer);
     }
 
     public StableKey StableKey { get; }
@@ -153,7 +152,7 @@ public static class PostgreSqlStableKeyCodec
         var buffer = new ArrayBufferWriter<byte>();
         foreach (var column in table.StableKeyColumns)
         {
-            var value = key.Components.Single(x => x.Column == column.Name).Value;
+            var value = key.Components.Single(x => DatabaseNames.Equals(x.Column, column.Name)).Value;
             if (value is null)
                 throw new ArgumentException("Stable-key values cannot be null.");
             Write(buffer, value, column.ProviderType);

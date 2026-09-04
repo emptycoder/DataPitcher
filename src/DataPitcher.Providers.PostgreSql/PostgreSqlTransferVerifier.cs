@@ -12,9 +12,10 @@ namespace DataPitcher.Providers.PostgreSql;
 
 /// <summary>
 /// Proves a completed run against its plan after the final batch committed: the run read every planned row
-/// (manifest counts equal the sealed counts), the keys it wrote or found equal the manifest (StrictExact), and the
-/// rows it staged resolve every planned foreign key in the target. Bounded to this run's rows; never a table scan
-/// of the target.
+/// (manifest counts equal the sealed counts), every staged row is in the target, the keys it wrote or found equal
+/// the manifest (StrictExact), and the rows it staged resolve every planned foreign key in the target. Bounded to
+/// this run's rows; never a table scan of the target. Table and column names are resolved to the target's own
+/// spelling before they are quoted.
 /// </summary>
 public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
 {
@@ -25,9 +26,18 @@ public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
     )
     {
         var planned = content.Tables.Where(table => table.Manifest.PlannedWrites > 0).ToArray();
-        await VerifyCountsAsync(planned, context, cancellationToken);
+        var reader = new PostgreSqlTransferSchemaReader(dataSource);
+        var shapes = new Dictionary<TableAddress, PostgreSqlWriteTable>();
         foreach (var table in planned)
-            await VerifyPresenceAsync(content, table, context, cancellationToken);
+            shapes[table.Mapping.Source] = await reader.ReadAsync(
+                table.Mapping.Target.Schema,
+                table.Mapping.Target.Name,
+                KeyColumns(content, table),
+                cancellationToken
+            );
+        await VerifyCountsAsync(planned, shapes, context, cancellationToken);
+        foreach (var table in planned)
+            await VerifyPresenceAsync(shapes[table.Mapping.Source], context, cancellationToken);
         if (content.VerificationStrategy == VerificationStrategy.StrictExact)
             await new PostgreSqlStrictExact(dataSource).VerifyAsync(context, cancellationToken);
         foreach (var table in planned)
@@ -36,12 +46,33 @@ public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
                 Same(relationship.From, table.Mapping.Source)
             )
         )
-            await VerifyRelationshipAsync(content, table, relationship, context, cancellationToken);
+        {
+            var parentPlan = content.Tables.FirstOrDefault(candidate =>
+                Same(candidate.Mapping.Source, relationship.To)
+            );
+            var parent = await reader.ReadAsync(
+                parentPlan?.Mapping.Target.Schema ?? relationship.To.Schema,
+                parentPlan?.Mapping.Target.Name ?? relationship.To.Name,
+                relationship
+                    .ToColumns.Select(column => parentPlan is null ? column : TargetColumn(parentPlan, column))
+                    .ToArray(),
+                cancellationToken
+            );
+            await VerifyRelationshipAsync(
+                shapes[table.Mapping.Source],
+                parent,
+                table,
+                relationship,
+                context,
+                cancellationToken
+            );
+        }
     }
 
     /// <summary>The manifest must hold exactly as many keys per table as sealing counted; fewer means rows were never read.</summary>
     private async Task VerifyCountsAsync(
         IReadOnlyList<PlanTable> planned,
+        IReadOnlyDictionary<TableAddress, PostgreSqlWriteTable> shapes,
         PostgreSqlExecutionContext context,
         CancellationToken cancellationToken
     )
@@ -61,8 +92,10 @@ public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
         }
         var mismatches = planned
             .Select(table =>
-                (Table: table, Read: counts.GetValueOrDefault((table.Mapping.Target.Schema, table.Mapping.Target.Name)))
-            )
+            {
+                var target = shapes[table.Mapping.Source].Target;
+                return (Table: table, Read: counts.GetValueOrDefault((target.Schema, target.Name)));
+            })
             .Where(item => item.Read != item.Table.Manifest.PlannedWrites)
             .Select(item =>
                 $"{item.Table.Mapping.Target.Schema}.{item.Table.Mapping.Target.Name}: the plan sealed {item.Table.Manifest.PlannedWrites} row(s) but the run moved {item.Read}"
@@ -76,26 +109,21 @@ public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
 
     /// <summary>Every row this run staged must exist in the target now, whatever the ledger says about it.</summary>
     private async Task VerifyPresenceAsync(
-        TransferPlanContent content,
-        PlanTable table,
+        PostgreSqlWriteTable shape,
         PostgreSqlExecutionContext context,
         CancellationToken cancellationToken
     )
     {
-        var keyColumns = content
-            .StableKeys.Single(key => Same(key.Table, table.Mapping.Source))
-            .Columns.Select(column => TargetColumn(table, column))
-            .ToArray();
         var sql =
             "SELECT count(*) FROM "
-            + PostgreSqlBatchStageWriter.StageName(table.Mapping.Target)
+            + PostgreSqlBatchStageWriter.StageName(shape)
             + " s WHERE s.job_id=@job AND s.run_id=@run AND NOT EXISTS (SELECT 1 FROM "
-            + PostgreSqlIdentifier.Qualified(table.Mapping.Target.Schema, table.Mapping.Target.Name)
+            + PostgreSqlIdentifier.Qualified(shape.Target.Schema, shape.Target.Name)
             + " t WHERE "
             + string.Join(
                 " AND ",
-                keyColumns.Select(column =>
-                    "t." + PostgreSqlIdentifier.Quote(column) + " = s." + PostgreSqlIdentifier.Quote(column)
+                shape.StableKeyColumns.Select(column =>
+                    "t." + PostgreSqlIdentifier.Quote(column.Name) + " = s." + PostgreSqlIdentifier.Quote(column.Name)
                 )
             )
             + ")";
@@ -105,7 +133,7 @@ public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
         var missing = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
         if (missing != 0)
             throw new TransferVerificationException(
-                $"{missing} planned row(s) of {table.Mapping.Target.Schema}.{table.Mapping.Target.Name} are not in the target."
+                $"{missing} planned row(s) of {shape.Target.Schema}.{shape.Target.Name} are not in the target."
             );
     }
 
@@ -114,38 +142,28 @@ public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
     /// a NULL in any column means there is nothing to resolve.
     /// </summary>
     private async Task VerifyRelationshipAsync(
-        TransferPlanContent content,
+        PostgreSqlWriteTable child,
+        PostgreSqlWriteTable parent,
         PlanTable table,
         RelationshipPolicy relationship,
         PostgreSqlExecutionContext context,
         CancellationToken cancellationToken
     )
     {
-        var parent = content.Tables.FirstOrDefault(candidate => Same(candidate.Mapping.Source, relationship.To));
-        var childColumns = relationship.FromColumns.Select(column => TargetColumn(table, column)).ToArray();
-        var parentColumns = relationship
-            .ToColumns.Select(column => parent is null ? column : TargetColumn(parent, column))
+        var childColumns = relationship
+            .FromColumns.Select(column => child.Column(TargetColumn(table, column)).Name)
             .ToArray();
-        var keyColumns = content
-            .StableKeys.Single(key => Same(key.Table, table.Mapping.Source))
-            .Columns.Select(column => TargetColumn(table, column))
-            .ToArray();
-        var stage = PostgreSqlBatchStageWriter.StageName(table.Mapping.Target);
-        var child = PostgreSqlIdentifier.Qualified(table.Mapping.Target.Schema, table.Mapping.Target.Name);
-        var parentTable = PostgreSqlIdentifier.Qualified(
-            parent?.Mapping.Target.Schema ?? relationship.To.Schema,
-            parent?.Mapping.Target.Name ?? relationship.To.Name
-        );
+        var parentColumns = parent.StableKeyColumns.Select(column => column.Name).ToArray();
         var sql =
             "SELECT count(*) FROM "
-            + stage
+            + PostgreSqlBatchStageWriter.StageName(child)
             + " s JOIN "
-            + child
+            + PostgreSqlIdentifier.Qualified(child.Target.Schema, child.Target.Name)
             + " c ON "
             + string.Join(
                 " AND ",
-                keyColumns.Select(column =>
-                    "s." + PostgreSqlIdentifier.Quote(column) + " = c." + PostgreSqlIdentifier.Quote(column)
+                child.StableKeyColumns.Select(column =>
+                    "s." + PostgreSqlIdentifier.Quote(column.Name) + " = c." + PostgreSqlIdentifier.Quote(column.Name)
                 )
             )
             + " WHERE s.job_id=@job AND s.run_id=@run AND "
@@ -154,7 +172,7 @@ public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
                 childColumns.Select(column => "c." + PostgreSqlIdentifier.Quote(column) + " IS NOT NULL")
             )
             + " AND NOT EXISTS (SELECT 1 FROM "
-            + parentTable
+            + PostgreSqlIdentifier.Qualified(parent.Target.Schema, parent.Target.Name)
             + " p WHERE "
             + string.Join(
                 " AND ",
@@ -178,10 +196,15 @@ public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
             );
     }
 
+    private static string[] KeyColumns(TransferPlanContent content, PlanTable table) =>
+        content
+            .StableKeys.Single(key => Same(key.Table, table.Mapping.Source))
+            .Columns.Select(column => TargetColumn(table, column))
+            .ToArray();
+
     private static string TargetColumn(PlanTable table, string sourceColumn) =>
-        table.Mapping.Columns.Single(mapping => StringComparer.Ordinal.Equals(mapping.Source, sourceColumn)).Target;
+        table.Mapping.Columns.Single(mapping => DatabaseNames.Equals(mapping.Source, sourceColumn)).Target;
 
     private static bool Same(TableAddress left, TableAddress right) =>
-        StringComparer.Ordinal.Equals(left.Schema, right.Schema)
-        && StringComparer.Ordinal.Equals(left.Name, right.Name);
+        DatabaseNames.Equals(left.Schema, right.Schema) && DatabaseNames.Equals(left.Name, right.Name);
 }

@@ -34,8 +34,7 @@ public sealed class PostgreSqlSchemaSnapshot
 
     public PostgreSqlTable Table(string schema, string name) =>
         Tables.Single(x =>
-            string.Equals(x.Definition.Schema, schema, StringComparison.Ordinal)
-            && string.Equals(x.Definition.Name, name, StringComparison.Ordinal)
+            DatabaseNames.Equals(x.Definition.Schema, schema) && DatabaseNames.Equals(x.Definition.Name, name)
         );
 
     /// <summary>Lookup by name alone; unambiguous only while a single schema is loaded.</summary>

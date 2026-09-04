@@ -101,7 +101,13 @@ public sealed class SqlServerBatchStageWriter
             "datapitcher",
             "stage_"
                 + Convert
-                    .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(table.Schema + "\u001f" + table.Name)))
+                    .ToHexString(
+                        SHA256.HashData(
+                            Encoding.UTF8.GetBytes(
+                                table.Schema.ToLowerInvariant() + "\u001f" + table.Name.ToLowerInvariant()
+                            )
+                        )
+                    )
                     .ToLowerInvariant()
         );
 }

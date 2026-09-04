@@ -236,6 +236,39 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
     }
 
     [Fact]
+    public async Task Transfer_WhenTheTargetDeclaresTablesAndColumnsInAnotherCase_MapsThemAnyway()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync(
+            "CREATE TABLE worker_parents (id integer NOT NULL CONSTRAINT pk_worker_parents PRIMARY KEY, code text NOT NULL);"
+                + " CREATE TABLE worker_children (id integer NOT NULL CONSTRAINT pk_worker_children PRIMARY KEY, parent_id integer NOT NULL CONSTRAINT fk_worker_children_parents REFERENCES worker_parents(id));"
+                + " INSERT INTO worker_parents VALUES (2, 'two'); INSERT INTO worker_children VALUES (1, 2);"
+        );
+        // Quoted upper-case identifiers are distinct spellings in PostgreSQL; the transfer has to use the target's own.
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE \"WORKER_PARENTS\" (\"ID\" integer NOT NULL CONSTRAINT pk_worker_parents PRIMARY KEY, \"CODE\" text NOT NULL);"
+                + " CREATE TABLE \"WORKER_CHILDREN\" (\"ID\" integer NOT NULL CONSTRAINT pk_worker_children PRIMARY KEY, \"PARENT_ID\" integer NOT NULL CONSTRAINT fk_worker_children_parents REFERENCES \"WORKER_PARENTS\"(\"ID\"));"
+        );
+
+        var job = await RunTransferAsync(
+            scope,
+            "worker_children",
+            "pk_worker_children",
+            "SELECT * FROM worker_children"
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal(
+            "two",
+            await scope.ScalarTargetAsync<string>("SELECT \"CODE\" FROM \"WORKER_PARENTS\" WHERE \"ID\" = 2")
+        );
+        Assert.Equal(
+            2,
+            await scope.ScalarTargetAsync<int>("SELECT \"PARENT_ID\" FROM \"WORKER_CHILDREN\" WHERE \"ID\" = 1")
+        );
+    }
+
+    [Fact]
     public async Task Seal_WhenAPlannedRowCollidesWithADifferentTargetRowOnAUniqueKey_RefusesNamingBothRows()
     {
         await using var scope = await fixture.CreateScopeAsync();

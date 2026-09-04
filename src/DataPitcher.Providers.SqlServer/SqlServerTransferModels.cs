@@ -44,7 +44,7 @@ public sealed class SqlServerWriteTable
         Target = target;
         Columns = Array.AsReadOnly(columns.ToArray());
         StableKeyColumns = Array.AsReadOnly(Columns.Where(column => column.IsStableKey).ToArray());
-        var stable = StableKeyColumns.Select(column => column.Name).ToHashSet(StringComparer.Ordinal);
+        var stable = StableKeyColumns.Select(column => column.Name).ToHashSet(DatabaseNames.Comparer);
         UniqueKeys = Array.AsReadOnly(
             (uniqueKeys ?? [])
                 .Where(key => !stable.SetEquals(key))
@@ -69,7 +69,7 @@ public sealed class SqlServerWriteTable
     public IReadOnlyList<IReadOnlyList<SqlServerWriteColumn>> UniqueKeys { get; }
 
     public SqlServerWriteColumn Column(string name) =>
-        Columns.Single(column => StringComparer.Ordinal.Equals(column.Name, name));
+        Columns.Single(column => DatabaseNames.Equals(column.Name, name));
 }
 
 public sealed class SqlServerTransferRow
@@ -77,7 +77,7 @@ public sealed class SqlServerTransferRow
     public SqlServerTransferRow(StableKey stableKey, IReadOnlyDictionary<string, object?> values)
     {
         StableKey = stableKey;
-        Values = new Dictionary<string, object?>(values, StringComparer.Ordinal);
+        Values = new Dictionary<string, object?>(values, DatabaseNames.Comparer);
     }
 
     public StableKey StableKey { get; }
@@ -158,7 +158,7 @@ public static class SqlServerStableKeyCodec
         foreach (var column in table.StableKeyColumns)
         {
             var value =
-                key.Components.Single(component => component.Column == column.Name).Value
+                key.Components.Single(component => DatabaseNames.Equals(component.Column, column.Name)).Value
                 ?? throw new ArgumentException("Stable-key values cannot be null.");
             Write(buffer, value, column.ProviderType);
         }

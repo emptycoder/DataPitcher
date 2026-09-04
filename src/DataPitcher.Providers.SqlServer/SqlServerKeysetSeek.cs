@@ -49,7 +49,9 @@ public static class SqlServerKeysetSeek
                 parameters.Add(
                     new SqlParameter("@k" + index, columns[index].ProviderType)
                     {
-                        Value = after.Components.Single(component => component.Column == columns[index].Name).Value!,
+                        Value = after
+                            .Components.Single(component => DatabaseNames.Equals(component.Column, columns[index].Name))
+                            .Value!,
                     }
                 );
         parameters.Add(new SqlParameter("@limit", System.Data.SqlDbType.Int) { Value = limit });

@@ -143,8 +143,7 @@ public sealed class DependencyClosure(IClosureStore store)
 
         return table.PrimaryKey == constraint
             || constraint.Columns.All(name =>
-                table.Columns.FirstOrDefault(column => StringComparer.Ordinal.Equals(column.Name, name))
-                    is { IsNullable: false }
+                table.Columns.FirstOrDefault(column => DatabaseNames.Equals(column.Name, name)) is { IsNullable: false }
             );
     }
 }

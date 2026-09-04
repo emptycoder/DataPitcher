@@ -107,8 +107,8 @@ public sealed class PlanSealingService(
             );
         var root =
             session.SourceTables.SingleOrDefault(table =>
-                string.Equals(table.Schema, selection.RootSchema, StringComparison.Ordinal)
-                && string.Equals(table.Name, selection.RootTable, StringComparison.Ordinal)
+                DatabaseNames.Equals(table.Schema, selection.RootSchema)
+                && DatabaseNames.Equals(table.Name, selection.RootTable)
             ) ?? throw new InvalidOperationException("Selection root table was not found in the source catalog.");
         var rootKey = StableKey(root, selection.StableKeyConstraintName, selection.StableKeyColumns);
         var (rawSql, parameters, parameterHash) = RawSql(selection.QueryJson);
@@ -249,7 +249,7 @@ public sealed class PlanSealingService(
                 var deferred = order
                     .Deferred.Where(relationship => relationship.FromTable == group.Key)
                     .SelectMany(relationship => relationship.FromColumns)
-                    .Distinct(StringComparer.Ordinal)
+                    .Distinct(DatabaseNames.Comparer)
                     .ToArray();
                 // A nullable levelled self reference can also be held back for the rows the levelling cannot reach.
                 var hierarchy = order
@@ -257,7 +257,7 @@ public sealed class PlanSealingService(
                         relationship.FromTable == group.Key && IsNullable(relationship, targetSchema)
                     )
                     .SelectMany(relationship => relationship.FromColumns)
-                    .Distinct(StringComparer.Ordinal)
+                    .Distinct(DatabaseNames.Comparer)
                     .ToArray();
                 return new PlanTable(
                     new TableMapping(
@@ -419,7 +419,7 @@ public sealed class PlanSealingService(
         foreach (var orphan in orphans)
         {
             var relationship = relationships.First(candidate =>
-                string.Equals(candidate.Name, orphan.RelationshipName, StringComparison.Ordinal)
+                DatabaseNames.Equals(candidate.Name, orphan.RelationshipName)
             );
             var where =
                 $"{orphan.Rows} planned row(s) in {relationship.FromTable.Schema}.{relationship.FromTable.Name} reference a {relationship.ToTable.Schema}.{relationship.ToTable.Name} row through {relationship.Name} that does not exist in the source";
@@ -444,27 +444,25 @@ public sealed class PlanSealingService(
     private static bool IsEnforcedOnTarget(ClosureRelationship relationship, SchemaSnapshotContent targetSchema) =>
         targetSchema.ForeignKeys.Any(foreignKey =>
             foreignKey.IsEnforced
-            && string.Equals(foreignKey.ChildTable.Schema, relationship.FromTable.Schema, StringComparison.Ordinal)
-            && string.Equals(foreignKey.ChildTable.Name, relationship.FromTable.Name, StringComparison.Ordinal)
-            && foreignKey.ChildColumns.SequenceEqual(relationship.FromColumns, StringComparer.Ordinal)
-            && foreignKey.ParentColumns.SequenceEqual(relationship.ToColumns, StringComparer.Ordinal)
+            && DatabaseNames.Equals(foreignKey.ChildTable.Schema, relationship.FromTable.Schema)
+            && DatabaseNames.Equals(foreignKey.ChildTable.Name, relationship.FromTable.Name)
+            && foreignKey.ChildColumns.SequenceEqual(relationship.FromColumns, DatabaseNames.Comparer)
+            && foreignKey.ParentColumns.SequenceEqual(relationship.ToColumns, DatabaseNames.Comparer)
         );
 
     /// <summary>A relationship can be deferred when the target accepts NULL in every referencing column.</summary>
     private static bool IsNullable(ClosureRelationship relationship, SchemaSnapshotContent targetSchema)
     {
         var table = targetSchema.Tables.SingleOrDefault(candidate =>
-            string.Equals(candidate.Schema, relationship.FromTable.Schema, StringComparison.Ordinal)
-            && string.Equals(candidate.Name, relationship.FromTable.Name, StringComparison.Ordinal)
+            DatabaseNames.Equals(candidate.Schema, relationship.FromTable.Schema)
+            && DatabaseNames.Equals(candidate.Name, relationship.FromTable.Name)
         );
         return relationship.FromColumns.All(name =>
             table is null
                 ? relationship.FromTable.Columns.Any(column =>
-                    string.Equals(column.Name, name, StringComparison.Ordinal) && column.IsNullable
+                    DatabaseNames.Equals(column.Name, name) && column.IsNullable
                 )
-                : table.Columns.Any(column =>
-                    string.Equals(column.Name, name, StringComparison.Ordinal) && column.IsNullable
-                )
+                : table.Columns.Any(column => DatabaseNames.Equals(column.Name, name) && column.IsNullable)
         );
     }
 
@@ -489,12 +487,11 @@ public sealed class PlanSealingService(
     private static UniqueConstraint StableKey(TableDefinition root, string name, IReadOnlyList<string> columns)
     {
         var key =
-            root.PrimaryKey is { } primary && string.Equals(primary.Name, name, StringComparison.Ordinal)
+            root.PrimaryKey is { } primary && DatabaseNames.Equals(primary.Name, name)
                 ? primary
-                : root.UniqueConstraints.SingleOrDefault(unique =>
-                    string.Equals(unique.Name, name, StringComparison.Ordinal)
-                );
-        return key is not null && key.Columns.SequenceEqual(columns, StringComparer.Ordinal)
+                : root.UniqueConstraints.SingleOrDefault(unique => DatabaseNames.Equals(unique.Name, name));
+        // The catalog's own spelling of the key columns is what every later query uses.
+        return key is not null && key.Columns.SequenceEqual(columns, DatabaseNames.Comparer)
             ? key
             : throw new InvalidOperationException("Selection stable key does not match the source catalog.");
     }

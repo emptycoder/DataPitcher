@@ -240,6 +240,32 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     }
 
     [Fact]
+    public async Task Transfer_WhenTheTargetDeclaresTablesAndColumnsInAnotherCase_MapsThemAnyway()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync(
+            "CREATE TABLE dbo.worker_parents (id int NOT NULL CONSTRAINT PK_worker_parents PRIMARY KEY, code nvarchar(32) NOT NULL);"
+                + " CREATE TABLE dbo.worker_children (id int NOT NULL CONSTRAINT PK_worker_children PRIMARY KEY, parent_id int NOT NULL CONSTRAINT FK_worker_children_parents FOREIGN KEY REFERENCES dbo.worker_parents(id));"
+                + " INSERT dbo.worker_parents VALUES (2, N'two'); INSERT dbo.worker_children VALUES (1, 2);"
+        );
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE dbo.WORKER_PARENTS (ID int NOT NULL CONSTRAINT PK_worker_parents PRIMARY KEY, CODE nvarchar(32) NOT NULL);"
+                + " CREATE TABLE dbo.WORKER_CHILDREN (ID int NOT NULL CONSTRAINT PK_worker_children PRIMARY KEY, PARENT_ID int NOT NULL CONSTRAINT FK_worker_children_parents FOREIGN KEY REFERENCES dbo.WORKER_PARENTS(ID));"
+        );
+
+        var job = await RunTransferAsync(
+            scope,
+            "worker_children",
+            "PK_worker_children",
+            "SELECT * FROM dbo.worker_children"
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal("two", await scope.ScalarTargetAsync<string>("SELECT CODE FROM dbo.WORKER_PARENTS WHERE ID = 2"));
+        Assert.Equal(2, await scope.ScalarTargetAsync<int>("SELECT PARENT_ID FROM dbo.WORKER_CHILDREN WHERE ID = 1"));
+    }
+
+    [Fact]
     public async Task Seal_WhenAPlannedRowCollidesWithADifferentTargetRowOnAUniqueKey_RefusesNamingBothRows()
     {
         await using var scope = await fixture.CreateScopeAsync();

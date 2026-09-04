@@ -38,8 +38,7 @@ public sealed class SqlServerSchemaSnapshot
 
     public SqlServerTable Table(string schema, string name) =>
         Tables.Single(t =>
-            string.Equals(t.Definition.Schema, schema, StringComparison.Ordinal)
-            && string.Equals(t.Definition.Name, name, StringComparison.Ordinal)
+            DatabaseNames.Equals(t.Definition.Schema, schema) && DatabaseNames.Equals(t.Definition.Name, name)
         );
 
     /// <summary>Lookup by name alone; unambiguous only while a single schema is loaded.</summary>

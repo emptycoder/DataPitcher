@@ -24,11 +24,11 @@ public sealed class SqlServerStrictExact(string targetConnectionString)
     /// <summary>Why exact-set verification cannot be promised for a target table; empty when it can.</summary>
     public async Task<IReadOnlyList<string>> BlockersAsync(TableAddress table, CancellationToken cancellationToken)
     {
-        var target = SqlServerIdentifier.Qualified(table.Schema, table.Name);
+        var target = await ObjectIdAsync(table, cancellationToken);
         var blockers = new List<string>();
         if (
             await ExistsAsync(
-                "SELECT 1 FROM sys.triggers WHERE parent_id=OBJECT_ID(@target) AND is_disabled=0 AND is_ms_shipped=0",
+                "SELECT 1 FROM sys.triggers WHERE parent_id=@target AND is_disabled=0 AND is_ms_shipped=0",
                 target,
                 cancellationToken
             )
@@ -36,7 +36,7 @@ public sealed class SqlServerStrictExact(string targetConnectionString)
             blockers.Add($"StrictExact is blocked by a target trigger on {table.Schema}.{table.Name}.");
         if (
             await ExistsAsync(
-                "SELECT 1 FROM sys.foreign_keys WHERE referenced_object_id=OBJECT_ID(@target) AND is_disabled=0 AND (delete_referential_action<>0 OR update_referential_action<>0)",
+                "SELECT 1 FROM sys.foreign_keys WHERE referenced_object_id=@target AND is_disabled=0 AND (delete_referential_action<>0 OR update_referential_action<>0)",
                 target,
                 cancellationToken
             )
@@ -96,7 +96,23 @@ public sealed class SqlServerStrictExact(string targetConnectionString)
             );
     }
 
-    private async Task<bool> ExistsAsync(string sql, string target, CancellationToken cancellationToken)
+    /// <summary>The target table's object id, matched without regard to the plan's spelling of its name.</summary>
+    private async Task<int> ObjectIdAsync(TableAddress table, CancellationToken cancellationToken)
+    {
+        await using var connection = new SqlConnection(targetConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new SqlCommand(
+            "SELECT TOP 1 t.object_id FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id WHERE LOWER(s.name)=LOWER(@schema) AND LOWER(t.name)=LOWER(@table) ORDER BY CASE WHEN s.name=@schema AND t.name=@table THEN 0 ELSE 1 END",
+            connection
+        );
+        command.Parameters.AddWithValue("@schema", table.Schema);
+        command.Parameters.AddWithValue("@table", table.Name);
+        return await command.ExecuteScalarAsync(cancellationToken) is int id
+            ? id
+            : throw new InvalidOperationException($"Target table {table.Schema}.{table.Name} does not exist.");
+    }
+
+    private async Task<bool> ExistsAsync(string sql, int target, CancellationToken cancellationToken)
     {
         await using var connection = new SqlConnection(targetConnectionString);
         await connection.OpenAsync(cancellationToken);

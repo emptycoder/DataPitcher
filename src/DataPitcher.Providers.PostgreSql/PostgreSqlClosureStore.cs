@@ -55,15 +55,17 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
         await _stages.ReplaceTargetCandidatesAsync(table, keys, cancellationToken);
         var states = outgoingRelationships.ToDictionary(relationship => relationship, TargetState);
         var columns = KeyColumns(table);
+        var target = TargetDefinition(table);
+        var targetColumns = columns.Select(column => TargetColumn(target, column)).ToArray();
         var select = string.Join(", ", columns.Select((_, i) => $"s.k{i}"));
         var join = string.Join(
             " AND ",
-            columns.Select((column, i) => $"s.k{i} = t.{PostgreSqlIdentifier.Quote(column)}")
+            targetColumns.Select((column, i) => $"s.k{i} = t.{PostgreSqlIdentifier.Quote(column)}")
         );
         var sql =
-            $"/* DataPitcher.ProbeTarget */ SELECT {select}, t.{PostgreSqlIdentifier.Quote(columns[0])} IS NOT NULL "
+            $"/* DataPitcher.ProbeTarget */ SELECT {select}, t.{PostgreSqlIdentifier.Quote(targetColumns[0])} IS NOT NULL "
             + $"FROM {PostgreSqlStagingTables.Qualified(_stages.TargetTableName(table))} s "
-            + $"LEFT JOIN {Qualified(table)} t ON {join}";
+            + $"LEFT JOIN {Qualified(target)} t ON {join}";
         var result = new Dictionary<StableKey, TargetProbe>();
         await using var command = _stages.Target.CreateCommand(sql);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -137,8 +139,8 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
         var fk = _target.ForeignKeys.SingleOrDefault(x =>
             x.ChildTable == sourceFk.ChildTable
             && x.ParentTable == sourceFk.ParentTable
-            && x.ChildColumns.SequenceEqual(sourceFk.ChildColumns)
-            && x.ParentColumns.SequenceEqual(sourceFk.ParentColumns)
+            && x.ChildColumns.SequenceEqual(sourceFk.ChildColumns, DatabaseNames.Comparer)
+            && x.ParentColumns.SequenceEqual(sourceFk.ParentColumns, DatabaseNames.Comparer)
         );
         return fk is null
             ? new TargetConstraintState(relationship.Name, false, false, false)
@@ -146,6 +148,20 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
     }
 
     private IReadOnlyList<string> KeyColumns(TableDefinition table) => _stableKeys[table].Constraint!.Columns;
+
+    /// <summary>The target's own spelling of a source table's name, so the probe can be quoted correctly.</summary>
+    private TableDefinition TargetDefinition(TableDefinition table) =>
+        _target
+            .Tables.FirstOrDefault(candidate =>
+                DatabaseNames.Equals(candidate.Definition.Schema, table.Schema)
+                && DatabaseNames.Equals(candidate.Definition.Name, table.Name)
+            )
+            ?.Definition
+        ?? table;
+
+    /// <summary>The target's own spelling of a key column, matched without regard to case.</summary>
+    private static string TargetColumn(TableDefinition target, string column) =>
+        target.Columns.FirstOrDefault(candidate => DatabaseNames.Equals(candidate.Name, column))?.Name ?? column;
 
     private static StableKey ReadKey(NpgsqlDataReader reader, IReadOnlyList<string> columns) =>
         new(columns.Select((column, i) => new KeyComponent(column, reader.GetValue(i))));

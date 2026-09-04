@@ -23,12 +23,12 @@ public sealed class PostgreSqlStrictExact(NpgsqlDataSource dataSource)
     /// <summary>Why exact-set verification cannot be promised for a target table; empty when it can.</summary>
     public async Task<IReadOnlyList<string>> BlockersAsync(TableAddress table, CancellationToken cancellationToken)
     {
-        var target = PostgreSqlIdentifier.Qualified(table.Schema, table.Name);
         var name = table.Schema + "." + table.Name;
+        var target = await RelationAsync(table, cancellationToken);
         var blockers = new List<string>();
         if (
             await ExistsAsync(
-                "SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid=@target::regclass AND NOT tgisinternal AND tgenabled <> 'D')",
+                "SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid=@target::oid AND NOT tgisinternal AND tgenabled <> 'D')",
                 target,
                 cancellationToken
             )
@@ -36,7 +36,7 @@ public sealed class PostgreSqlStrictExact(NpgsqlDataSource dataSource)
             blockers.Add($"StrictExact is blocked by a target trigger on {name}.");
         if (
             await ExistsAsync(
-                "SELECT EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class=@target::regclass AND rulename <> '_RETURN')",
+                "SELECT EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class=@target::oid AND rulename <> '_RETURN')",
                 target,
                 cancellationToken
             )
@@ -44,7 +44,7 @@ public sealed class PostgreSqlStrictExact(NpgsqlDataSource dataSource)
             blockers.Add($"StrictExact is blocked by a target rewrite rule on {name}.");
         if (
             await ExistsAsync(
-                "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE confrelid=@target::regclass AND contype='f' AND confupdtype IN ('c','n','d'))",
+                "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE confrelid=@target::oid AND contype='f' AND confupdtype IN ('c','n','d'))",
                 target,
                 cancellationToken
             )
@@ -108,7 +108,20 @@ public sealed class PostgreSqlStrictExact(NpgsqlDataSource dataSource)
             );
     }
 
-    private async Task<bool> ExistsAsync(string sql, string target, CancellationToken cancellationToken)
+    /// <summary>The target table's oid, matched without regard to the plan's spelling of its name.</summary>
+    private async Task<long> RelationAsync(TableAddress table, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            "SELECT c.oid::bigint FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE lower(n.nspname)=lower(@schema) AND lower(c.relname)=lower(@table) AND c.relkind IN ('r','p') ORDER BY (n.nspname=@schema AND c.relname=@table) DESC LIMIT 1"
+        );
+        command.Parameters.AddWithValue("schema", table.Schema);
+        command.Parameters.AddWithValue("table", table.Name);
+        return await command.ExecuteScalarAsync(cancellationToken) is long oid
+            ? oid
+            : throw new InvalidOperationException($"Target table {table.Schema}.{table.Name} does not exist.");
+    }
+
+    private async Task<bool> ExistsAsync(string sql, long target, CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand(sql);
         command.Parameters.AddWithValue("target", target);

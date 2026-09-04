@@ -143,7 +143,10 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
             $"SELECT __generation FROM {Qualified(SourceTableName(table))} WHERE {predicate}"
         );
         for (var i = 0; i < columns.Count; i++)
-            command.Parameters.AddWithValue($"p{i}", key.Components.Single(x => x.Column == columns[i]).Value!);
+            command.Parameters.AddWithValue(
+                $"p{i}",
+                key.Components.Single(x => DatabaseNames.Equals(x.Column, columns[i])).Value!
+            );
         return (int)(await command.ExecuteScalarAsync(ct))!;
     }
 
@@ -344,7 +347,7 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
             await importer.StartRowAsync(ct);
             foreach (var column in columns)
                 await importer.WriteAsync(
-                    key.Components.Single(x => x.Column == column).Value,
+                    key.Components.Single(x => DatabaseNames.Equals(x.Column, column)).Value,
                     ColumnType(metadata.Column(column).ClrType).Import,
                     ct
                 );
