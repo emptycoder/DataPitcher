@@ -5,6 +5,8 @@ namespace DataPitcher.Core.Closure;
 
 public sealed class DependencyClosure(IClosureStore store)
 {
+    private const int SampleSize = 5;
+
     private sealed record Frontier(TableDefinition Table, StableKey Key, RootConflictPolicy? RootPolicy);
 
     public async Task<ClosureResult> ComputeAsync(ClosureRequest request, CancellationToken cancellationToken)
@@ -40,6 +42,7 @@ public sealed class DependencyClosure(IClosureStore store)
         var warnings = new HashSet<TargetConstraintWarning>();
         var orphans = new Dictionary<ClosureRelationship, long>();
         var skippedRoots = 0L;
+        var skippedSamples = new List<StableKey>();
 
         foreach (var root in request.Roots)
         foreach (var key in await store.SeedRootKeysAsync(root.Table, root.Keys, cancellationToken))
@@ -86,7 +89,11 @@ public sealed class DependencyClosure(IClosureStore store)
                     if (!include)
                     {
                         if (item.RootPolicy is RootConflictPolicy.SkipExisting)
+                        {
                             skippedRoots++;
+                            if (skippedSamples.Count < SampleSize)
+                                skippedSamples.Add(item.Key);
+                        }
                         continue;
                     }
 
@@ -125,7 +132,8 @@ public sealed class DependencyClosure(IClosureStore store)
             included.Values,
             warnings,
             orphans.Select(pair => new SourceOrphanWarning(pair.Key.Name, pair.Value)),
-            skippedRoots
+            skippedRoots,
+            skippedSamples
         );
     }
 

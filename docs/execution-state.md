@@ -36,22 +36,30 @@ through this codebase.
 
 ## Verified quality gates
 
-- `scripts/test-all.sh` exits 0 with **645 tests**: 557 unit, 5 architecture,
-  43 PostgreSQL integration, 40 SQL Server integration.
-- Merged coverage is **100% line, 100% branch, 100% method**.
-- `scripts/test-frontend.sh` runs the separate strict TypeScript and Vitest V8
-  gate at **100% statements (63/63), branches (15/15), functions (36/36), and
-  lines (48/48)**; its deliberate sentinel deletion was observed to fail.
-- `dotnet build`: clean, **zero warnings**, under warnings-as-errors.
-- The full gate takes about **310 seconds**, dominated by the SQL Server lane
-  running under binary translation on this arm64 host.
+- Updated 2026-09-04. `scripts/test-all.sh` runs **1362 tests**: 836 unit,
+  10 architecture, 198 API integration, 165 PostgreSQL integration (2 skipped
+  performance timings), 153 SQL Server integration (2 skipped). Every test
+  passes.
+- The script's 100% coverage gate **fails** and has failed since before the
+  2026-09-04 work: merged coverage is **93.6% line, 83.2% branch, 93.6%
+  method**. Uncovered code is concentrated in the Entra and OpenID Connect
+  authentication providers, the workbench endpoints and the provider type
+  maps. `tests/DataPitcher.Auth.IntegrationTests` is not in the solution. Treat
+  the gate as the target, not the current state, until those are covered.
+- The SQL Server lane exceeds ten minutes on this host, so it is run as three
+  class-filtered chunks that each collect coverage into the same results
+  directory before ReportGenerator merges them; the merged numbers above come
+  from that procedure.
+- `dotnet build`: clean, **zero warnings**, under warnings-as-errors;
+  `scripts/format.sh --check` and `npm --prefix web run lint` are clean.
 - The backend gate is enforced only in `scripts/test-all.sh`, which merges each
   project's coverage report with ReportGenerator rather than summing per-project
   numbers — a project at less than 100% cannot hide behind another project's
   surplus.
-- The backend's only coverage exclusion is a source-generated regex matcher.
-  The frontend's only exclusion is generated OpenAPI output, checked by
-  regeneration drift and runtime validation at the Query boundary.
+- The backend's only coverage exclusions are a source-generated regex matcher
+  and ASP.NET's generated OpenAPI comment support. The frontend's only exclusion
+  is generated OpenAPI output, checked by regeneration drift and runtime
+  validation at the Query boundary.
 
 ## Frontend foundation
 
@@ -130,6 +138,26 @@ exhaustive.)
     so results are deterministic across runs.
 11. Overlapping closure roots with differing conflict policies are rejected
     rather than silently resolved.
+12. A sealed plan carries `SealingVersion`; a plan sealed by an older
+    algorithm is refused at start (`plan_stale`), never reinterpreted (ADR 0008).
+13. Sealing refuses what it cannot prove — unorderable cycles, invisible parent
+    tables, unique-key collisions, a running job — and records the failure on
+    the plan rather than emitting an approximate plan (ADR 0008).
+14. A unique-key collision with a different target row stops the run; it is
+    never resolved by skipping the row, because the row's children would then
+    reference the wrong parent (ADR 0008 §4).
+15. A run is verified against the sealed plan after the last commit and before
+    Succeeded: manifest counts, presence of every staged row, and outbound
+    foreign keys paired by the key's own column order; a NULL reference needs
+    no parent (ADR 0008 §5).
+16. Sealing validates against the selection's own schema snapshot and never
+    substitutes a newer scan; the operator re-points the selection (ADR 0008 §7).
+17. Names are matched across source and target without regard to case, while
+    identity inside one catalog stays ordinal and SQL quotes each side's own
+    spelling (spec-deviations D19).
+18. The transfer has two phases per table — rows, then deferred nullable
+    columns that close cycles — recorded in the target checkpoint's `phase`;
+    the ledger records INSERT, UPDATE and SKIP per row.
 
 ## Exact next executable action
 

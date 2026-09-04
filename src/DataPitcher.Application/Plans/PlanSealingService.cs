@@ -6,6 +6,7 @@ using DataPitcher.Application.Schema;
 using DataPitcher.Application.Selection;
 using DataPitcher.Core.Closure;
 using DataPitcher.Core.Connections;
+using DataPitcher.Core.Identity;
 using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
 using DataPitcher.Core.Schema;
@@ -171,7 +172,7 @@ public sealed class PlanSealingService(
             warnings.Add(
                 new PlanWarning(
                     "roots_skipped",
-                    $"{closure.SkippedRoots} of {seeds.Keys.Count} selected row(s) already exist in the target and are skipped, together with their dependencies (conflict policy SkipExisting)."
+                    $"{closure.SkippedRoots} of {seeds.Keys.Count} selected row(s) already exist in the target and are skipped, together with their dependencies (conflict policy SkipExisting); for example {Describe(closure.SkippedRootSamples)}."
                         + (
                             closure.Rows.Count == 0
                                 ? " Nothing is left to transfer: delete those rows from the target or select other rows."
@@ -408,6 +409,14 @@ public sealed class PlanSealingService(
     /// fabricate). When the target enforces the constraint they would fail mid-run, so sealing refuses; otherwise
     /// the plan carries a warning.
     /// </summary>
+    private static string Describe(IEnumerable<StableKey> keys) =>
+        string.Join(
+            "; ",
+            keys.Select(key =>
+                string.Join(", ", key.Components.Select(component => $"{component.Column}={component.Value}"))
+            )
+        );
+
     private static IEnumerable<PlanWarning> Orphans(
         IReadOnlyCollection<SourceOrphanWarning> orphans,
         IReadOnlyCollection<ClosureRelationship> relationships,

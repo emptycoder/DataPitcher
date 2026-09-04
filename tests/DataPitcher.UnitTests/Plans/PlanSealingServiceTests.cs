@@ -325,6 +325,7 @@ public sealed class PlanSealingServiceTests
         var warning = Assert.Single(content.Warnings);
         Assert.Equal("roots_skipped", warning.Code);
         Assert.StartsWith("1 of 1 selected row(s) already exist in the target", warning.Message);
+        Assert.Contains("for example K1=1", warning.Message);
         Assert.Contains("Nothing is left to transfer", warning.Message);
     }
 

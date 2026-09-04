@@ -103,12 +103,14 @@ Provenance deliberately cannot answer three questions: how many distinct ways a 
 - **Nullable foreign keys**: a null optional foreign key adds no parent — there is no reference to satisfy.
 - **Foreign keys referencing a unique constraint**: resolution uses the specific referenced unique key, not the primary key, per section 5.
 - **Self references**: a table referencing its own primary key (e.g. an employee's manager) is followed and terminates once no new self-referenced key is discovered.
+- **Self-reference write order**: ancestors are written before descendants. Sealing levels the rows by mapping the referenced columns to the stable key through the table itself, so a self-reference onto any unique key is levellable, not only one onto the primary key; a nullable self-reference that is not levelled is filled in after every row exists (ADR 0008 §2).
 - **Multiple distinct foreign keys between the same pair of tables**: each tracked and followed as its own relationship, remaining distinct in provenance and configuration, never merged.
 - **Shared dependencies**: a row required by two or more discovery paths is transferred exactly once, deduplicated per section 4 step 5.
 - **Diamond dependencies**: two paths converging on the same downstream row must still result in inclusion if either upstream branch requires it.
 - **Cycles**: detected and handled without infinite expansion, per the termination argument in section 4; see ADR 0003 for provider-specific cycle write-ordering.
 - **Manually declared relationships**: not expressed as database foreign key constraints, but explicitly configured and participate in the closure identically to constraint-derived ones.
 - **Source orphans**: a row whose foreign key value does not resolve to any parent in the source is transferred as-is; DataPitcher does not fabricate a missing parent.
+- **Unique-key collisions**: a planned row whose value on a target unique key other than the stable key belongs to a different target row is never skipped, because its children would then reference the wrong parent or dangle; sealing refuses the plan and the transfer stops the run (ADR 0008 §4).
 - **Disabled relationships**: contribute no rows under any circumstance, regardless of what generation or root selection would otherwise reach them.
 
 ## 9. The required behavioural test list

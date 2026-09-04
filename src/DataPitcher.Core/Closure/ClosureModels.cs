@@ -181,17 +181,22 @@ public sealed class ClosureResult
         IEnumerable<ClosureRow> rows,
         IEnumerable<TargetConstraintWarning> warnings,
         IEnumerable<SourceOrphanWarning>? orphans = null,
-        long skippedRoots = 0
+        long skippedRoots = 0,
+        IEnumerable<StableKey>? skippedRootSamples = null
     )
     {
         Rows = Array.AsReadOnly(rows.ToArray());
         Warnings = Array.AsReadOnly(warnings.ToArray());
         Orphans = Array.AsReadOnly((orphans ?? []).ToArray());
         SkippedRoots = skippedRoots;
+        SkippedRootSamples = Array.AsReadOnly((skippedRootSamples ?? []).ToArray());
     }
 
     /// <summary>Selected rows the target already had and the SkipExisting policy therefore neither writes nor expands.</summary>
     public long SkippedRoots { get; }
+
+    /// <summary>The first few skipped keys, so an operator can look the rows up in the target instead of taking the count on trust.</summary>
+    public IReadOnlyList<StableKey> SkippedRootSamples { get; }
 
     public IReadOnlyCollection<ClosureRow> Rows { get; }
 

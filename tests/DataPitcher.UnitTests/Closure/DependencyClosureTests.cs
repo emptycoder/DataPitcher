@@ -702,6 +702,7 @@ public sealed class DependencyClosureTests
             Root(c, 3, RootConflictPolicy.Upsert)
         );
         Assert.Equal(1, r.SkippedRoots);
+        Assert.Equal([K(1)], r.SkippedRootSamples);
         Assert.True(r.Contains(c, K(2)));
         Assert.True(r.Contains(c, K(3)));
     }

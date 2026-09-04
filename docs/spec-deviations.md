@@ -142,6 +142,26 @@ DataPitcher was specified in a detailed written specification. During architectu
 
 **SEE:** ADR 0002.
 
+### D19
+
+**SPEC REQUIRED:** Ordinal comparison for every string ordering and comparison (slice 6 plan, canonicalization rule).
+
+**INSTEAD:** Identity inside one catalog stays ordinal, but matching across sides is case-insensitive: plan mappings, stable-key components and relationship columns are matched to the source and target catalogs without regard to case, and every SQL statement quotes the name as that side's catalog spells it.
+
+**REASON:** Operators map a source declared in one case onto a target declared in another, and a case-sensitive match reported columns as missing that plainly existed. Two tables that differ only by case can coexist in one catalog under a case-sensitive collation or quoted PostgreSQL identifiers, so within-catalog identity must stay exact; only the cross-side match relaxes.
+
+**SEE:** ADR 0008 §6; `DatabaseNames` in Core.
+
+### D20
+
+**SPEC REQUIRED:** Foreign-key verification honouring both MATCH SIMPLE and MATCH FULL NULL semantics (ADR 0002 §5).
+
+**INSTEAD:** Verification treats every foreign key as MATCH SIMPLE: a row is checked only when every column of the key carries a value.
+
+**REASON:** SQL Server has only MATCH SIMPLE semantics, and no planned PostgreSQL target has declared MATCH FULL. A partially NULL composite reference on a MATCH FULL key is therefore not flagged by verification; the target constraint itself still rejects it at write time when enforced.
+
+**SEE:** ADR 0008 §5.
+
 ## Authentication
 
 ### D13

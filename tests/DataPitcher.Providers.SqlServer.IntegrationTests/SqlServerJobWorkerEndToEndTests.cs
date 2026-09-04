@@ -266,6 +266,83 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     }
 
     [Fact]
+    public async Task Reseal_WhenASourceRowWasAddedAfterATransfer_SkipsOnlyTheRowTheTargetAlreadyHas()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync(
+            "CREATE TABLE dbo.worker_rows (id int NOT NULL CONSTRAINT PK_worker_rows PRIMARY KEY, code nvarchar(32) NOT NULL);"
+                + " INSERT dbo.worker_rows VALUES (1, N'one');"
+        );
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE dbo.worker_rows (id int NOT NULL CONSTRAINT PK_worker_rows PRIMARY KEY, code nvarchar(32) NOT NULL);"
+        );
+
+        var job = await RunTransferAsync(
+            scope,
+            "worker_rows",
+            "PK_worker_rows",
+            "SELECT * FROM dbo.worker_rows",
+            afterRun: async (provider, planId, first) =>
+            {
+                Assert.True(first.State == JobState.Succeeded, first.FailureCode + ": " + first.FailureDetail);
+                await scope.ExecuteAsync("INSERT dbo.worker_rows VALUES (2, N'two');");
+                var application = provider.GetRequiredService<IDataPitcherApplication>();
+                await application.QueuePlanSealAsync(planId, CancellationToken.None);
+                var review = await application.GetPlanReviewAsync(planId, CancellationToken.None);
+                Assert.Equal("sealed", review.Seal.Status);
+                var skipped = Assert.Single(review.Warnings, warning => warning.Code == "roots_skipped");
+                Assert.StartsWith("1 of 2 selected row(s)", skipped.Message);
+                var started = await application.StartJobAsync(planId, "worker-job-2", CancellationToken.None);
+                return await WaitForTerminalAsync(
+                    provider.GetRequiredService<JobStore>(),
+                    started.JobId ?? throw new InvalidOperationException("Job start did not return a job identifier.")
+                );
+            }
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal("two", await scope.ScalarTargetAsync<string>("SELECT code FROM dbo.worker_rows WHERE id = 2"));
+    }
+
+    [Fact]
+    public async Task Reseal_WhenTheTargetRowWasDeletedAfterATransfer_PlansAndWritesItAgain()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync(
+            "CREATE TABLE dbo.worker_rows (id int NOT NULL CONSTRAINT PK_worker_rows PRIMARY KEY, code nvarchar(32) NOT NULL);"
+                + " INSERT dbo.worker_rows VALUES (1, N'one');"
+        );
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE dbo.worker_rows (id int NOT NULL CONSTRAINT PK_worker_rows PRIMARY KEY, code nvarchar(32) NOT NULL);"
+        );
+
+        var job = await RunTransferAsync(
+            scope,
+            "worker_rows",
+            "PK_worker_rows",
+            "SELECT * FROM dbo.worker_rows",
+            afterRun: async (provider, planId, first) =>
+            {
+                Assert.True(first.State == JobState.Succeeded, first.FailureCode + ": " + first.FailureDetail);
+                await scope.ExecuteTargetAsync("DELETE dbo.worker_rows WHERE id = 1;");
+                var application = provider.GetRequiredService<IDataPitcherApplication>();
+                await application.QueuePlanSealAsync(planId, CancellationToken.None);
+                var review = await application.GetPlanReviewAsync(planId, CancellationToken.None);
+                Assert.Equal("sealed", review.Seal.Status);
+                Assert.DoesNotContain(review.Warnings, warning => warning.Code == "roots_skipped");
+                var started = await application.StartJobAsync(planId, "worker-job-2", CancellationToken.None);
+                return await WaitForTerminalAsync(
+                    provider.GetRequiredService<JobStore>(),
+                    started.JobId ?? throw new InvalidOperationException("Job start did not return a job identifier.")
+                );
+            }
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal("one", await scope.ScalarTargetAsync<string>("SELECT code FROM dbo.worker_rows WHERE id = 1"));
+    }
+
+    [Fact]
     public async Task Seal_WhenAPlannedRowCollidesWithADifferentTargetRowOnAUniqueKey_RefusesNamingBothRows()
     {
         await using var scope = await fixture.CreateScopeAsync();
@@ -530,7 +607,8 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
         Func<IServiceProvider, Guid, Task>? afterSeal = null,
         string? sourceConnectionString = null,
         string businessSchema = "dbo",
-        string keyColumn = "id"
+        string keyColumn = "id",
+        Func<IServiceProvider, Guid, TransferJob, Task<TransferJob>>? afterRun = null
     )
     {
         await EnableSnapshotIsolationAsync(scope.SourceAdminConnectionString, scope.Database);
@@ -635,10 +713,11 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
             try
             {
                 var started = await application.StartJobAsync(planId, "worker-job", CancellationToken.None);
-                return await WaitForTerminalAsync(
+                var job = await WaitForTerminalAsync(
                     provider.GetRequiredService<JobStore>(),
                     started.JobId ?? throw new InvalidOperationException("Job start did not return a job identifier.")
                 );
+                return afterRun is null ? job : await afterRun(provider, planId, job);
             }
             finally
             {
