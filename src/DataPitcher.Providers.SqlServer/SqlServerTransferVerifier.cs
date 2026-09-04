@@ -28,6 +28,8 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
         await using var connection = new SqlConnection(targetConnectionString);
         await connection.OpenAsync(cancellationToken);
         await VerifyCountsAsync(connection, planned, context, cancellationToken);
+        foreach (var table in planned)
+            await VerifyPresenceAsync(connection, content, table, context, cancellationToken);
         if (content.VerificationStrategy == VerificationStrategy.StrictExact)
             await new SqlServerStrictExact(targetConnectionString).VerifyAsync(context, cancellationToken);
         foreach (var table in planned)
@@ -73,6 +75,42 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
         if (mismatches.Length > 0)
             throw new TransferVerificationException(
                 "The run did not move the planned row set: " + string.Join("; ", mismatches) + "."
+            );
+    }
+
+    /// <summary>Every row this run staged must exist in the target now, whatever the ledger says about it.</summary>
+    private static async Task VerifyPresenceAsync(
+        SqlConnection connection,
+        TransferPlanContent content,
+        PlanTable table,
+        SqlServerExecutionContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        var keyColumns = content
+            .StableKeys.Single(key => Same(key.Table, table.Mapping.Source))
+            .Columns.Select(column => TargetColumn(table, column))
+            .ToArray();
+        var sql =
+            "SELECT COUNT(*) FROM "
+            + SqlServerBatchStageWriter.StageName(table.Mapping.Target)
+            + " s WHERE s.job_id=@job AND s.run_id=@run AND NOT EXISTS (SELECT 1 FROM "
+            + SqlServerIdentifier.Qualified(table.Mapping.Target.Schema, table.Mapping.Target.Name)
+            + " t WHERE "
+            + string.Join(
+                " AND ",
+                keyColumns.Select(column =>
+                    "t." + SqlServerIdentifier.Quote(column) + "=s." + SqlServerIdentifier.Quote(column)
+                )
+            )
+            + ")";
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.AddWithValue("@job", context.JobId);
+        command.Parameters.AddWithValue("@run", context.RunId);
+        var missing = (int)(await command.ExecuteScalarAsync(cancellationToken))!;
+        if (missing != 0)
+            throw new TransferVerificationException(
+                $"{missing} planned row(s) of {table.Mapping.Target.Schema}.{table.Mapping.Target.Name} are not in the target."
             );
     }
 

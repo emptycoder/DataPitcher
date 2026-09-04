@@ -49,6 +49,17 @@ public interface ISealingSession : IAsyncDisposable
     );
 
     /// <summary>
+    /// Finds planned rows that collide with a different target row on a unique key other than the stable key, so
+    /// sealing can refuse before a single batch is written.
+    /// </summary>
+    Task<IReadOnlyCollection<UniqueKeyCollision>> FindUniqueKeyCollisionsAsync(
+        IReadOnlyCollection<TableDefinition> planned,
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+        Guid planId,
+        CancellationToken cancellationToken
+    );
+
+    /// <summary>
     /// Creates the closure store for this plan. Root key staging must survive the session so the transfer worker can
     /// read exactly the sealed rows later.
     /// </summary>

@@ -268,6 +268,30 @@ public sealed class PlanSealingServiceTests
     }
 
     [Fact]
+    public async Task SealAsync_WhenPlannedRowsCollideWithDifferentTargetRowsOnAUniqueKey_Refuses()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.Collisions =
+        [
+            new UniqueKeyCollision(new TableAddress("dbo", "P"), ["Code"], 2, ["K1=2 (source) -> K1=9 (target)"]),
+        ];
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        var exception = await Assert.ThrowsAsync<UniqueKeyCollisionException>(() =>
+            service.SealAsync(planId, CancellationToken.None)
+        );
+
+        Assert.Contains(
+            "2 row(s) of dbo.P on unique key (Code), for example K1=2 (source) -> K1=9 (target)",
+            exception.Message
+        );
+        Assert.Contains("cannot merge two rows into one", exception.Message);
+        Assert.Null(await plans.LoadContentAsync(planId, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task SealAsync_WhenAPlanIsSealedAgain_StartsFromAnEmptyStagedSetAndFindsTheSameRows()
     {
         using var fixture = new ControlDatabaseFixture();
@@ -480,6 +504,15 @@ public sealed class PlanSealingServiceTests
         public IReadOnlyList<StableKey> RootKeys { get; set; } = rootKeys;
         public IReadOnlyCollection<UnresolvedForeignKey> Unresolved { get; set; } = [];
         public IReadOnlyCollection<string> VerificationBlockers { get; set; } = [];
+        public IReadOnlyCollection<UniqueKeyCollision> Collisions { get; set; } = [];
+
+        public Task<IReadOnlyCollection<UniqueKeyCollision>> FindUniqueKeyCollisionsAsync(
+            IReadOnlyCollection<TableDefinition> planned,
+            IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+            Guid planId,
+            CancellationToken cancellationToken
+        ) => Task.FromResult(Collisions);
+
         public List<string> VerifiedTables { get; } = [];
         public SchemaSnapshotContent SourceSchema { get; } = schema;
         public SchemaSnapshotContent TargetSchema { get; set; } = schema;

@@ -65,7 +65,7 @@ public sealed class SqlServerWriteTable
     public IReadOnlyList<SqlServerWriteColumn> InsertColumns { get; }
     public IReadOnlyList<SqlServerWriteColumn> UpdateColumns { get; }
 
-    /// <summary>Other unique keys of the target (constraints and unique indexes); a row colliding on any is skipped.</summary>
+    /// <summary>Other unique keys of the target (constraints and unique indexes); a row colliding on any with a different target row stops the run.</summary>
     public IReadOnlyList<IReadOnlyList<SqlServerWriteColumn>> UniqueKeys { get; }
 
     public SqlServerWriteColumn Column(string name) =>

@@ -104,7 +104,7 @@ public sealed class JobWorker(
                         "running",
                         rows,
                         bytes,
-                        $"{checkpoint.SkippedRows - skipped} row(s) in {table} already existed in the target (by primary or unique key) and were skipped.",
+                        $"{checkpoint.SkippedRows - skipped} row(s) in {table} already existed in the target with the same key (the same row) and were skipped.",
                         leaseLost.Token
                     );
                     skipped = checkpoint.SkippedRows;
@@ -223,6 +223,7 @@ public sealed class JobWorker(
         {
             ConnectionNotHealthyException => "connection_unhealthy",
             StalePlanException => "plan_stale",
+            TargetRowConflictException => "target_conflict",
             NotSupportedException => "not_supported",
             _ => "transfer_failed",
         };

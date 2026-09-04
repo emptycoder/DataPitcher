@@ -1,4 +1,5 @@
 using DataPitcher.Core.Identity;
+using DataPitcher.Core.Transfer;
 using DataPitcher.Providers.PostgreSql;
 using Xunit;
 
@@ -55,7 +56,7 @@ public sealed class PostgreSqlBatchExecutionTests : IClassFixture<PostgreSqlClos
     }
 
     [Fact]
-    public async Task ApplyAsync_WhenARowCollidesWithTheTargetOnAnotherUniqueKey_SkipsItInsteadOfFailing()
+    public async Task ApplyAsync_WhenARowCollidesWithADifferentTargetRowOnAnotherUniqueKey_StopsTheRunNamingBothRows()
     {
         await using var scope = await _fixture.CreateScopeAsync();
         await scope.ExecuteTargetAsync(
@@ -86,15 +87,17 @@ public sealed class PostgreSqlBatchExecutionTests : IClassFixture<PostgreSqlClos
             CancellationToken.None
         );
 
-        var result = await new PostgreSqlBatchApplier().ApplyAsync(
-            connection,
-            transaction,
-            context,
-            table,
-            batch,
-            CancellationToken.None
+        var exception = await Assert.ThrowsAsync<TargetRowConflictException>(() =>
+            new PostgreSqlBatchApplier().ApplyAsync(
+                connection,
+                transaction,
+                context,
+                table,
+                batch,
+                CancellationToken.None
+            )
         );
-        await transaction.CommitAsync();
+        await transaction.RollbackAsync();
 
         Assert.Equal(
             [
@@ -102,14 +105,13 @@ public sealed class PostgreSqlBatchExecutionTests : IClassFixture<PostgreSqlClos
             ],
             table.UniqueKeys.Select(key => key.Select(column => column.Name).ToArray())
         );
-        Assert.Equal(1, result.Inserts);
-        Assert.Equal(2L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM transfer_rows"));
-        Assert.Equal(
-            1L,
-            await scope.ScalarTargetAsync<long>(
-                $"SELECT count(*) FROM datapitcher.transfer_affected_keys WHERE job_id='{context.JobId}' AND action_name='SKIP'"
-            )
+        Assert.Contains(
+            "Row id=2 (source) -> id=1 (target) of "
+                + scope.Schema
+                + ".transfer_rows collides with a different target row on unique key (code)",
+            exception.Message
         );
+        Assert.Equal(1L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM transfer_rows"));
     }
 
     [Fact]

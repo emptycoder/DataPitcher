@@ -627,6 +627,7 @@ public sealed class DataPitcherApplication(
             UnorderablePlanException => "unorderable_cycle",
             IncompleteGraphException => "incomplete_graph",
             SourceOrphansException => "source_orphans",
+            UniqueKeyCollisionException => "unique_key_collision",
             PlanInUseException => "plan_in_use",
             InvalidOperationException or NotSupportedException => "seal_rejected",
             _ => "seal_failed",

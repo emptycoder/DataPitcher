@@ -65,6 +65,28 @@ public sealed class PostgreSqlSealingProvider : ISealingProvider
         public IReadOnlyCollection<UnresolvedForeignKey> SourceUnresolvedForeignKeys { get; } =
             sourceCatalog.UnresolvedForeignKeys.ToArray();
 
+        public async Task<IReadOnlyCollection<UniqueKeyCollision>> FindUniqueKeyCollisionsAsync(
+            IReadOnlyCollection<TableDefinition> planned,
+            IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
+            Guid planId,
+            CancellationToken cancellationToken
+        )
+        {
+            var collisions = new List<UniqueKeyCollision>();
+            foreach (var table in planned)
+                collisions.AddRange(
+                    await PostgreSqlUniqueKeyCollisions.FindAsync(
+                        source,
+                        target,
+                        planId,
+                        table,
+                        stableKeys[table].Constraint!.Columns,
+                        cancellationToken
+                    )
+                );
+            return collisions;
+        }
+
         public async Task<IReadOnlyCollection<string>> VerificationBlockersAsync(
             IReadOnlyCollection<TableAddress> tables,
             CancellationToken cancellationToken

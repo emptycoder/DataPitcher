@@ -61,7 +61,7 @@ public sealed class PostgreSqlWriteTable
     public IReadOnlyList<PostgreSqlWriteColumn> InsertColumns { get; }
     public IReadOnlyList<PostgreSqlWriteColumn> UpdateColumns { get; }
 
-    /// <summary>Other unique keys of the target (constraints and unique indexes); a row colliding on any is skipped.</summary>
+    /// <summary>Other unique keys of the target (constraints and unique indexes); a row colliding on any with a different target row stops the run.</summary>
     public IReadOnlyList<IReadOnlyList<PostgreSqlWriteColumn>> UniqueKeys { get; }
 
     public PostgreSqlWriteColumn Column(string name) =>

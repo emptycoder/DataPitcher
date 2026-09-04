@@ -213,6 +213,12 @@ public interface ITargetRunSession : IAsyncDisposable
     Task VerifyAsync(TransferRun run, LeaseGrant lease, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// A planned row collides with a different target row on a unique key, so it can neither be inserted nor skipped
+/// without leaving its children dangling; the target changed after the plan was sealed.
+/// </summary>
+public sealed class TargetRowConflictException(string detail) : InvalidOperationException(detail);
+
 /// <summary>The completed transfer does not match its plan; the detail names what differs.</summary>
 public sealed class TransferVerificationException(string detail) : InvalidOperationException(detail);
 

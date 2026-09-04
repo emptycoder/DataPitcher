@@ -47,6 +47,29 @@ public sealed class PostgreSqlTransferVerifierTests(PostgreSqlClosureFixture fix
     }
 
     [Fact]
+    public async Task VerifyAsync_WhenAPlannedRowIsNoLongerInTheTarget_FailsNamingTheTable()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await CreateTablesAsync(scope);
+        var context = PostgreSqlTransferTestData.Context();
+        await ApplyAsync(scope, context, (1, 1), (2, 1));
+        await scope.ExecuteTargetAsync("DELETE FROM verify_children WHERE id = 2;");
+
+        var exception = await Assert.ThrowsAsync<TransferVerificationException>(() =>
+            new PostgreSqlTransferVerifier(scope.Target).VerifyAsync(
+                Plan(scope.Schema, 2, VerificationStrategy.Standard),
+                context,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal(
+            "1 planned row(s) of " + scope.Schema + ".verify_children are not in the target.",
+            exception.Message
+        );
+    }
+
+    [Fact]
     public async Task VerifyAsync_WhenAWrittenRowReferencesAParentTheTargetDoesNotHave_FailsNamingTheRelationship()
     {
         await using var scope = await fixture.CreateScopeAsync();

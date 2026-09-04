@@ -240,6 +240,27 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     }
 
     [Fact]
+    public async Task Seal_WhenAPlannedRowCollidesWithADifferentTargetRowOnAUniqueKey_RefusesNamingBothRows()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE dbo.worker_users (id int NOT NULL CONSTRAINT PK_worker_users PRIMARY KEY, login nvarchar(64) NOT NULL CONSTRAINT UQ_worker_users_login UNIQUE);";
+        await scope.ExecuteAsync(ddl + " INSERT dbo.worker_users VALUES (2001, N'alice'), (2002, N'bob');");
+        // The target already knows alice under a different id: verbatim keys cannot merge the two.
+        await scope.ExecuteTargetAsync(ddl + " INSERT dbo.worker_users VALUES (99, N'alice');");
+
+        var exception = await Assert.ThrowsAsync<UniqueKeyCollisionException>(() =>
+            RunTransferAsync(scope, "worker_users", "PK_worker_users", "SELECT * FROM dbo.worker_users")
+        );
+
+        Assert.Contains(
+            "1 row(s) of dbo.worker_users on unique key (login), for example id=2001 (source) -> id=99 (target)",
+            exception.Message
+        );
+        Assert.Equal(1, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_users"));
+    }
+
+    [Fact]
     public async Task Transfer_WhenTwoTablesReferenceEachOther_FillsTheNullableSideAfterTheRows()
     {
         await using var scope = await fixture.CreateScopeAsync();

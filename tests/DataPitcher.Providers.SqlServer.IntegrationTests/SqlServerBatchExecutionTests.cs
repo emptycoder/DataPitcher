@@ -1,6 +1,7 @@
 using System.Data;
 using DataPitcher.Core.Identity;
 using DataPitcher.Core.Plans;
+using DataPitcher.Core.Transfer;
 using Microsoft.Data.SqlClient;
 using Xunit;
 
@@ -69,7 +70,7 @@ public sealed class SqlServerBatchExecutionTests(SqlServerClosureFixture fixture
     }
 
     [Fact]
-    public async Task ApplyAsync_WhenARowCollidesWithTheTargetOnAnotherUniqueKey_SkipsItInsteadOfFailing()
+    public async Task ApplyAsync_WhenARowCollidesWithADifferentTargetRowOnAnotherUniqueKey_StopsTheRunNamingBothRows()
     {
         await using var scope = await fixture.CreateScopeAsync();
         await scope.ExecuteTargetAsync(
@@ -101,15 +102,17 @@ public sealed class SqlServerBatchExecutionTests(SqlServerClosureFixture fixture
             CancellationToken.None
         );
 
-        var result = await new SqlServerBatchApplier().ApplyAsync(
-            connection,
-            transaction,
-            context,
-            table,
-            batch,
-            CancellationToken.None
+        var exception = await Assert.ThrowsAsync<TargetRowConflictException>(() =>
+            new SqlServerBatchApplier().ApplyAsync(
+                connection,
+                transaction,
+                context,
+                table,
+                batch,
+                CancellationToken.None
+            )
         );
-        await transaction.CommitAsync();
+        await transaction.RollbackAsync();
 
         Assert.Equal(
             [
@@ -117,14 +120,11 @@ public sealed class SqlServerBatchExecutionTests(SqlServerClosureFixture fixture
             ],
             table.UniqueKeys.Select(key => key.Select(column => column.Name).ToArray())
         );
-        Assert.Equal(1, result.Inserts);
-        Assert.Equal(2, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.transfer_rows"));
-        Assert.Equal(
-            1,
-            await scope.ScalarTargetAsync<int>(
-                $"SELECT COUNT(*) FROM [datapitcher].[transfer_affected_keys] WHERE job_id='{context.JobId}' AND action_name='SKIP'"
-            )
+        Assert.Contains(
+            "Row id=2 (source) -> id=1 (target) of dbo.transfer_rows collides with a different target row on unique key (code)",
+            exception.Message
         );
+        Assert.Equal(1, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.transfer_rows"));
     }
 
     [Fact]

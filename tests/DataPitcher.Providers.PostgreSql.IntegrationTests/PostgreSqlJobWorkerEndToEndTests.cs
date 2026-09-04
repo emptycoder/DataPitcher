@@ -236,6 +236,29 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
     }
 
     [Fact]
+    public async Task Seal_WhenAPlannedRowCollidesWithADifferentTargetRowOnAUniqueKey_RefusesNamingBothRows()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE worker_users (id integer NOT NULL CONSTRAINT pk_worker_users PRIMARY KEY, login text NOT NULL CONSTRAINT uq_worker_users_login UNIQUE);";
+        await scope.ExecuteAsync(ddl + " INSERT INTO worker_users VALUES (2001, 'alice'), (2002, 'bob');");
+        // The target already knows alice under a different id: verbatim keys cannot merge the two.
+        await scope.ExecuteTargetAsync(ddl + " INSERT INTO worker_users VALUES (99, 'alice');");
+
+        var exception = await Assert.ThrowsAsync<UniqueKeyCollisionException>(() =>
+            RunTransferAsync(scope, "worker_users", "pk_worker_users", "SELECT * FROM worker_users")
+        );
+
+        Assert.Contains(
+            "1 row(s) of "
+                + scope.Schema
+                + ".worker_users on unique key (login), for example id=2001 (source) -> id=99 (target)",
+            exception.Message
+        );
+        Assert.Equal(1L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_users"));
+    }
+
+    [Fact]
     public async Task Transfer_WhenTwoTablesReferenceEachOther_FillsTheNullableSideAfterTheRows()
     {
         await using var scope = await fixture.CreateScopeAsync();

@@ -21,6 +21,9 @@ public sealed class IncompleteGraphException(string message) : InvalidOperationE
 /// <summary>Planned rows reference source parents that do not exist while the target enforces the constraint.</summary>
 public sealed class SourceOrphansException(string message) : InvalidOperationException(message);
 
+/// <summary>Planned rows collide with different target rows on a unique key; verbatim keys cannot merge them.</summary>
+public sealed class UniqueKeyCollisionException(string message) : InvalidOperationException(message);
+
 /// <summary>A transfer of this plan is still running or paused; sealing again would pull its sealed keys away.</summary>
 public sealed class PlanInUseException(string message) : InvalidOperationException(message);
 
@@ -155,6 +158,9 @@ public sealed class PlanSealingService(
         );
         if (order.Levelled.Count > 0)
             await session.OrderHierarchiesAsync(order.Levelled, stableKeys, planId, cancellationToken);
+        RequireNoUniqueKeyCollisions(
+            await session.FindUniqueKeyCollisionsAsync(depth.Keys.ToArray(), stableKeys, planId, cancellationToken)
+        );
         var warnings = new List<PlanWarning>();
         // An empty or shrunken plan is legitimate, but the operator has to be told why the rows are not coming.
         if (seeds.Keys.Count == 0)
@@ -325,6 +331,27 @@ public sealed class PlanSealingService(
             totals,
             TransferPlanContent.CurrentSealingVersion,
             warnings
+        );
+    }
+
+    /// <summary>
+    /// Keys are written verbatim, so a planned row whose unique value is taken by a different target row has no
+    /// correct outcome: inserting violates the key, skipping leaves its children pointing at a key the target never
+    /// gets, and merging would need key remapping. Refuse before any batch is written.
+    /// </summary>
+    private static void RequireNoUniqueKeyCollisions(IReadOnlyCollection<UniqueKeyCollision> collisions)
+    {
+        if (collisions.Count == 0)
+            return;
+        throw new UniqueKeyCollisionException(
+            "Planned rows collide with different rows already in the target: "
+                + string.Join(
+                    "; ",
+                    collisions.Select(collision =>
+                        $"{collision.Rows} row(s) of {collision.Table.Schema}.{collision.Table.Name} on unique key ({string.Join(", ", collision.Columns)}), for example {string.Join(", ", collision.Samples)}"
+                    )
+                )
+                + ". DataPitcher writes keys verbatim and cannot merge two rows into one. Remove or re-key the target rows, or exclude the source rows from the selection, then seal the plan again."
         );
     }
 

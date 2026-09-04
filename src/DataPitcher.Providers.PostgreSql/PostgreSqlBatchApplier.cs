@@ -44,6 +44,14 @@ public sealed class PostgreSqlBatchApplier
                 )
                 : [];
         affected.UnionWith(updates);
+        await RejectUniqueKeyCollisionsAsync(
+            connection,
+            transaction,
+            context,
+            table,
+            batch.Sequence,
+            cancellationToken
+        );
         var inserts = await ExecuteReturningAsync(
             connection,
             transaction,
@@ -157,23 +165,64 @@ public sealed class PostgreSqlBatchApplier
         return await update.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// A staged row whose unique-key value belongs to a target row with a different stable key can neither be
+    /// inserted nor skipped (its children would dangle). Sealing refused such rows; finding one now means the target
+    /// changed since, so the run stops before the batch is written.
+    /// </summary>
+    private static async Task RejectUniqueKeyCollisionsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        PostgreSqlExecutionContext context,
+        PostgreSqlWriteTable table,
+        long sequence,
+        CancellationToken cancellationToken
+    )
+    {
+        var target = PostgreSqlIdentifier.Qualified(table.Target.Schema, table.Target.Name);
+        var keys = table.StableKeyColumns;
+        foreach (var unique in table.UniqueKeys)
+        {
+            var sql =
+                "SELECT "
+                + string.Join(", ", keys.Select(column => "s." + PostgreSqlIdentifier.Quote(column.Name)))
+                + ", "
+                + string.Join(", ", keys.Select(column => "t." + PostgreSqlIdentifier.Quote(column.Name)))
+                + " FROM "
+                + PostgreSqlBatchStageWriter.StageName(table)
+                + " s JOIN "
+                + target
+                + " t ON "
+                + Join(unique, "s", "t")
+                + " WHERE s.job_id=@job AND s.run_id=@run AND s.fence_token=@fence AND s.batch_sequence=@sequence AND NOT ("
+                + Join(keys, "s", "t")
+                + ") LIMIT 1";
+            await using var command = new NpgsqlCommand(sql, connection, transaction);
+            command.Parameters.AddWithValue("job", context.JobId);
+            command.Parameters.AddWithValue("run", context.RunId);
+            command.Parameters.AddWithValue("fence", context.FenceToken);
+            command.Parameters.AddWithValue("sequence", sequence);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+                throw new TargetRowConflictException(
+                    $"Row {PostgreSqlUniqueKeyCollisions.Describe(keys, reader)} of {table.Target.Schema}.{table.Target.Name} collides with a different target row on unique key ({string.Join(", ", unique.Select(column => column.Name))}). DataPitcher writes keys verbatim and cannot merge two rows into one; the target changed after the plan was sealed. Remove or re-key one of the rows, then seal the plan again."
+                );
+        }
+    }
+
     private static string InsertSql(PostgreSqlWriteTable table, PostgreSqlConflictPolicy policy)
     {
         var target = PostgreSqlIdentifier.Qualified(table.Target.Schema, table.Target.Name);
         var stage = PostgreSqlBatchStageWriter.StageName(table);
         var columns = string.Join(", ", table.InsertColumns.Select(x => PostgreSqlIdentifier.Quote(x.Name)));
-        // A row the target already has, by stable key or by any other unique key, is skipped rather than failing the
-        // batch on a duplicate-key error. PostgreSQL treats NULLs as distinct in unique indexes, and so does this.
         var missing =
             policy == PostgreSqlConflictPolicy.InsertOnly
                 ? ""
-                : string.Concat(
-                    new[] { table.StableKeyColumns }
-                        .Concat(table.UniqueKeys)
-                        .Select(key =>
-                            " AND NOT EXISTS (SELECT 1 FROM " + target + " t WHERE " + Join(key, "s", "t") + ")"
-                        )
-                );
+                : " AND NOT EXISTS (SELECT 1 FROM "
+                    + target
+                    + " t WHERE "
+                    + Join(table.StableKeyColumns, "s", "t")
+                    + ")";
         var overriding = table.InsertColumns.Any(x => x.IsIdentityAlways) ? " OVERRIDING SYSTEM VALUE" : "";
         return "INSERT INTO "
             + target

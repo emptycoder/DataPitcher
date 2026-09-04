@@ -26,6 +26,8 @@ public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
     {
         var planned = content.Tables.Where(table => table.Manifest.PlannedWrites > 0).ToArray();
         await VerifyCountsAsync(planned, context, cancellationToken);
+        foreach (var table in planned)
+            await VerifyPresenceAsync(content, table, context, cancellationToken);
         if (content.VerificationStrategy == VerificationStrategy.StrictExact)
             await new PostgreSqlStrictExact(dataSource).VerifyAsync(context, cancellationToken);
         foreach (var table in planned)
@@ -69,6 +71,41 @@ public sealed class PostgreSqlTransferVerifier(NpgsqlDataSource dataSource)
         if (mismatches.Length > 0)
             throw new TransferVerificationException(
                 "The run did not move the planned row set: " + string.Join("; ", mismatches) + "."
+            );
+    }
+
+    /// <summary>Every row this run staged must exist in the target now, whatever the ledger says about it.</summary>
+    private async Task VerifyPresenceAsync(
+        TransferPlanContent content,
+        PlanTable table,
+        PostgreSqlExecutionContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        var keyColumns = content
+            .StableKeys.Single(key => Same(key.Table, table.Mapping.Source))
+            .Columns.Select(column => TargetColumn(table, column))
+            .ToArray();
+        var sql =
+            "SELECT count(*) FROM "
+            + PostgreSqlBatchStageWriter.StageName(table.Mapping.Target)
+            + " s WHERE s.job_id=@job AND s.run_id=@run AND NOT EXISTS (SELECT 1 FROM "
+            + PostgreSqlIdentifier.Qualified(table.Mapping.Target.Schema, table.Mapping.Target.Name)
+            + " t WHERE "
+            + string.Join(
+                " AND ",
+                keyColumns.Select(column =>
+                    "t." + PostgreSqlIdentifier.Quote(column) + " = s." + PostgreSqlIdentifier.Quote(column)
+                )
+            )
+            + ")";
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("job", context.JobId);
+        command.Parameters.AddWithValue("run", context.RunId);
+        var missing = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
+        if (missing != 0)
+            throw new TransferVerificationException(
+                $"{missing} planned row(s) of {table.Mapping.Target.Schema}.{table.Mapping.Target.Name} are not in the target."
             );
     }
 

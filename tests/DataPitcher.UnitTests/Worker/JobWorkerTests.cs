@@ -484,7 +484,7 @@ public sealed class JobWorkerTests
         Assert.Equal(JobState.Succeeded, await store.GetStateAsync(job.JobId, CancellationToken.None));
         var conflict = Assert.Single(events.Appends, item => item.EventType == "conflict");
         Assert.Equal(
-            "1 row(s) in the target already existed in the target (by primary or unique key) and were skipped.",
+            "1 row(s) in the target already existed in the target with the same key (the same row) and were skipped.",
             conflict.Payload.Detail
         );
     }

@@ -47,6 +47,26 @@ public sealed class SqlServerTransferVerifierTests(SqlServerClosureFixture fixtu
     }
 
     [Fact]
+    public async Task VerifyAsync_WhenAPlannedRowIsNoLongerInTheTarget_FailsNamingTheTable()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await CreateTablesAsync(scope);
+        var context = SqlServerTransferTestData.Context();
+        await ApplyAsync(scope, context, (1, 1), (2, 1));
+        await scope.ExecuteTargetAsync("DELETE dbo.verify_children WHERE id = 2;");
+
+        var exception = await Assert.ThrowsAsync<TransferVerificationException>(() =>
+            new SqlServerTransferVerifier(scope.TargetConnectionString).VerifyAsync(
+                Plan(2, VerificationStrategy.Standard),
+                context,
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal("1 planned row(s) of dbo.verify_children are not in the target.", exception.Message);
+    }
+
+    [Fact]
     public async Task VerifyAsync_WhenAWrittenRowReferencesAParentTheTargetDoesNotHave_FailsNamingTheRelationship()
     {
         await using var scope = await fixture.CreateScopeAsync();

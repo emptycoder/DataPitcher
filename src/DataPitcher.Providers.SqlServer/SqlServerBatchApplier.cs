@@ -46,6 +46,14 @@ public sealed class SqlServerBatchApplier
                     cancellationToken
                 )
                 : 0;
+        await RejectUniqueKeyCollisionsAsync(
+            connection,
+            transaction,
+            context,
+            table,
+            batch.Sequence,
+            cancellationToken
+        );
         if (table.InsertColumns.Any(column => column.IsIdentity))
             await SetIdentityInsertAsync(connection, transaction, table, true, cancellationToken);
         try
@@ -253,6 +261,61 @@ public sealed class SqlServerBatchApplier
         await bulk.WriteToServerAsync(reader, cancellationToken);
     }
 
+    /// <summary>
+    /// A staged row whose unique-key value belongs to a target row with a different stable key can neither be
+    /// inserted nor skipped (its children would dangle). Sealing refused such rows; finding one now means the target
+    /// changed since, so the run stops before the batch is written.
+    /// </summary>
+    private static async Task RejectUniqueKeyCollisionsAsync(
+        SqlConnection connection,
+        SqlTransaction transaction,
+        SqlServerExecutionContext context,
+        SqlServerWriteTable table,
+        long sequence,
+        CancellationToken cancellationToken
+    )
+    {
+        var target = SqlServerIdentifier.Qualified(table.Target.Schema, table.Target.Name);
+        var keys = table.StableKeyColumns;
+        foreach (var unique in table.UniqueKeys)
+        {
+            var sql =
+                "SELECT TOP (1) "
+                + string.Join(",", keys.Select(column => "s." + SqlServerIdentifier.Quote(column.Name)))
+                + ","
+                + string.Join(",", keys.Select(column => "t." + SqlServerIdentifier.Quote(column.Name)))
+                + " FROM "
+                + SqlServerBatchStageWriter.StageName(table)
+                + " s JOIN "
+                + target
+                + " t ON "
+                + string.Join(
+                    " AND ",
+                    unique.Select(column =>
+                        "(s."
+                        + SqlServerIdentifier.Quote(column.Name)
+                        + "=t."
+                        + SqlServerIdentifier.Quote(column.Name)
+                        + " OR (s."
+                        + SqlServerIdentifier.Quote(column.Name)
+                        + " IS NULL AND t."
+                        + SqlServerIdentifier.Quote(column.Name)
+                        + " IS NULL))"
+                    )
+                )
+                + " WHERE s.job_id=@job AND s.run_id=@run AND s.fence_token=@fence AND s.batch_sequence=@sequence AND NOT ("
+                + Join(keys, "s", "t")
+                + ")";
+            await using var command = new SqlCommand(sql, connection, transaction);
+            AddBatch(command, context, sequence);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+                throw new TargetRowConflictException(
+                    $"Row {SqlServerUniqueKeyCollisions.Describe(keys, reader)} of {table.Target.Schema}.{table.Target.Name} collides with a different target row on unique key ({string.Join(", ", unique.Select(column => column.Name))}). DataPitcher writes keys verbatim and cannot merge two rows into one; the target changed after the plan was sealed. Remove or re-key one of the rows, then seal the plan again."
+                );
+        }
+    }
+
     private static string UpdateSql(SqlServerWriteTable table)
     {
         var target = SqlServerIdentifier.Qualified(table.Target.Schema, table.Target.Name);
@@ -290,35 +353,14 @@ public sealed class SqlServerBatchApplier
             ",",
             table.StableKeyColumns.Select(column => "INSERTED." + SqlServerIdentifier.Quote(column.Name))
         );
-        // A row the target already has, by stable key or by any other unique key, is skipped rather than failing the
-        // batch on a duplicate-key error. SQL Server unique indexes treat NULL as one value, so NULLs compare equal.
         var predicate =
             policy == SqlServerConflictPolicy.InsertOnly
                 ? ""
-                : string.Concat(
-                    new[] { table.StableKeyColumns }
-                        .Concat(table.UniqueKeys)
-                        .Select(key =>
-                            " AND NOT EXISTS (SELECT 1 FROM "
-                            + target
-                            + " t WITH (UPDLOCK,HOLDLOCK) WHERE "
-                            + string.Join(
-                                " AND ",
-                                key.Select(column =>
-                                    "(s."
-                                    + SqlServerIdentifier.Quote(column.Name)
-                                    + "=t."
-                                    + SqlServerIdentifier.Quote(column.Name)
-                                    + " OR (s."
-                                    + SqlServerIdentifier.Quote(column.Name)
-                                    + " IS NULL AND t."
-                                    + SqlServerIdentifier.Quote(column.Name)
-                                    + " IS NULL))"
-                                )
-                            )
-                            + ")"
-                        )
-                );
+                : " AND NOT EXISTS (SELECT 1 FROM "
+                    + target
+                    + " t WITH (UPDLOCK,HOLDLOCK) WHERE "
+                    + Join(table.StableKeyColumns, "s", "t")
+                    + ")";
         return "INSERT "
             + target
             + " ("
