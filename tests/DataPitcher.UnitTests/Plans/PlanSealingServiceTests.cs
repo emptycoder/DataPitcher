@@ -236,25 +236,60 @@ public sealed class PlanSealingServiceTests
         Assert.Empty(content.Warnings);
     }
 
+    [Fact]
+    public async Task SealAsync_WhenTheSourceWasRescanned_SealsAgainstTheSnapshotThatMatchesTheLiveSchema()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        // The selection was saved against an older scan; a later scan of the current schema is stored as well.
+        var (service, plans, planId) = await ArrangeAsync(
+            fixture,
+            session,
+            selectionSnapshot: new SchemaSnapshotContent([], []),
+            currentScanExists: true
+        );
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        Assert.Equal(CanonicalSchemaSnapshotHasher.Hash(session.SourceSchema), content.SourceSchema.Hash);
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenTheSourceSchemaChangedAndNoScanOfItExists_TellsTheOperatorToScan()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        var (service, _, planId) = await ArrangeAsync(
+            fixture,
+            session,
+            selectionSnapshot: new SchemaSnapshotContent([], []),
+            currentScanExists: false
+        );
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.SealAsync(planId, CancellationToken.None)
+        );
+
+        Assert.Contains("Scan the source connection again, then seal the plan.", exception.Message);
+        Assert.Contains("2026-09-02", exception.Message);
+    }
+
     private static async Task<(PlanSealingService Service, PlanStore Plans, Guid PlanId)> ArrangeAsync(
         ControlDatabaseFixture fixture,
-        FakeSealingSession session
+        FakeSealingSession session,
+        SchemaSnapshotContent? selectionSnapshot = null,
+        bool currentScanExists = false
     )
     {
         fixture.Migrator.Apply();
         var profiles = new ConnectionProfileStore(fixture.Database, fixture.Clock);
         var source = await profiles.CreateAsync(Draft("source"), "source", CancellationToken.None);
         var target = await profiles.CreateAsync(Draft("target"), "target", CancellationToken.None);
-        var snapshotId = Guid.NewGuid();
-        using (var db = fixture.Database.Open())
-            db.Execute(
-                "INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)",
-                new ControlParameter("snapshotId", snapshotId.ToString()),
-                new ControlParameter("connectionId", source.ConnectionId.ToString()),
-                new ControlParameter("snapshotHash", CanonicalSchemaSnapshotHasher.Hash(session.SourceSchema)),
-                new ControlParameter("contentJson", JsonSerializer.Serialize(session.SourceSchema)),
-                new ControlParameter("createdUtc", fixture.Clock.UtcNow.ToString("O"))
-            );
+        var snapshotId = InsertSnapshot(fixture, source.ConnectionId, selectionSnapshot ?? session.SourceSchema);
+        if (currentScanExists)
+            InsertSnapshot(fixture, source.ConnectionId, session.SourceSchema);
         var selections = new SelectionStore(fixture.Database, fixture.Clock);
         var selectionId = Guid.NewGuid();
         await selections.SaveAsync(
@@ -291,6 +326,21 @@ public sealed class PlanSealingServiceTests
             [new FakeSealingProvider(session)]
         );
         return (service, plans, planId);
+    }
+
+    private static Guid InsertSnapshot(ControlDatabaseFixture fixture, Guid connectionId, SchemaSnapshotContent content)
+    {
+        var snapshotId = Guid.NewGuid();
+        using var db = fixture.Database.Open();
+        db.Execute(
+            "INSERT INTO SchemaSnapshots (SnapshotId, ConnectionId, SnapshotHash, ContentJson, CreatedUtc) VALUES (@snapshotId, @connectionId, @snapshotHash, @contentJson, @createdUtc)",
+            new ControlParameter("snapshotId", snapshotId.ToString()),
+            new ControlParameter("connectionId", connectionId.ToString()),
+            new ControlParameter("snapshotHash", CanonicalSchemaSnapshotHasher.Hash(content)),
+            new ControlParameter("contentJson", JsonSerializer.Serialize(content)),
+            new ControlParameter("createdUtc", fixture.Clock.UtcNow.ToString("O"))
+        );
+        return snapshotId;
     }
 
     private static ConnectionProfileDraft Draft(string name) =>

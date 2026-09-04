@@ -85,14 +85,15 @@ public sealed class PlanSealingService(
             targetConnection,
             cancellationToken
         );
-        if (
-            !string.Equals(
-                CanonicalSchemaSnapshotHasher.Hash(session.SourceSchema),
-                snapshot.Hash,
-                StringComparison.Ordinal
-            )
-        )
-            throw new InvalidOperationException("Source schema changed since the selection snapshot.");
+        var liveHash = CanonicalSchemaSnapshotHasher.Hash(session.SourceSchema);
+        if (!string.Equals(liveHash, snapshot.Hash, StringComparison.Ordinal))
+            // A rescan stores a new snapshot while the selection keeps pointing at the one it was saved against, so
+            // the scan the operator just ran is what the plan should be sealed against; without one, ask for it.
+            snapshot =
+                await snapshots.FindByHashAsync(sourceConnectionId, liveHash, cancellationToken)
+                ?? throw new InvalidOperationException(
+                    $"The source schema changed after the selection's schema snapshot was captured ({snapshot.CapturedAtUtc:u}), and no scan of the current schema exists. Scan the source connection again, then seal the plan."
+                );
         var root =
             session.SourceTables.SingleOrDefault(table =>
                 string.Equals(table.Schema, selection.RootSchema, StringComparison.Ordinal)
