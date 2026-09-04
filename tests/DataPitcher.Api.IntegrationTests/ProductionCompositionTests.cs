@@ -816,7 +816,7 @@ public sealed class ProductionCompositionTests
         );
         var review = await fixture.Application.GetPlanReviewAsync(planId, CancellationToken.None);
 
-        Assert.Equal("invalidated", review.Seal.Status);
+        Assert.Equal("failed", review.Seal.Status);
         var recorded = Assert.Single(review.Blockers, blocker => blocker.Code == "seal_rejected");
         Assert.Equal(exception.Message, recorded.Message);
         Assert.Contains(review.Seal.InvalidationReasons, reason => reason.Code == "seal_rejected");

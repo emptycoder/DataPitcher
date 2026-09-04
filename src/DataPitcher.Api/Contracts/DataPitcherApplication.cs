@@ -647,20 +647,37 @@ public sealed class DataPitcherApplication(
             ? ToConnectionResponse(await connections.GetSummaryAsync(targetConnectionId, cancellationToken))
             : null;
         var content = await plans.LoadContentAsync(planId, cancellationToken);
+        // The last sealing attempt failed: the plan is not sealed as far as the operator is concerned, whatever
+        // older content is still stored, and the reason is shown where the operator looks.
+        var failed = record.SealFailureCode is null
+            ? []
+            : new[] { new PlanReviewMessageResponse(record.SealFailureCode, record.SealFailureDetail ?? "") };
         if (content is not null)
         {
-            // A plan sealed by an older sealing algorithm cannot start; say so where the operator looks.
-            var stale = content.IsSealedByCurrentVersion
-                ? []
-                : new[]
-                {
-                    new PlanReviewMessageResponse("plan_stale", new StalePlanException(content.SealingVersion).Message),
-                };
+            // A plan sealed by an older sealing algorithm cannot start either; say so where the operator looks.
+            var stale = failed
+                .Concat(
+                    content.IsSealedByCurrentVersion
+                        ? []
+                        :
+                        [
+                            new PlanReviewMessageResponse(
+                                "plan_stale",
+                                new StalePlanException(content.SealingVersion).Message
+                            ),
+                        ]
+                )
+                .ToArray();
             return new PlanReviewResponse(
                 record.PlanId,
                 checked((int)record.Version),
                 record.CanonicalHash ?? "",
-                new PlanReviewSealResponse(stale.Length == 0 ? "sealed" : "invalidated", stale),
+                new PlanReviewSealResponse(
+                    failed.Length > 0 ? "failed"
+                        : stale.Length == 0 ? "sealed"
+                        : "invalidated",
+                    stale
+                ),
                 new PlanReviewTotalsResponse(
                     content.ManifestTotals.Included,
                     content.ManifestTotals.PlannedWrites,
@@ -727,14 +744,12 @@ public sealed class DataPitcherApplication(
             );
         }
         var notSealed = new PlanReviewMessageResponse("plan_not_sealed", "This plan has not completed sealing.");
-        var reasons = new List<PlanReviewMessageResponse> { notSealed };
-        if (record.SealFailureCode is not null)
-            reasons.Add(new PlanReviewMessageResponse(record.SealFailureCode, record.SealFailureDetail ?? ""));
+        var reasons = new[] { notSealed }.Concat(failed).ToArray();
         return new PlanReviewResponse(
             record.PlanId,
             checked((int)record.Version),
             record.CanonicalHash ?? "",
-            new PlanReviewSealResponse("invalidated", reasons),
+            new PlanReviewSealResponse(failed.Length > 0 ? "failed" : "invalidated", reasons),
             new PlanReviewTotalsResponse(0, 0, 0, 0, 0),
             [],
             [],

@@ -79,13 +79,16 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
       if (isSealed(latest)) toast.success('Plan sealed', `${formatNumber(latest.totals.plannedWrites)} rows across ${latest.tables.length} tables are ready to transfer.`);
       else toast.push({ tone: 'warning', title: 'Plan is not sealed yet', description: latest.blockers[0]?.message ?? 'The plan needs a selection, a source and a target.' });
     },
-    onError: (error) =>
+    onError: (error) => {
+      // The API keeps the reason on the plan; refetch so the page shows the failed state, not only this toast.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.planReview(planId) });
       toast.error(
         'Sealing failed',
         isNotWired(error)
           ? 'Sealing reads the source and target databases. Check that both connections are healthy and that the selection SQL runs against the source.'
           : describeError(error, 'The closure could not be computed.'),
-      ),
+      );
+    },
   });
 
   const start = useMutation({
@@ -125,6 +128,7 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
     );
   }
   const plan = review.data;
+  const sealFailed = plan.seal.status.toLowerCase() === 'failed';
   const canSeal = associated && hasPermission('Plans.Seal') && !seal.isPending;
   const canStart = sealed && hasPermission('Transfers.Start') && plan.blockers.length === 0;
   const selectionLabel = plan.selection ? selectionNames[plan.selection.selectionId]?.name || plan.selection.displayName || `Selection ${shortId(plan.selection.selectionId)}` : null;
@@ -162,7 +166,7 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
         title={
           <span className="flex flex-wrap items-center gap-3">
             {title}
-            <StatusBadge state={sealed ? 'sealed' : 'draft'} />
+            <StatusBadge state={sealFailed ? 'failed' : sealed ? 'sealed' : 'draft'} />
             <span className="font-mono text-xs font-normal text-fg-faint">v{plan.version}</span>
           </span>
         }
@@ -187,7 +191,7 @@ export function PlanDetailScreen({ planId }: Readonly<{ planId: string }>) {
       </div>
 
       {plan.blockers.length > 0 ? (
-        <Alert className="mb-5" title={sealed ? 'Blocked' : 'Not sealed yet'} tone={sealed ? 'danger' : 'warning'}>
+        <Alert className="mb-5" title={sealFailed ? 'Sealing failed' : sealed ? 'Blocked' : 'Not sealed yet'} tone={sealFailed || sealed ? 'danger' : 'warning'}>
           <ul className={cx(plan.blockers.length > 1 && 'list-disc pl-4')}>
             {plan.blockers.map((blocker, index) => (
               <li key={`${blocker.code}:${index}`}>
