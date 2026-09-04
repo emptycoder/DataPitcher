@@ -4,6 +4,7 @@ using DataPitcher.ControlStore;
 using DataPitcher.Core.Closure;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Identity;
+using DataPitcher.Core.Jobs;
 using DataPitcher.Core.Plans;
 using DataPitcher.Core.Schema;
 using DataPitcher.Core.Selection;
@@ -237,6 +238,36 @@ public sealed class PlanSealingServiceTests
     }
 
     [Fact]
+    public async Task SealAsync_WhileATransferOfThePlanIsActive_RefusesUntilThatJobHasEnded()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+        await service.SealAsync(planId, CancellationToken.None);
+        var store = new JobStore(fixture.Database, fixture.Clock);
+        var job = store.Start(new StartJobRequest(planId, "run-1")).Job;
+
+        var queued = await Assert.ThrowsAsync<PlanInUseException>(() =>
+            service.SealAsync(planId, CancellationToken.None)
+        );
+        var claim = (await store.TryClaimNextAsync("worker-a", TimeSpan.FromMinutes(1), CancellationToken.None))!;
+        await store.PrepareAsync(claim, CancellationToken.None);
+        await store.MarkRunningAsync(claim.Lease, CancellationToken.None);
+        var running = await Assert.ThrowsAsync<PlanInUseException>(() =>
+            service.SealAsync(planId, CancellationToken.None)
+        );
+        await store.MarkFailedAsync(claim.Lease, "transfer_failed", "gone", CancellationToken.None);
+        await service.SealAsync(planId, CancellationToken.None);
+
+        Assert.Contains($"Transfer job {job.JobId} for this plan is Queued", queued.Message);
+        Assert.Contains($"Transfer job {job.JobId} for this plan is Running", running.Message);
+        Assert.Contains("wait for it to finish or cancel it", running.Message);
+        Assert.Equal(1, session.Store.ResetCalls - 1);
+        Assert.NotNull(await plans.LoadContentAsync(planId, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task SealAsync_WhenAPlanIsSealedAgain_StartsFromAnEmptyStagedSetAndFindsTheSameRows()
     {
         using var fixture = new ControlDatabaseFixture();
@@ -357,7 +388,8 @@ public sealed class PlanSealingServiceTests
             profiles,
             new SchemaSnapshotStore(fixture.Database, fixture.Clock),
             new Resolver(),
-            [new FakeSealingProvider(session)]
+            [new FakeSealingProvider(session)],
+            new JobStore(fixture.Database, fixture.Clock)
         );
         return (service, plans, planId);
     }

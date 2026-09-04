@@ -21,6 +21,9 @@ public sealed class IncompleteGraphException(string message) : InvalidOperationE
 /// <summary>Planned rows reference source parents that do not exist while the target enforces the constraint.</summary>
 public sealed class SourceOrphansException(string message) : InvalidOperationException(message);
 
+/// <summary>A transfer of this plan is still running or paused; sealing again would pull its sealed keys away.</summary>
+public sealed class PlanInUseException(string message) : InvalidOperationException(message);
+
 /// <summary>
 /// Provider-neutral plan sealing: validates the saved selection against the sealed schema snapshot, runs it against
 /// the source, computes the demand-driven closure across source and target through the provider's
@@ -32,7 +35,8 @@ public sealed class PlanSealingService(
     IConnectionProfileRepository connections,
     ISchemaSnapshotRepository snapshots,
     ISecretReferenceResolver secrets,
-    IEnumerable<ISealingProvider> providers
+    IEnumerable<ISealingProvider> providers,
+    IJobRepository jobs
 )
 {
     private readonly IReadOnlyDictionary<string, ISealingProvider> providers = providers.ToDictionary(
@@ -45,6 +49,7 @@ public sealed class PlanSealingService(
         var plan =
             await plans.FindAsync(planId, cancellationToken)
             ?? throw new InvalidOperationException("Plan was not found.");
+        RequireNoActiveTransfer(planId, cancellationToken);
         if (
             plan.SelectionId is not Guid selectionId
             || plan.SourceConnectionId is not Guid sourceConnectionId
@@ -322,6 +327,24 @@ public sealed class PlanSealingService(
             TransferPlanContent.CurrentSealingVersion,
             warnings
         );
+    }
+
+    /// <summary>
+    /// Sealing replaces the plan content and rebuilds the sealed key set the transfer reads, so it must not happen
+    /// underneath a job that is still queued, running or paused; the operator finishes or cancels that job first.
+    /// </summary>
+    private void RequireNoActiveTransfer(Guid planId, CancellationToken cancellationToken)
+    {
+        var active = jobs.List(cancellationToken)
+            .FirstOrDefault(job =>
+                job.PlanId == planId
+                && job.State
+                    is not (JobState.Succeeded or JobState.Failed or JobState.Cancelled or JobState.VerificationFailed)
+            );
+        if (active is not null)
+            throw new PlanInUseException(
+                $"Transfer job {active.JobId} for this plan is {active.State}. Sealing again would replace the sealed rows that job reads; wait for it to finish or cancel it, then seal the plan."
+            );
     }
 
     /// <summary>
