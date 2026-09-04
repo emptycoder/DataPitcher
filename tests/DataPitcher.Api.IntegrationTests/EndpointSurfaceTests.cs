@@ -795,6 +795,51 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task QueuePlanSeal_WhenSealingRefusesThePlan_ReturnsConflictWithTheReasonAndACode()
+    {
+        _factory.Application.SealException = new UnorderablePlanException(
+            "No write order satisfies the foreign keys between app.A, app.B with constraints enforced."
+        );
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/plans/{Guid.NewGuid()}/seal");
+            request.Headers.Add("Authorization", "Bearer " + AccessToken(Permissions.PlansSeal));
+            using var response = await _client.SendAsync(request, CancellationToken.None);
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.StartsWith("No write order satisfies", problem.RootElement.GetProperty("title").GetString());
+            Assert.Equal("unorderable_cycle", problem.RootElement.GetProperty("code").GetString());
+        }
+        finally
+        {
+            _factory.Application.SealException = null;
+        }
+    }
+
+    [Fact]
+    public async Task QueuePlanSeal_WhenSealingFailsUnexpectedly_ReturnsServerErrorWithTheDetail()
+    {
+        _factory.Application.SealException = new TimeoutException("Execution Timeout Expired.");
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/plans/{Guid.NewGuid()}/seal");
+            request.Headers.Add("Authorization", "Bearer " + AccessToken(Permissions.PlansSeal));
+            using var response = await _client.SendAsync(request, CancellationToken.None);
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            Assert.Equal("Plan sealing failed.", problem.RootElement.GetProperty("title").GetString());
+            Assert.Equal("Execution Timeout Expired.", problem.RootElement.GetProperty("detail").GetString());
+            Assert.Equal("seal_failed", problem.RootElement.GetProperty("code").GetString());
+        }
+        finally
+        {
+            _factory.Application.SealException = null;
+        }
+    }
+
+    [Fact]
     public async Task StartJob_WhenPlanIsUnsealed_ReturnsConflict()
     {
         _factory.Application.StartJobException = new PlanNotSealedException();

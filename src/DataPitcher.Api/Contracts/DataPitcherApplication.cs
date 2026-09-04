@@ -599,12 +599,37 @@ public sealed class DataPitcherApplication(
             await plans.FindAsync(planId, cancellationToken)
             ?? throw new InvalidOperationException("Plan was not found.");
         if (plan.SelectionId is not null && plan.SourceConnectionId is not null && plan.TargetConnectionId is not null)
-            await (sealing ?? throw new InvalidOperationException("Plan sealing is not configured.")).SealAsync(
-                planId,
-                cancellationToken
-            );
+            try
+            {
+                await (sealing ?? throw new InvalidOperationException("Plan sealing is not configured.")).SealAsync(
+                    planId,
+                    cancellationToken
+                );
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // The reason stays on the plan so the review shows it after the request has gone.
+                await plans.RecordSealFailureAsync(
+                    planId,
+                    SealFailureCode(exception),
+                    exception.Message,
+                    cancellationToken
+                );
+                throw;
+            }
         return Receipt(planId: planId);
     }
+
+    /// <summary>A stable code per sealing refusal, so clients can tell "fix the graph" from "the database failed".</summary>
+    internal static string SealFailureCode(Exception exception) =>
+        exception switch
+        {
+            UnorderablePlanException => "unorderable_cycle",
+            IncompleteGraphException => "incomplete_graph",
+            SourceOrphansException => "source_orphans",
+            InvalidOperationException or NotSupportedException => "seal_rejected",
+            _ => "seal_failed",
+        };
 
     public async Task<PlanReviewResponse> GetPlanReviewAsync(Guid planId, CancellationToken cancellationToken)
     {
@@ -700,18 +725,21 @@ public sealed class DataPitcherApplication(
             );
         }
         var notSealed = new PlanReviewMessageResponse("plan_not_sealed", "This plan has not completed sealing.");
+        var reasons = new List<PlanReviewMessageResponse> { notSealed };
+        if (record.SealFailureCode is not null)
+            reasons.Add(new PlanReviewMessageResponse(record.SealFailureCode, record.SealFailureDetail ?? ""));
         return new PlanReviewResponse(
             record.PlanId,
             checked((int)record.Version),
             record.CanonicalHash ?? "",
-            new PlanReviewSealResponse("invalidated", [notSealed]),
+            new PlanReviewSealResponse("invalidated", reasons),
             new PlanReviewTotalsResponse(0, 0, 0, 0, 0),
             [],
             [],
             [],
             [],
             [],
-            [notSealed],
+            reasons,
             selection is null
                 ? null
                 : new PlanReviewSelectionResponse(

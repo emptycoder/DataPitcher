@@ -391,8 +391,14 @@ public sealed class FakeDataPitcherApplication : IDataPitcherApplication
                 )
         );
 
+    public Exception? SealException { get; set; }
+
     public Task<OperationReceiptResponse> QueuePlanSealAsync(Guid planId, CancellationToken cancellationToken) =>
-        ObserveAsync(nameof(QueuePlanSealAsync), cancellationToken, () => Receipt(planId: planId));
+        ObserveAsync(
+            nameof(QueuePlanSealAsync),
+            cancellationToken,
+            () => SealException is null ? Receipt(planId: planId) : throw SealException
+        );
 
     public Task<PlanReviewResponse> GetPlanReviewAsync(Guid planId, CancellationToken cancellationToken) =>
         ObserveAsync(

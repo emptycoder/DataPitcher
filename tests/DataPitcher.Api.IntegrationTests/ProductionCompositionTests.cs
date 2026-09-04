@@ -763,6 +763,68 @@ public sealed class ProductionCompositionTests
     }
 
     [Fact]
+    public async Task DataPitcherApplication_WhenSealingFails_RecordsTheReasonOnThePlanAndShowsItInTheReview()
+    {
+        using var fixture = new ProductionApplicationFixture();
+        var source = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest(
+                "Source",
+                "postgresql",
+                Guid.NewGuid(),
+                "source",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
+            CancellationToken.None
+        );
+        var target = await fixture.Application.CreateConnectionAsync(
+            new CreateConnectionRequest(
+                "Target",
+                "postgresql",
+                Guid.NewGuid(),
+                "target",
+                "Host=localhost;Database=app;Username=app;Password=x"
+            ),
+            CancellationToken.None
+        );
+        var selectionId = Guid.NewGuid();
+        // A selection without a root table cannot be sealed; the refusal is what this test looks at.
+        _ = await fixture.Selections.SaveAsync(
+            selectionId,
+            "Selection",
+            "{}",
+            "ignored-on-create",
+            CancellationToken.None,
+            source.ConnectionId,
+            Guid.NewGuid()
+        );
+        var planId = Guid.NewGuid();
+        _ = await fixture.Application.SavePlanAsync(
+            planId,
+            new SavePlanRequest(
+                "Plan",
+                null,
+                "ignored-on-create",
+                selectionId,
+                source.ConnectionId,
+                target.ConnectionId
+            ),
+            CancellationToken.None
+        );
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Application.QueuePlanSealAsync(planId, CancellationToken.None)
+        );
+        var review = await fixture.Application.GetPlanReviewAsync(planId, CancellationToken.None);
+
+        Assert.Equal("invalidated", review.Seal.Status);
+        var recorded = Assert.Single(review.Blockers, blocker => blocker.Code == "seal_rejected");
+        Assert.Equal(exception.Message, recorded.Message);
+        Assert.Contains(review.Seal.InvalidationReasons, reason => reason.Code == "seal_rejected");
+        var plan = (await fixture.Plans.FindAsync(planId, CancellationToken.None))!;
+        Assert.Equal("seal_rejected", plan.SealFailureCode);
+    }
+
+    [Fact]
     public async Task DataPitcherApplication_RejectsPlansWithUnknownSelections()
     {
         using var fixture = new ProductionApplicationFixture();

@@ -9,7 +9,7 @@ namespace DataPitcher.ControlStore;
 public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRepository
 {
     private const string SelectColumns =
-        "SELECT PlanId, DisplayName, OperatorNote, Version, CanonicalHash, UpdatedUtc, SelectionId, SourceConnectionId, TargetConnectionId FROM Plans";
+        "SELECT PlanId, DisplayName, OperatorNote, Version, CanonicalHash, UpdatedUtc, SelectionId, SourceConnectionId, TargetConnectionId, SealFailureCode, SealFailureDetail FROM Plans";
 
     public Task<PlanRecord> SaveAsync(
         Guid planId,
@@ -38,7 +38,9 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
                 now,
                 selectionId?.ToString(),
                 sourceConnectionId?.ToString(),
-                targetConnectionId?.ToString()
+                targetConnectionId?.ToString(),
+                null,
+                null
             );
             db.Execute(
                 "INSERT INTO Plans (PlanId, DisplayName, OperatorNote, Version, CanonicalHash, ContentJson, SealedUtc, CreatedUtc, UpdatedUtc, SelectionId, SourceConnectionId, TargetConnectionId) VALUES (@planId, @displayName, @operatorNote, @version, NULL, NULL, NULL, @createdUtc, @updatedUtc, @selectionId, @sourceConnectionId, @targetConnectionId)",
@@ -58,7 +60,7 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
         if (existing.Version != ParseVersion(ifMatch))
             throw new PlanVersionMismatchException();
         var affected = db.Execute(
-            "UPDATE Plans SET DisplayName = @displayName, OperatorNote = @operatorNote, SelectionId = @selectionId, SourceConnectionId = @sourceConnectionId, TargetConnectionId = @targetConnectionId, Version = Version + 1, CanonicalHash = NULL, UpdatedUtc = @updatedUtc WHERE PlanId = @planId AND Version = @version",
+            "UPDATE Plans SET DisplayName = @displayName, OperatorNote = @operatorNote, SelectionId = @selectionId, SourceConnectionId = @sourceConnectionId, TargetConnectionId = @targetConnectionId, Version = Version + 1, CanonicalHash = NULL, SealFailureCode = NULL, SealFailureDetail = NULL, UpdatedUtc = @updatedUtc WHERE PlanId = @planId AND Version = @version",
             new ControlParameter("displayName", displayName),
             new ControlParameter("operatorNote", operatorNote),
             new ControlParameter("selectionId", selectionId?.ToString()),
@@ -100,11 +102,27 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
         using var db = database.Open();
         var now = Stamp(clock.UtcNow);
         var affected = db.Execute(
-            "UPDATE Plans SET ContentJson = @contentJson, SealedUtc = @sealedUtc, CanonicalHash = @canonicalHash, UpdatedUtc = @updatedUtc WHERE PlanId = @planId",
+            "UPDATE Plans SET ContentJson = @contentJson, SealedUtc = @sealedUtc, CanonicalHash = @canonicalHash, SealFailureCode = NULL, SealFailureDetail = NULL, UpdatedUtc = @updatedUtc WHERE PlanId = @planId",
             new ControlParameter("contentJson", JsonSerializer.Serialize(content)),
             new ControlParameter("sealedUtc", now),
             new ControlParameter("canonicalHash", CanonicalPlanHasher.Hash(content)),
             new ControlParameter("updatedUtc", now),
+            new ControlParameter("planId", planId.ToString())
+        );
+        if (affected != 1)
+            throw new InvalidOperationException("Plan was not found.");
+        return Task.CompletedTask;
+    }
+
+    public Task RecordSealFailureAsync(Guid planId, string code, string detail, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var db = database.Open();
+        var affected = db.Execute(
+            "UPDATE Plans SET SealFailureCode = @code, SealFailureDetail = @detail, UpdatedUtc = @updatedUtc WHERE PlanId = @planId",
+            new ControlParameter("code", code),
+            new ControlParameter("detail", detail),
+            new ControlParameter("updatedUtc", Stamp(clock.UtcNow)),
             new ControlParameter("planId", planId.ToString())
         );
         if (affected != 1)
@@ -138,7 +156,9 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
             reader.GetString(5),
             reader.IsDBNull(6) ? null : reader.GetString(6),
             reader.IsDBNull(7) ? null : reader.GetString(7),
-            reader.IsDBNull(8) ? null : reader.GetString(8)
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.IsDBNull(9) ? null : reader.GetString(9),
+            reader.IsDBNull(10) ? null : reader.GetString(10)
         );
 
     private static PlanRecord ToRecord(Row row) =>
@@ -151,7 +171,9 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
             DateTimeOffset.Parse(row.UpdatedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
             row.SelectionId is null ? null : Guid.Parse(row.SelectionId),
             row.SourceConnectionId is null ? null : Guid.Parse(row.SourceConnectionId),
-            row.TargetConnectionId is null ? null : Guid.Parse(row.TargetConnectionId)
+            row.TargetConnectionId is null ? null : Guid.Parse(row.TargetConnectionId),
+            row.SealFailureCode,
+            row.SealFailureDetail
         );
 
     private static long ParseVersion(string ifMatch) =>
@@ -171,6 +193,8 @@ public sealed class PlanStore(ControlDatabase database, IClock clock) : IPlanRep
         string UpdatedUtc,
         string? SelectionId,
         string? SourceConnectionId,
-        string? TargetConnectionId
+        string? TargetConnectionId,
+        string? SealFailureCode,
+        string? SealFailureDetail
     );
 }

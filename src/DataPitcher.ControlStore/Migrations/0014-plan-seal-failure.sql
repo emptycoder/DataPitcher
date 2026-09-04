@@ -1,0 +1,2 @@
+ALTER TABLE Plans ADD COLUMN SealFailureCode TEXT NULL;
+ALTER TABLE Plans ADD COLUMN SealFailureDetail TEXT NULL;

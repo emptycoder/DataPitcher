@@ -618,6 +618,7 @@ public static class EndpointGroups
         ClaimsPrincipal user,
         IAuthorizationService authorizationService,
         IDataPitcherApplication application,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
     {
@@ -632,8 +633,35 @@ public static class EndpointGroups
             { } problem
         )
             return problem;
-        var receipt = await application.QueuePlanSealAsync(planId, cancellationToken);
-        return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
+        var logger = loggerFactory.CreateLogger("DataPitcher.Api.Plans");
+        try
+        {
+            var receipt = await application.QueuePlanSealAsync(planId, cancellationToken);
+            return TypedResults.Accepted(receipt.StatusUri.ToString(), receipt);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or NotSupportedException)
+        {
+            // Sealing refused the plan for a reason the operator can act on: say it, and keep it in the log.
+            logger.LogWarning(exception, "Plan {PlanId} was not sealed: {Reason}", planId, exception.Message);
+            return TypedResults.Problem(
+                statusCode: StatusCodes.Status409Conflict,
+                title: exception.Message,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["code"] = DataPitcherApplication.SealFailureCode(exception),
+                }
+            );
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(exception, "Plan {PlanId} sealing failed unexpectedly", planId);
+            return TypedResults.Problem(
+                statusCode: StatusCodes.Status500InternalServerError,
+                title: "Plan sealing failed.",
+                detail: exception.GetBaseException().Message,
+                extensions: new Dictionary<string, object?> { ["code"] = "seal_failed" }
+            );
+        }
     }
 
     private static async Task<Results<Ok<PlanReviewResponse>, ProblemHttpResult>> GetPlanReviewAsync(
