@@ -211,6 +211,35 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     }
 
     [Fact]
+    public async Task Transfer_WhenATableReferencesItselfThroughAUniqueKeyThatIsNotTheStableKey_WritesAncestorsFirst()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE dbo.worker_codes (id int NOT NULL CONSTRAINT PK_worker_codes PRIMARY KEY, code nvarchar(32) NOT NULL CONSTRAINT UQ_worker_codes UNIQUE, parent_code nvarchar(32) NULL CONSTRAINT FK_worker_codes_parent FOREIGN KEY REFERENCES dbo.worker_codes(code));";
+        // The stable key is id, the parent link goes through code: every child has a lower id than its parent.
+        await scope.ExecuteAsync(
+            ddl
+                + " INSERT dbo.worker_codes (id, code, parent_code) VALUES (2001, N'root', NULL); WITH n AS (SELECT TOP (2000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS i FROM sys.all_objects a CROSS JOIN sys.all_objects b) INSERT dbo.worker_codes (id, code, parent_code) SELECT i, CONCAT(N'c', i), N'root' FROM n;"
+        );
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(scope, "worker_codes", "PK_worker_codes", "SELECT * FROM dbo.worker_codes");
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal(2001, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_codes"));
+        Assert.Equal(
+            2000,
+            await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_codes WHERE parent_code = N'root'")
+        );
+        Assert.Equal(
+            1,
+            await scope.ScalarTargetAsync<int>(
+                "SELECT COUNT(*) FROM sys.foreign_keys WHERE name = 'FK_worker_codes_parent' AND is_disabled = 0 AND is_not_trusted = 0"
+            )
+        );
+    }
+
+    [Fact]
     public async Task Transfer_WhenTwoTablesReferenceEachOther_FillsTheNullableSideAfterTheRows()
     {
         await using var scope = await fixture.CreateScopeAsync();

@@ -151,8 +151,7 @@ public sealed class PlanSealingService(
             depth.Keys.ToArray(),
             relationships,
             depth,
-            relationship => IsNullable(relationship, session.TargetSchema),
-            relationship => IsOntoStableKey(relationship, stableKeys)
+            relationship => IsNullable(relationship, session.TargetSchema)
         );
         if (order.Levelled.Count > 0)
             await session.OrderHierarchiesAsync(order.Levelled, stableKeys, planId, cancellationToken);
@@ -441,15 +440,6 @@ public sealed class PlanSealingService(
                 )
         );
     }
-
-    /// <summary>Only a self reference onto the stable key can be levelled through the sealed keys.</summary>
-    private static bool IsOntoStableKey(
-        ClosureRelationship relationship,
-        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys
-    ) =>
-        stableKeys.TryGetValue(relationship.FromTable, out var selection)
-        && selection.Constraint is { } constraint
-        && relationship.ToColumns.SequenceEqual(constraint.Columns, StringComparer.Ordinal);
 
     private static IReadOnlyCollection<ClosureRelationship> ReachableRelationships(
         IReadOnlyCollection<ForeignKeyDefinition> foreignKeys,

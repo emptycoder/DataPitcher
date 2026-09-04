@@ -16,8 +16,7 @@ public sealed class ImportOrderingTests
             [child, parent],
             [Reference(child, "ParentId", parent)],
             Depth((child, 0), (parent, 1)),
-            Nullable,
-            OntoKey
+            Nullable
         );
 
         Assert.True(order.Order[parent] < order.Order[child]);
@@ -34,8 +33,7 @@ public sealed class ImportOrderingTests
             [people, teams],
             [Reference(people, "TeamId", teams), lead],
             Depth((people, 0), (teams, 1)),
-            Nullable,
-            OntoKey
+            Nullable
         );
 
         Assert.True(order.Order[teams] < order.Order[people]);
@@ -53,8 +51,7 @@ public sealed class ImportOrderingTests
             [a, b, c],
             [Reference(a, "BId", b), Reference(b, "CId", c), closing],
             Depth((a, 0), (b, 1), (c, 2)),
-            Nullable,
-            OntoKey
+            Nullable
         );
 
         Assert.Equal([closing], order.Deferred);
@@ -72,8 +69,7 @@ public sealed class ImportOrderingTests
                 [a, b],
                 [Reference(a, "BId", b), Reference(b, "AId", a)],
                 Depth((a, 0), (b, 1)),
-                Nullable,
-                OntoKey
+                Nullable
             )
         );
 
@@ -93,8 +89,7 @@ public sealed class ImportOrderingTests
                 [a, b, x],
                 [Reference(a, "BId", b), Reference(b, "AId", a), Reference(x, "AId", a)],
                 Depth((a, 1), (b, 2), (x, 3)),
-                Nullable,
-                OntoKey
+                Nullable
             )
         );
 
@@ -114,24 +109,62 @@ public sealed class ImportOrderingTests
         );
         var parent = Reference(nodes, "ParentId", nodes);
         var root = Reference(nodes, "RootId", nodes);
-        var order = ImportOrdering.Plan([nodes], [parent, root], Depth((nodes, 0)), Nullable, OntoKey);
+        var order = ImportOrdering.Plan([nodes], [parent, root], Depth((nodes, 0)), Nullable);
 
         Assert.Equal([parent], order.Levelled);
         Assert.Equal([root], order.Deferred);
     }
 
     [Fact]
-    public void Plan_RefusesANonNullableSelfReferenceThatDoesNotTargetTheStableKey()
+    public void Plan_LevelsASelfReferenceThatTargetsAnotherUniqueKey()
     {
         var nodes = Table("Nodes", new ColumnDefinition("ParentCode", typeof(int), false));
         var parent = new ClosureRelationship(
             new ForeignKeyDefinition("FK_Nodes_ParentCode", nodes, nodes, ["ParentCode"], ["Code"], true, true)
         );
+        var order = ImportOrdering.Plan([nodes], [parent], Depth((nodes, 0)), Nullable);
+
+        Assert.Equal([parent], order.Levelled);
+        Assert.Empty(order.Deferred);
+    }
+
+    [Fact]
+    public void Plan_LevelsTheNonNullableSelfReferenceAndDefersTheNullableOne()
+    {
+        var nodes = Table(
+            "Nodes",
+            new ColumnDefinition("AltId", typeof(int), true),
+            new ColumnDefinition("ParentId", typeof(int), false)
+        );
+        var alternate = Reference(nodes, "AltId", nodes);
+        var parent = Reference(nodes, "ParentId", nodes);
+        var order = ImportOrdering.Plan([nodes], [alternate, parent], Depth((nodes, 0)), Nullable);
+
+        Assert.Equal([parent], order.Levelled);
+        Assert.Equal([alternate], order.Deferred);
+    }
+
+    [Fact]
+    public void Plan_RefusesTwoNonNullableSelfReferencesOnOneTable()
+    {
+        var nodes = Table(
+            "Nodes",
+            new ColumnDefinition("ParentId", typeof(int), false),
+            new ColumnDefinition("RootId", typeof(int), false)
+        );
         var exception = Assert.Throws<UnorderablePlanException>(() =>
-            ImportOrdering.Plan([nodes], [parent], Depth((nodes, 0)), Nullable, OntoKey)
+            ImportOrdering.Plan(
+                [nodes],
+                [Reference(nodes, "ParentId", nodes), Reference(nodes, "RootId", nodes)],
+                Depth((nodes, 0)),
+                Nullable
+            )
         );
 
-        Assert.Contains("dbo.Nodes references itself through FK_Nodes_ParentCode (ParentCode)", exception.Message);
+        Assert.Contains(
+            "references itself through both FK_Nodes_ParentId and FK_Nodes_RootId (RootId)",
+            exception.Message
+        );
     }
 
     private static TableDefinition Table(string name, params ColumnDefinition[] columns) =>
@@ -153,7 +186,4 @@ public sealed class ImportOrderingTests
         relationship.FromColumns.All(name =>
             relationship.FromTable.Columns.Single(column => column.Name == name).IsNullable
         );
-
-    private static bool OntoKey(ClosureRelationship relationship) =>
-        relationship.ToColumns.SequenceEqual(["Id"], StringComparer.Ordinal);
 }

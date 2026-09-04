@@ -28,8 +28,7 @@ public static class ImportOrdering
         IReadOnlyList<TableDefinition> planned,
         IReadOnlyCollection<ClosureRelationship> relationships,
         IReadOnlyDictionary<TableDefinition, int> depth,
-        Func<ClosureRelationship, bool> deferrable,
-        Func<ClosureRelationship, bool> levelable
+        Func<ClosureRelationship, bool> deferrable
     )
     {
         var set = planned.ToHashSet();
@@ -37,19 +36,22 @@ public static class ImportOrdering
         var deferred = new List<ClosureRelationship>();
         foreach (var table in planned)
         {
-            var self = relationships.Where(r => r.FromTable == table && r.ToTable == table).ToArray();
+            var self = relationships
+                .Where(r => r.FromTable == table && r.ToTable == table)
+                .OrderBy(r => r.Name, StringComparer.Ordinal)
+                .ToArray();
             if (self.Length == 0)
                 continue;
-            // One self reference onto the stable key is levelled; every other one must be deferrable.
-            var level = self.FirstOrDefault(levelable);
-            if (level is not null)
-                levelled.Add(level);
+            // One self reference is levelled through the sealed keys (the non-nullable one when there is one, since
+            // it cannot be deferred); every other one is written in the second phase, so it must be nullable.
+            var level = self.FirstOrDefault(r => !deferrable(r)) ?? self[0];
+            levelled.Add(level);
             foreach (var relationship in self.Where(r => r != level))
                 if (deferrable(relationship))
                     deferred.Add(relationship);
                 else
                     throw new UnorderablePlanException(
-                        $"{Name(table)} references itself through {relationship.Name} ({Columns(relationship)}), which is not nullable in the target and does not reference the table's stable key, so its rows cannot be written in an order the constraint accepts. Make the column nullable in the target or exclude the table."
+                        $"{Name(table)} references itself through both {level.Name} and {relationship.Name} ({Columns(relationship)}) with columns that are not nullable in the target; only one non-nullable self reference per table can be ordered. Make {Columns(relationship)} nullable in the target or exclude the table."
                     );
         }
         var cross = relationships

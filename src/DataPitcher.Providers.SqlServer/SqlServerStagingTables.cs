@@ -172,46 +172,45 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
         TableDefinition table,
         IReadOnlyList<string> keyColumns,
         IReadOnlyList<string> parentColumns,
+        IReadOnlyList<string> referencedColumns,
         CancellationToken ct
     )
     {
         var keys = Qualified(SourceTableName(planId, new TableAddress(table.Schema, table.Name)));
         var source = SqlServerIdentifier.Qualified(table.Schema, table.Name);
         string Key(int i) => "[k" + i + "]";
+        string Q(string column) => SqlServerIdentifier.Quote(column);
         var fKeys = string.Join(",", keyColumns.Select((_, i) => "f." + Key(i)));
-        var hKeys = string.Join(",", keyColumns.Select((_, i) => "h." + Key(i)));
         var mKeys = string.Join(",", keyColumns.Select((_, i) => Key(i)));
-        var joinSource = string.Join(
+        var joinSource = string.Join(" AND ", keyColumns.Select((column, i) => "s." + Q(column) + "=f." + Key(i)));
+        var parentNull = string.Join(" OR ", parentColumns.Select(column => "s." + Q(column) + " IS NULL"));
+        // The parent columns name the referenced columns of another row (a unique key, not necessarily the stable
+        // key), so one hop through the source table (alias pr) maps a parent reference onto its stable key.
+        var joinReferenced = string.Join(
             " AND ",
-            keyColumns.Select((column, i) => "s." + SqlServerIdentifier.Quote(column) + "=f." + Key(i))
-        );
-        var parentNull = string.Join(
-            " OR ",
-            parentColumns.Select(column => "s." + SqlServerIdentifier.Quote(column) + " IS NULL")
+            parentColumns.Select((column, i) => "pr." + Q(referencedColumns[i]) + "=s." + Q(column))
         );
         // A parent outside the transfer set (never staged, or staged but satisfied by the target) is a root.
         var parentInKeys =
             "EXISTS (SELECT 1 FROM "
             + keys
-            + " p WHERE p.[__included]=1 AND "
-            + string.Join(
-                " AND ",
-                parentColumns.Select((column, i) => "p." + Key(i) + "=s." + SqlServerIdentifier.Quote(column))
-            )
+            + " p JOIN "
+            + source
+            + " pr ON "
+            + string.Join(" AND ", keyColumns.Select((column, i) => "pr." + Q(column) + "=p." + Key(i)))
+            + " WHERE p.[__included]=1 AND "
+            + joinReferenced
             + ")";
-        var joinParent = string.Join(
+        var joinParentLevel = string.Join(
             " AND ",
-            parentColumns.Select((column, i) => "s." + SqlServerIdentifier.Quote(column) + "=h." + Key(i))
+            keyColumns.Select((column, i) => "h." + Key(i) + "=pr." + Q(column))
         );
         // A row that is its own parent is a root too, and must not feed the recursion.
         var parentIsSelf =
             "("
             + string.Join(
                 " AND ",
-                parentColumns.Select(
-                    (column, i) =>
-                        "s." + SqlServerIdentifier.Quote(column) + "=s." + SqlServerIdentifier.Quote(keyColumns[i])
-                )
+                parentColumns.Select((column, i) => "s." + Q(column) + "=s." + Q(referencedColumns[i]))
             )
             + ")";
         var joinLevels = string.Join(" AND ", keyColumns.Select((_, i) => "f." + Key(i) + "=m." + Key(i)));
@@ -238,8 +237,12 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
             + source
             + " s ON "
             + joinSource
+            + " JOIN "
+            + source
+            + " pr ON "
+            + joinReferenced
             + " JOIN h ON "
-            + joinParent
+            + joinParentLevel
             + " WHERE f.[__included]=1 AND h.lvl < 4096 AND NOT "
             + parentIsSelf
             + ") "

@@ -37,8 +37,9 @@ public interface ISealingSession : IAsyncDisposable
 
     /// <summary>
     /// Orders the sealed keys of tables that reference themselves so that a row's parents in the same table are
-    /// written before it: keys get a hierarchy level from the source's own parent links, and the transfer pages
-    /// through them ancestors first. Foreign keys therefore stay enforced on the target.
+    /// written before it: keys get a hierarchy level from the source's own parent links (through whichever key the
+    /// reference targets), and the transfer pages through them ancestors first. Foreign keys therefore stay
+    /// enforced on the target.
     /// </summary>
     Task OrderHierarchiesAsync(
         IReadOnlyCollection<ClosureRelationship> selfRelationships,

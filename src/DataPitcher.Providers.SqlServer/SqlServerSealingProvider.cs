@@ -100,7 +100,7 @@ public sealed class SqlServerSealingProvider : ISealingProvider
             CancellationToken cancellationToken
         )
         {
-            // Sealing passes only self references onto the stable key; those are levelled through the sealed keys.
+            // Each self reference sealing chose is levelled through the sealed keys, whatever key it references.
             foreach (var relationship in selfRelationships)
                 await SqlServerStagingTables.StampHierarchyAsync(
                     source,
@@ -108,6 +108,7 @@ public sealed class SqlServerSealingProvider : ISealingProvider
                     relationship.FromTable,
                     stableKeys[relationship.FromTable].Constraint!.Columns,
                     relationship.FromColumns,
+                    relationship.ToColumns,
                     cancellationToken
                 );
         }

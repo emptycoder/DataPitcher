@@ -213,6 +213,29 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
     }
 
     [Fact]
+    public async Task Transfer_WhenATableReferencesItselfThroughAUniqueKeyThatIsNotTheStableKey_WritesAncestorsFirst()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE worker_codes (id integer NOT NULL CONSTRAINT pk_worker_codes PRIMARY KEY, code text NOT NULL CONSTRAINT uq_worker_codes UNIQUE, parent_code text NULL CONSTRAINT fk_worker_codes_parent REFERENCES worker_codes(code));";
+        // The stable key is id, the parent link goes through code: every child has a lower id than its parent.
+        await scope.ExecuteAsync(
+            ddl
+                + " INSERT INTO worker_codes (id, code, parent_code) VALUES (2001, 'root', NULL); INSERT INTO worker_codes (id, code, parent_code) SELECT g, 'c' || g, 'root' FROM generate_series(1, 2000) g;"
+        );
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(scope, "worker_codes", "pk_worker_codes", "SELECT * FROM worker_codes");
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal(2001L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_codes"));
+        Assert.Equal(
+            2000L,
+            await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_codes WHERE parent_code = 'root'")
+        );
+    }
+
+    [Fact]
     public async Task Transfer_WhenTwoTablesReferenceEachOther_FillsTheNullableSideAfterTheRows()
     {
         await using var scope = await fixture.CreateScopeAsync();
