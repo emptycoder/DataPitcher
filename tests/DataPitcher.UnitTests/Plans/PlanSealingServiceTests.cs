@@ -272,43 +272,25 @@ public sealed class PlanSealingServiceTests
     }
 
     [Fact]
-    public async Task SealAsync_WhenTheSourceWasRescanned_SealsAgainstTheSnapshotThatMatchesTheLiveSchema()
+    public async Task SealAsync_WhenTheSourceSchemaChangedSinceTheSelectionsSnapshot_RefusesAndSaysWhereToRepointIt()
     {
         using var fixture = new ControlDatabaseFixture();
         var session = Session([Child, Parent], [ChildToParent]);
-        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
-        // The selection was saved against an older scan; a later scan of the current schema is stored as well.
-        var (service, plans, planId) = await ArrangeAsync(
+        // Even with a newer scan of the current schema stored, the selection's own snapshot is what counts.
+        var (service, _, planId) = await ArrangeAsync(
             fixture,
             session,
             selectionSnapshot: new SchemaSnapshotContent([], []),
             currentScanExists: true
         );
 
-        await service.SealAsync(planId, CancellationToken.None);
-
-        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
-        Assert.Equal(CanonicalSchemaSnapshotHasher.Hash(session.SourceSchema), content.SourceSchema.Hash);
-    }
-
-    [Fact]
-    public async Task SealAsync_WhenTheSourceSchemaChangedAndNoScanOfItExists_TellsTheOperatorToScan()
-    {
-        using var fixture = new ControlDatabaseFixture();
-        var session = Session([Child, Parent], [ChildToParent]);
-        var (service, _, planId) = await ArrangeAsync(
-            fixture,
-            session,
-            selectionSnapshot: new SchemaSnapshotContent([], []),
-            currentScanExists: false
-        );
-
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.SealAsync(planId, CancellationToken.None)
         );
 
-        Assert.Contains("Scan the source connection again, then seal the plan.", exception.Message);
         Assert.Contains("2026-09-02", exception.Message);
+        Assert.Contains("choose the current snapshot under \"Schema snapshot\"", exception.Message);
+        Assert.Contains("save the selection, and seal the plan again", exception.Message);
     }
 
     private static async Task<(PlanSealingService Service, PlanStore Plans, Guid PlanId)> ArrangeAsync(
