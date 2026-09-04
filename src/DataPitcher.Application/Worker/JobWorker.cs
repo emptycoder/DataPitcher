@@ -104,7 +104,7 @@ public sealed class JobWorker(
                         "running",
                         rows,
                         bytes,
-                        $"{checkpoint.SkippedRows - skipped} row(s) in {table} already existed in the target and were skipped.",
+                        $"{checkpoint.SkippedRows - skipped} row(s) in {table} already existed in the target (by primary or unique key) and were skipped.",
                         leaseLost.Token
                     );
                     skipped = checkpoint.SkippedRows;

@@ -35,11 +35,22 @@ public sealed record SqlServerWriteColumn(
 
 public sealed class SqlServerWriteTable
 {
-    public SqlServerWriteTable(TableAddress target, IEnumerable<SqlServerWriteColumn> columns)
+    public SqlServerWriteTable(
+        TableAddress target,
+        IEnumerable<SqlServerWriteColumn> columns,
+        IEnumerable<IReadOnlyList<string>>? uniqueKeys = null
+    )
     {
         Target = target;
         Columns = Array.AsReadOnly(columns.ToArray());
         StableKeyColumns = Array.AsReadOnly(Columns.Where(column => column.IsStableKey).ToArray());
+        var stable = StableKeyColumns.Select(column => column.Name).ToHashSet(StringComparer.Ordinal);
+        UniqueKeys = Array.AsReadOnly(
+            (uniqueKeys ?? [])
+                .Where(key => !stable.SetEquals(key))
+                .Select(key => key.Select(Column).ToArray())
+                .ToArray()
+        );
         InsertColumns = Array.AsReadOnly(Columns.Where(column => !column.IsComputed && !column.IsRowVersion).ToArray());
         UpdateColumns = Array.AsReadOnly(
             InsertColumns.Where(column => !column.IsStableKey && !column.IsIdentity).ToArray()
@@ -53,6 +64,9 @@ public sealed class SqlServerWriteTable
     public IReadOnlyList<SqlServerWriteColumn> StableKeyColumns { get; }
     public IReadOnlyList<SqlServerWriteColumn> InsertColumns { get; }
     public IReadOnlyList<SqlServerWriteColumn> UpdateColumns { get; }
+
+    /// <summary>Other unique keys of the target (constraints and unique indexes); a row colliding on any is skipped.</summary>
+    public IReadOnlyList<IReadOnlyList<SqlServerWriteColumn>> UniqueKeys { get; }
 
     public SqlServerWriteColumn Column(string name) =>
         Columns.Single(column => StringComparer.Ordinal.Equals(column.Name, name));

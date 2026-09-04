@@ -40,6 +40,8 @@ public sealed class SqlServerBatchStageWriter
                     SqlServerIdentifier.Quote(column.Name)
                     + " "
                     + column.StoreType
+                    // Text columns take the target column's collation so joins against the target never conflict.
+                    + (column.Collation is null ? "" : " COLLATE " + column.Collation)
                     + (column.IsNullable ? " NULL" : " NOT NULL")
                 )
             )

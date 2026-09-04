@@ -33,11 +33,22 @@ public sealed record PostgreSqlWriteColumn(
 
 public sealed class PostgreSqlWriteTable
 {
-    public PostgreSqlWriteTable(TableAddress target, IEnumerable<PostgreSqlWriteColumn> columns)
+    public PostgreSqlWriteTable(
+        TableAddress target,
+        IEnumerable<PostgreSqlWriteColumn> columns,
+        IEnumerable<IReadOnlyList<string>>? uniqueKeys = null
+    )
     {
         Target = target;
         Columns = Array.AsReadOnly(columns.ToArray());
         StableKeyColumns = Array.AsReadOnly(Columns.Where(x => x.IsStableKey).ToArray());
+        var stable = StableKeyColumns.Select(column => column.Name).ToHashSet(StringComparer.Ordinal);
+        UniqueKeys = Array.AsReadOnly(
+            (uniqueKeys ?? [])
+                .Where(key => !stable.SetEquals(key))
+                .Select(key => key.Select(Column).ToArray())
+                .ToArray()
+        );
         InsertColumns = Array.AsReadOnly(Columns.Where(x => !x.IsGenerated && !x.IsRowVersion).ToArray());
         UpdateColumns = Array.AsReadOnly(InsertColumns.Where(x => !x.IsStableKey && !x.IsIdentityAlways).ToArray());
         if (StableKeyColumns.Count == 0)
@@ -49,6 +60,9 @@ public sealed class PostgreSqlWriteTable
     public IReadOnlyList<PostgreSqlWriteColumn> StableKeyColumns { get; }
     public IReadOnlyList<PostgreSqlWriteColumn> InsertColumns { get; }
     public IReadOnlyList<PostgreSqlWriteColumn> UpdateColumns { get; }
+
+    /// <summary>Other unique keys of the target (constraints and unique indexes); a row colliding on any is skipped.</summary>
+    public IReadOnlyList<IReadOnlyList<PostgreSqlWriteColumn>> UniqueKeys { get; }
 
     public PostgreSqlWriteColumn Column(string name) =>
         Columns.Single(x => StringComparer.Ordinal.Equals(x.Name, name));

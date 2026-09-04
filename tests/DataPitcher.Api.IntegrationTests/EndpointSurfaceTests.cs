@@ -795,6 +795,22 @@ public sealed class EndpointSurfaceTests(ApiWebApplicationFactory factory) : ICl
     }
 
     [Fact]
+    public async Task GetEffectivePermissions_ReturnsWhatTheServerGrantsTheCaller()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/auth/effective-permissions");
+        request.Headers.Add("Authorization", "Bearer " + AccessToken(Permissions.PlansSeal));
+        request.Headers.Add("X-Test-Permissions", "Plans.Seal");
+        using var response = await _client.SendAsync(request, CancellationToken.None);
+        var body = await response.Content.ReadFromJsonAsync<EffectivePermissionsResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.StartsWith("test", body!.PrincipalId);
+        Assert.NotEmpty(body.TenantId);
+        Assert.Contains("Plans.Seal", body.Permissions);
+        Assert.DoesNotContain("Transfers.Start", body.Permissions);
+    }
+
+    [Fact]
     public async Task QueuePlanSeal_WhenSealingRefusesThePlan_ReturnsConflictWithTheReasonAndACode()
     {
         _factory.Application.SealException = new UnorderablePlanException(

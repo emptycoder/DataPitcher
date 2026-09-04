@@ -55,7 +55,35 @@ public sealed class SqlServerTransferSchemaReader(string connectionString)
                 )
             );
         }
-        return new SqlServerWriteTable(new TableAddress(schema, table), columns);
+        await reader.CloseAsync();
+        return new SqlServerWriteTable(
+            new TableAddress(schema, table),
+            columns,
+            await UniqueKeysAsync(connection, schema, table, cancellationToken)
+        );
+    }
+
+    /// <summary>Column sets of every unfiltered unique constraint or index on the table, key columns in index order.</summary>
+    private static async Task<IReadOnlyList<IReadOnlyList<string>>> UniqueKeysAsync(
+        SqlConnection connection,
+        string schema,
+        string table,
+        CancellationToken cancellationToken
+    )
+    {
+        const string sql =
+            "SELECT i.index_id,c.name FROM sys.indexes i JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id AND ic.is_included_column=0 JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id WHERE i.object_id=OBJECT_ID(@target) AND i.is_unique=1 AND i.has_filter=0 ORDER BY i.index_id,ic.key_ordinal";
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.AddWithValue("@target", SqlServerIdentifier.Qualified(schema, table));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var keys = new Dictionary<int, List<string>>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (!keys.TryGetValue(reader.GetInt32(0), out var columns))
+                keys[reader.GetInt32(0)] = columns = [];
+            columns.Add(reader.GetString(1));
+        }
+        return keys.OrderBy(pair => pair.Key).Select(pair => (IReadOnlyList<string>)pair.Value).ToArray();
     }
 
     /// <summary>CLR and provider types used to bulk-copy values; the declared store type still drives staging DDL.</summary>

@@ -3,6 +3,7 @@ using DataPitcher.Api.Authorization;
 using DataPitcher.Api.Contracts;
 using DataPitcher.Api.Errors;
 using DataPitcher.Api.Events;
+using DataPitcher.Auth.Abstractions.Authorization;
 using DataPitcher.Core.Authorization;
 using DataPitcher.Core.Connections;
 using DataPitcher.Core.Jobs;
@@ -120,6 +121,11 @@ public static class EndpointGroups
         );
         WithStandardProblems(
             plans.MapPost("/{planId:guid}/jobs", StartJobAsync).RequireAuthorization(ApiPolicyNames.TransfersStart)
+        );
+
+        var auth = app.MapGroup("/api/auth");
+        WithStandardProblems(
+            auth.MapGet("/effective-permissions", GetEffectivePermissionsAsync).RequireAuthorization()
         );
 
         var jobs = app.MapGroup("/api/jobs");
@@ -786,6 +792,29 @@ public static class EndpointGroups
         )
             return problem;
         return TypedResults.Ok(await application.GetJobAsync(jobId, cancellationToken));
+    }
+
+    /// <summary>
+    /// What the server will let this principal do, resolved the same way every protected endpoint resolves it, so the
+    /// client shows and hides actions from the server's answer rather than from claims it reads itself.
+    /// </summary>
+    private static Ok<EffectivePermissionsResponse> GetEffectivePermissionsAsync(
+        ClaimsPrincipal user,
+        IPermissionDecisionResolver resolver
+    )
+    {
+        // Each permission is decided exactly as the endpoint guarding it would decide, whatever resolver is wired.
+        var granted = Permissions
+            .All.Where(permission => resolver.Resolve(user, permission).Outcome == AuthorizationOutcome.Granted)
+            .Select(permission => permission.Value)
+            .ToArray();
+        return TypedResults.Ok(
+            new EffectivePermissionsResponse(
+                user.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? user.FindFirst("sub")?.Value ?? "unspecified",
+                user.FindFirst("tid")?.Value ?? user.FindFirst("iss")?.Value ?? "unspecified",
+                granted
+            )
+        );
     }
 
     private static async Task<Ok<IReadOnlyList<JobSummaryResponse>>> ListJobsAsync(

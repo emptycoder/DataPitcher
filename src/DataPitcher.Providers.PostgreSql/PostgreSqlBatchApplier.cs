@@ -162,11 +162,18 @@ public sealed class PostgreSqlBatchApplier
         var target = PostgreSqlIdentifier.Qualified(table.Target.Schema, table.Target.Name);
         var stage = PostgreSqlBatchStageWriter.StageName(table);
         var columns = string.Join(", ", table.InsertColumns.Select(x => PostgreSqlIdentifier.Quote(x.Name)));
-        var keys = Join(table.StableKeyColumns, "s", "t");
+        // A row the target already has, by stable key or by any other unique key, is skipped rather than failing the
+        // batch on a duplicate-key error. PostgreSQL treats NULLs as distinct in unique indexes, and so does this.
         var missing =
             policy == PostgreSqlConflictPolicy.InsertOnly
                 ? ""
-                : " AND NOT EXISTS (SELECT 1 FROM " + target + " t WHERE " + keys + ")";
+                : string.Concat(
+                    new[] { table.StableKeyColumns }
+                        .Concat(table.UniqueKeys)
+                        .Select(key =>
+                            " AND NOT EXISTS (SELECT 1 FROM " + target + " t WHERE " + Join(key, "s", "t") + ")"
+                        )
+                );
         var overriding = table.InsertColumns.Any(x => x.IsIdentityAlways) ? " OVERRIDING SYSTEM VALUE" : "";
         return "INSERT INTO "
             + target

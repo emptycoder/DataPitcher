@@ -55,6 +55,64 @@ public sealed class PostgreSqlBatchExecutionTests : IClassFixture<PostgreSqlClos
     }
 
     [Fact]
+    public async Task ApplyAsync_WhenARowCollidesWithTheTargetOnAnotherUniqueKey_SkipsItInsteadOfFailing()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE transfer_rows (id integer PRIMARY KEY, code text NOT NULL CONSTRAINT uq_transfer_rows_code UNIQUE); INSERT INTO transfer_rows VALUES (1, 'taken');"
+        );
+        var table = await new PostgreSqlTransferSchemaReader(scope.Target).ReadAsync(
+            scope.Schema,
+            "transfer_rows",
+            ["id"],
+            CancellationToken.None
+        );
+        var context = PostgreSqlTransferTestData.Context();
+        var batch = PostgreSqlTransferTestData.Batch(0, (2, "taken"), (3, "free"));
+        batch = new PostgreSqlTransferBatch(
+            batch.Sequence,
+            batch.Rows,
+            batch.LastStableKey,
+            PostgreSqlConflictPolicy.SkipExisting
+        );
+        await using var connection = await scope.Target.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await new PostgreSqlBatchStageWriter().StageAsync(
+            connection,
+            transaction,
+            context,
+            table,
+            batch,
+            CancellationToken.None
+        );
+
+        var result = await new PostgreSqlBatchApplier().ApplyAsync(
+            connection,
+            transaction,
+            context,
+            table,
+            batch,
+            CancellationToken.None
+        );
+        await transaction.CommitAsync();
+
+        Assert.Equal(
+            [
+                ["code"],
+            ],
+            table.UniqueKeys.Select(key => key.Select(column => column.Name).ToArray())
+        );
+        Assert.Equal(1, result.Inserts);
+        Assert.Equal(2L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM transfer_rows"));
+        Assert.Equal(
+            1L,
+            await scope.ScalarTargetAsync<long>(
+                $"SELECT count(*) FROM datapitcher.transfer_affected_keys WHERE job_id='{context.JobId}' AND action_name='SKIP'"
+            )
+        );
+    }
+
+    [Fact]
     public async Task BackfillAsync_WhenItIsTheFirstWriteOfTheRun_EnsuresTheLedgerAndTouchesOnlyRowsTheRunWrote()
     {
         await using var scope = await _fixture.CreateScopeAsync();

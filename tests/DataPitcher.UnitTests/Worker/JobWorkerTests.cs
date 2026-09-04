@@ -483,7 +483,10 @@ public sealed class JobWorkerTests
         // The announcement of the terminal state failed, which never fails the job itself.
         Assert.Equal(JobState.Succeeded, await store.GetStateAsync(job.JobId, CancellationToken.None));
         var conflict = Assert.Single(events.Appends, item => item.EventType == "conflict");
-        Assert.Equal("1 row(s) in the target already existed in the target and were skipped.", conflict.Payload.Detail);
+        Assert.Equal(
+            "1 row(s) in the target already existed in the target (by primary or unique key) and were skipped.",
+            conflict.Payload.Detail
+        );
     }
 
     [Fact]

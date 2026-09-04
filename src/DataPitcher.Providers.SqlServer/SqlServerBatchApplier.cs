@@ -290,14 +290,35 @@ public sealed class SqlServerBatchApplier
             ",",
             table.StableKeyColumns.Select(column => "INSERTED." + SqlServerIdentifier.Quote(column.Name))
         );
+        // A row the target already has, by stable key or by any other unique key, is skipped rather than failing the
+        // batch on a duplicate-key error. SQL Server unique indexes treat NULL as one value, so NULLs compare equal.
         var predicate =
             policy == SqlServerConflictPolicy.InsertOnly
                 ? ""
-                : " AND NOT EXISTS (SELECT 1 FROM "
-                    + target
-                    + " t WITH (UPDLOCK,HOLDLOCK) WHERE "
-                    + Join(table.StableKeyColumns, "s", "t")
-                    + ")";
+                : string.Concat(
+                    new[] { table.StableKeyColumns }
+                        .Concat(table.UniqueKeys)
+                        .Select(key =>
+                            " AND NOT EXISTS (SELECT 1 FROM "
+                            + target
+                            + " t WITH (UPDLOCK,HOLDLOCK) WHERE "
+                            + string.Join(
+                                " AND ",
+                                key.Select(column =>
+                                    "(s."
+                                    + SqlServerIdentifier.Quote(column.Name)
+                                    + "=t."
+                                    + SqlServerIdentifier.Quote(column.Name)
+                                    + " OR (s."
+                                    + SqlServerIdentifier.Quote(column.Name)
+                                    + " IS NULL AND t."
+                                    + SqlServerIdentifier.Quote(column.Name)
+                                    + " IS NULL))"
+                                )
+                            )
+                            + ")"
+                        )
+                );
         return "INSERT "
             + target
             + " ("

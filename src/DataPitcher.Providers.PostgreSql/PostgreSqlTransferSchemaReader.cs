@@ -43,7 +43,34 @@ public sealed class PostgreSqlTransferSchemaReader(NpgsqlDataSource dataSource)
                 )
             );
         }
-        return new PostgreSqlWriteTable(new TableAddress(schema, table), columns);
+        await reader.CloseAsync();
+        return new PostgreSqlWriteTable(
+            new TableAddress(schema, table),
+            columns,
+            await UniqueKeysAsync(schema, table, cancellationToken)
+        );
+    }
+
+    /// <summary>Column sets of every plain unique constraint or index on the table, key columns in index order.</summary>
+    private async Task<IReadOnlyList<IReadOnlyList<string>>> UniqueKeysAsync(
+        string schema,
+        string table,
+        CancellationToken cancellationToken
+    )
+    {
+        const string sql =
+            "SELECT i.indexrelid::int,a.attname FROM pg_index i JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum,ord) ON true JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum WHERE i.indrelid=@target::regclass AND i.indisunique AND i.indpred IS NULL AND 0 <> ALL(i.indkey::int[]) ORDER BY i.indexrelid,k.ord";
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("target", PostgreSqlIdentifier.Qualified(schema, table));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var keys = new Dictionary<int, List<string>>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (!keys.TryGetValue(reader.GetInt32(0), out var columns))
+                keys[reader.GetInt32(0)] = columns = [];
+            columns.Add(reader.GetString(1));
+        }
+        return keys.OrderBy(pair => pair.Key).Select(pair => (IReadOnlyList<string>)pair.Value).ToArray();
     }
 
     /// <summary>Provider type used to bind and copy values; the declared store type still drives staging DDL.</summary>

@@ -304,6 +304,13 @@ public sealed record JobResponse(
     string? FailureDetail = null
 );
 
+/// <summary>The permissions the server grants the calling principal; the client must never derive them itself.</summary>
+public sealed record EffectivePermissionsResponse(
+    string PrincipalId,
+    string TenantId,
+    IReadOnlyList<string> Permissions
+);
+
 public sealed record JobSummaryResponse(
     Guid JobId,
     Guid PlanId,
