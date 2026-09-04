@@ -49,21 +49,30 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
             )
         )
         {
+            var child = shapes[table.Mapping.Source];
+            var childColumns = relationship
+                .FromColumns.Select(column => child.Column(TargetColumn(table, column)).Name)
+                .ToArray();
+            if (!await ReferencesAsync(connection, child, childColumns, context, cancellationToken))
+                continue;
             var parentPlan = content.Tables.FirstOrDefault(candidate =>
                 Same(candidate.Mapping.Source, relationship.To)
             );
+            var parentKeys = relationship
+                .ToColumns.Select(column => parentPlan is null ? column : TargetColumn(parentPlan, column))
+                .ToArray();
             var parent = await reader.ReadAsync(
                 parentPlan?.Mapping.Target.Schema ?? relationship.To.Schema,
                 parentPlan?.Mapping.Target.Name ?? relationship.To.Name,
-                relationship
-                    .ToColumns.Select(column => parentPlan is null ? column : TargetColumn(parentPlan, column))
-                    .ToArray(),
+                parentKeys,
                 cancellationToken
             );
             await VerifyRelationshipAsync(
                 connection,
-                shapes[table.Mapping.Source],
+                child,
+                childColumns,
                 parent,
+                parentKeys.Select(column => parent.Column(column).Name).ToArray(),
                 table,
                 relationship,
                 context,
@@ -144,40 +153,41 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
     }
 
     /// <summary>
-    /// Every row this run staged must resolve its foreign key in the target now. Composite keys follow MATCH SIMPLE:
-    /// a NULL in any column means there is nothing to resolve.
+    /// Whether any row this run staged carries a value in every column of the foreign key. A NULL reference has no
+    /// parent to resolve (MATCH SIMPLE), so a run whose references are all NULL never needs the parent table.
+    /// </summary>
+    private static async Task<bool> ReferencesAsync(
+        SqlConnection connection,
+        SqlServerWriteTable child,
+        IReadOnlyList<string> childColumns,
+        SqlServerExecutionContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var command = new SqlCommand(ReferencingSql(child, childColumns), connection);
+        command.Parameters.AddWithValue("@job", context.JobId);
+        command.Parameters.AddWithValue("@run", context.RunId);
+        return (int)(await command.ExecuteScalarAsync(cancellationToken))! != 0;
+    }
+
+    /// <summary>
+    /// Every row this run staged must resolve its foreign key in the target now. Child and parent columns are paired
+    /// by the foreign key's own definition, never by the parent's catalog order.
     /// </summary>
     private static async Task VerifyRelationshipAsync(
         SqlConnection connection,
         SqlServerWriteTable child,
+        IReadOnlyList<string> childColumns,
         SqlServerWriteTable parent,
+        IReadOnlyList<string> parentColumns,
         PlanTable table,
         RelationshipPolicy relationship,
         SqlServerExecutionContext context,
         CancellationToken cancellationToken
     )
     {
-        var childColumns = relationship
-            .FromColumns.Select(column => child.Column(TargetColumn(table, column)).Name)
-            .ToArray();
-        var parentColumns = parent.StableKeyColumns.Select(column => column.Name).ToArray();
         var sql =
-            "SELECT COUNT(*) FROM "
-            + SqlServerBatchStageWriter.StageName(child)
-            + " s JOIN "
-            + SqlServerIdentifier.Qualified(child.Target.Schema, child.Target.Name)
-            + " c ON "
-            + string.Join(
-                " AND ",
-                child.StableKeyColumns.Select(column =>
-                    "s." + SqlServerIdentifier.Quote(column.Name) + "=c." + SqlServerIdentifier.Quote(column.Name)
-                )
-            )
-            + " WHERE s.job_id=@job AND s.run_id=@run AND "
-            + string.Join(
-                " AND ",
-                childColumns.Select(column => "c." + SqlServerIdentifier.Quote(column) + " IS NOT NULL")
-            )
+            ReferencingSql(child, childColumns)
             + " AND NOT EXISTS (SELECT 1 FROM "
             + SqlServerIdentifier.Qualified(parent.Target.Schema, parent.Target.Name)
             + " p WHERE "
@@ -199,6 +209,25 @@ public sealed class SqlServerTransferVerifier(string targetConnectionString)
                 $"{dangling} row(s) this run wrote to {table.Mapping.Target.Schema}.{table.Mapping.Target.Name} reference a {relationship.To.Schema}.{relationship.To.Name} row through {relationship.Name} that is not in the target."
             );
     }
+
+    /// <summary>Counts this run's staged rows whose foreign-key columns are all non-NULL; the table alias is c.</summary>
+    private static string ReferencingSql(SqlServerWriteTable child, IReadOnlyList<string> childColumns) =>
+        "SELECT COUNT(*) FROM "
+        + SqlServerBatchStageWriter.StageName(child)
+        + " s JOIN "
+        + SqlServerIdentifier.Qualified(child.Target.Schema, child.Target.Name)
+        + " c ON "
+        + string.Join(
+            " AND ",
+            child.StableKeyColumns.Select(column =>
+                "s." + SqlServerIdentifier.Quote(column.Name) + "=c." + SqlServerIdentifier.Quote(column.Name)
+            )
+        )
+        + " WHERE s.job_id=@job AND s.run_id=@run AND "
+        + string.Join(
+            " AND ",
+            childColumns.Select(column => "c." + SqlServerIdentifier.Quote(column) + " IS NOT NULL")
+        );
 
     private static string[] KeyColumns(TransferPlanContent content, PlanTable table) =>
         content

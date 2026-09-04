@@ -47,6 +47,15 @@ public sealed class PostgreSqlTransferSchemaReader(NpgsqlDataSource dataSource)
             );
         }
         await reader.CloseAsync();
+        if (columns.Count == 0)
+            throw new InvalidOperationException(
+                $"Table {schema}.{table} is not visible as an ordinary or partitioned table: it does not exist under that name, or it is a view, materialized view or foreign table rather than a table."
+            );
+        var missing = stableKeys.Where(key => !columns.Any(column => DatabaseNames.Equals(column.Name, key))).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException(
+                $"Table {schema}.{table} has no column named {string.Join(", ", missing)}, which the stable key ({string.Join(", ", stableKeys)}) requires."
+            );
         return new PostgreSqlWriteTable(
             actual,
             columns,

@@ -59,6 +59,15 @@ public sealed class SqlServerTransferSchemaReader(string connectionString)
             );
         }
         await reader.CloseAsync();
+        if (columns.Count == 0)
+            throw new InvalidOperationException(
+                $"Table {schema}.{table} is not visible as a base table: it does not exist under that name, it is a view or synonym rather than a table, or the login cannot see it (sys.tables lists only base tables the login has permission on)."
+            );
+        var missing = stableKeys.Where(key => !columns.Any(column => DatabaseNames.Equals(column.Name, key))).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException(
+                $"Table {schema}.{table} has no column named {string.Join(", ", missing)}, which the stable key ({string.Join(", ", stableKeys)}) requires."
+            );
         return new SqlServerWriteTable(
             actual,
             columns,
