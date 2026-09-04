@@ -690,6 +690,23 @@ public sealed class DependencyClosureTests
     }
 
     [Fact]
+    public async Task Closure_CountsTheSkipExistingRootsItLeftOut()
+    {
+        var c = T("C");
+        var s = new InMemoryClosureStore();
+        s.MarkTarget(c, K(1));
+        var r = await Run(
+            s,
+            [],
+            new ClosureRoot(c, [K(1), K(2)], RootConflictPolicy.SkipExisting),
+            Root(c, 3, RootConflictPolicy.Upsert)
+        );
+        Assert.Equal(1, r.SkippedRoots);
+        Assert.True(r.Contains(c, K(2)));
+        Assert.True(r.Contains(c, K(3)));
+    }
+
+    [Fact]
     public async Task Closure_WhenSourceRowsPointAtMissingParents_ReportsTheOrphansPerRelationship()
     {
         var c = T("C");

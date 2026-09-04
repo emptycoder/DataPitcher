@@ -39,6 +39,7 @@ public sealed class DependencyClosure(IClosureStore store)
         var included = new Dictionary<RowAddress, ClosureRow>();
         var warnings = new HashSet<TargetConstraintWarning>();
         var orphans = new Dictionary<ClosureRelationship, long>();
+        var skippedRoots = 0L;
 
         foreach (var root in request.Roots)
         foreach (var key in await store.SeedRootKeysAsync(root.Table, root.Keys, cancellationToken))
@@ -83,7 +84,11 @@ public sealed class DependencyClosure(IClosureStore store)
                         _ => true,
                     };
                     if (!include)
+                    {
+                        if (item.RootPolicy is RootConflictPolicy.SkipExisting)
+                            skippedRoots++;
                         continue;
+                    }
 
                     included.TryAdd(new(item.Table, item.Key), new(item.Table, item.Key, generation));
                     if (!expandable.TryGetValue(item.Table, out var keysToExpand))
@@ -119,7 +124,8 @@ public sealed class DependencyClosure(IClosureStore store)
         return new ClosureResult(
             included.Values,
             warnings,
-            orphans.Select(pair => new SourceOrphanWarning(pair.Key.Name, pair.Value))
+            orphans.Select(pair => new SourceOrphanWarning(pair.Key.Name, pair.Value)),
+            skippedRoots
         );
     }
 

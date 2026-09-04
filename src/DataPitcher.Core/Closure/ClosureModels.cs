@@ -180,13 +180,18 @@ public sealed class ClosureResult
     public ClosureResult(
         IEnumerable<ClosureRow> rows,
         IEnumerable<TargetConstraintWarning> warnings,
-        IEnumerable<SourceOrphanWarning>? orphans = null
+        IEnumerable<SourceOrphanWarning>? orphans = null,
+        long skippedRoots = 0
     )
     {
         Rows = Array.AsReadOnly(rows.ToArray());
         Warnings = Array.AsReadOnly(warnings.ToArray());
         Orphans = Array.AsReadOnly((orphans ?? []).ToArray());
+        SkippedRoots = skippedRoots;
     }
+
+    /// <summary>Selected rows the target already had and the SkipExisting policy therefore neither writes nor expands.</summary>
+    public long SkippedRoots { get; }
 
     public IReadOnlyCollection<ClosureRow> Rows { get; }
 

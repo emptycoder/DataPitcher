@@ -147,6 +147,23 @@ public sealed class PlanSealingService(
         if (order.Levelled.Count > 0)
             await session.OrderHierarchiesAsync(order.Levelled, stableKeys, planId, cancellationToken);
         var warnings = new List<PlanWarning>();
+        // An empty or shrunken plan is legitimate, but the operator has to be told why the rows are not coming.
+        if (seeds.Keys.Count == 0)
+            warnings.Add(
+                new PlanWarning("selection_empty", "The selection returned no rows, so there is nothing to transfer.")
+            );
+        if (closure.SkippedRoots > 0)
+            warnings.Add(
+                new PlanWarning(
+                    "roots_skipped",
+                    $"{closure.SkippedRoots} of {seeds.Keys.Count} selected row(s) already exist in the target and are skipped, together with their dependencies (conflict policy SkipExisting)."
+                        + (
+                            closure.Rows.Count == 0
+                                ? " Nothing is left to transfer: delete those rows from the target or select other rows."
+                                : ""
+                        )
+                )
+            );
         warnings.AddRange(
             closure.Warnings.Select(warning => new PlanWarning(
                 "target_constraint_untrusted",

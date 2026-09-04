@@ -237,6 +237,41 @@ public sealed class PlanSealingServiceTests
     }
 
     [Fact]
+    public async Task SealAsync_WhenEverySelectedRowAlreadyExistsInTheTarget_SealsAnEmptyPlanAndSaysWhy()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.Store.MarkTarget(Child, K(1));
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        Assert.Empty(content.Tables);
+        Assert.Equal(0, content.ManifestTotals.PlannedWrites);
+        var warning = Assert.Single(content.Warnings);
+        Assert.Equal("roots_skipped", warning.Code);
+        Assert.StartsWith("1 of 1 selected row(s) already exist in the target", warning.Message);
+        Assert.Contains("Nothing is left to transfer", warning.Message);
+    }
+
+    [Fact]
+    public async Task SealAsync_WhenTheSelectionReturnsNoRows_SealsAnEmptyPlanAndSaysWhy()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.RootKeys = [];
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        Assert.Empty(content.Tables);
+        Assert.Equal("selection_empty", Assert.Single(content.Warnings).Code);
+    }
+
+    [Fact]
     public async Task SealAsync_WhenTheSourceWasRescanned_SealsAgainstTheSnapshotThatMatchesTheLiveSchema()
     {
         using var fixture = new ControlDatabaseFixture();
@@ -411,6 +446,7 @@ public sealed class PlanSealingServiceTests
     ) : ISealingSession
     {
         public InMemoryClosureStore Store { get; } = new();
+        public IReadOnlyList<StableKey> RootKeys { get; set; } = rootKeys;
         public IReadOnlyCollection<UnresolvedForeignKey> Unresolved { get; set; } = [];
         public IReadOnlyCollection<string> VerificationBlockers { get; set; } = [];
         public List<string> VerifiedTables { get; } = [];
@@ -440,7 +476,7 @@ public sealed class PlanSealingServiceTests
             GeneratedSelectionSql selection,
             int maximumResultSize,
             CancellationToken cancellationToken
-        ) => Task.FromResult(new SelectionKeySet(selection.RootTable, rootKeys));
+        ) => Task.FromResult(new SelectionKeySet(selection.RootTable, RootKeys));
 
         public IClosureStore CreateClosureStore(
             IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys,
