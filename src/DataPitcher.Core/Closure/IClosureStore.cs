@@ -36,6 +36,12 @@ public interface IClosureStore
     );
 
     /// <summary>
+    /// Discards every key this plan staged before, so a plan sealed again starts from an empty set instead of
+    /// treating its previous roots as already discovered.
+    /// </summary>
+    Task ResetAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Records that the closure decided to transfer these staged keys. Keys never marked stay staged for
     /// provenance but are not part of the transfer set.
     /// </summary>

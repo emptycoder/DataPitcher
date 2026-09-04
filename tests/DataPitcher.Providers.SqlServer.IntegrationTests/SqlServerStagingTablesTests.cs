@@ -40,6 +40,9 @@ public sealed class SqlServerStagingTablesTests(SqlServerClosureFixture fixture)
         Assert.NotEqual(first.SourceTableName(table), second.SourceTableName(table));
         Assert.Equal(1, await first.GenerationAsync(table, key, CancellationToken.None));
         Assert.Equal(2, await first.KeyColumnCountInUniqueIndexAsync(table, CancellationToken.None));
+        // A reset forgets the plan's keys, so sealing again rediscovers the same root instead of finding nothing.
+        await first.ResetAsync(CancellationToken.None);
+        Assert.Single(await first.InsertSourceAsync(table, [key], 1, CancellationToken.None));
     }
 
     [Fact]

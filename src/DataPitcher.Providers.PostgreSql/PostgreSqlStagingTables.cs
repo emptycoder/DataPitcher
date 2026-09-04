@@ -147,6 +147,17 @@ public sealed class PostgreSqlStagingTables : IAsyncDisposable
         return (int)(await command.ExecuteScalarAsync(ct))!;
     }
 
+    /// <summary>Drops every staging table of the plan so the next closure starts from nothing.</summary>
+    public async Task ResetAsync(CancellationToken ct)
+    {
+        foreach (var table in _stableKeys.Keys)
+        {
+            await ExecuteAsync(_source, "DROP TABLE IF EXISTS " + Qualified(SourceTableName(table)), ct);
+            await ExecuteAsync(_source, "DROP TABLE IF EXISTS " + Qualified(InputTableName(table)), ct);
+            await ExecuteAsync(_target, "DROP TABLE IF EXISTS " + Qualified(TargetTableName(table)), ct);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (!_dropOnDispose)

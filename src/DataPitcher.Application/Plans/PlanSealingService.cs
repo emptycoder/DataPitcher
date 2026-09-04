@@ -123,6 +123,8 @@ public sealed class PlanSealingService(
         ClosureResult closure;
         try
         {
+            // A plan sealed again must not see its own earlier keys as already discovered.
+            await store.ResetAsync(cancellationToken);
             closure = await new DependencyClosure(store).ComputeAsync(
                 new ClosureRequest(
                     [new ClosureRoot(root, seeds.Keys, RootConflictPolicy.SkipExisting)],

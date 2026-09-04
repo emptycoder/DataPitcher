@@ -48,6 +48,24 @@ public sealed class SqlServerCatalogReaderTests(SqlServerClosureFixture fixture)
     }
 
     [Fact]
+    public async Task ReadAsync_LeavesDataPitchersOwnKeyTablesOutOfTheSnapshot()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        var hash = new string('a', 64);
+        await scope.ExecuteAsync(
+            $"CREATE TABLE dbo.keys_{hash} (k0 int NOT NULL); CREATE TABLE dbo.input_{hash} (k0 int NOT NULL); CREATE TABLE dbo.target_{hash} (k0 int NOT NULL); CREATE TABLE dbo.keys_of_the_kingdom (id int NOT NULL PRIMARY KEY);"
+        );
+
+        var catalog = await new SqlServerCatalogReader(scope.SourceConnectionString).ReadAsync(
+            "dbo",
+            CancellationToken.None
+        );
+
+        Assert.DoesNotContain(catalog.Tables, table => table.Definition.Name.EndsWith(hash, StringComparison.Ordinal));
+        Assert.Contains(catalog.Tables, table => table.Definition.Name == "keys_of_the_kingdom");
+    }
+
+    [Fact]
     public async Task ReadAsync_UsesConstraintOrderAndReadsTrustInThreeCommands()
     {
         await using var scope = await fixture.CreateScopeAsync();

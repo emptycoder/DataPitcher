@@ -115,6 +115,17 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
         return Convert.ToInt32(await command.ExecuteScalarAsync(ct));
     }
 
+    /// <summary>Drops every staging table of the plan so the next closure starts from nothing.</summary>
+    public async Task ResetAsync(CancellationToken ct)
+    {
+        foreach (var t in _keys.Keys)
+        {
+            await ExecuteAsync(_source, "DROP TABLE IF EXISTS " + Qualified(SourceTableName(t)), ct);
+            await ExecuteAsync(_source, "DROP TABLE IF EXISTS " + Qualified(InputTableName(t)), ct);
+            await ExecuteAsync(_target, "DROP TABLE IF EXISTS " + Qualified(TargetTableName(t)), ct);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (!_dropOnDispose)
@@ -139,6 +150,16 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
     private IReadOnlyList<string> Columns(TableDefinition t) => _keys[t].Constraint!.Columns;
 
     public static string Qualified(string name) => SqlServerIdentifier.Qualified("dbo", name);
+
+    /// <summary>Whether a table name is one of DataPitcher's plan-scoped key tables (keys_, input_, target_ + hash).</summary>
+    public static bool IsOwnedStagingTable(string name)
+    {
+        var separator = name.IndexOf('_');
+        return separator > 0
+            && name[..separator] is "keys" or "input" or "target"
+            && name.Length == separator + 65
+            && name[(separator + 1)..].All(char.IsAsciiHexDigitLower);
+    }
 
     /// <summary>
     /// Stamps every sealed key of a self-referencing table with its hierarchy level (0 for rows whose parent is

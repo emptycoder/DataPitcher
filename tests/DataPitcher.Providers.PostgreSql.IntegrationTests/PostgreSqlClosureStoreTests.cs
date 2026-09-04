@@ -76,6 +76,9 @@ public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosur
         var key = new StableKey([new("customer_id", 1)]);
         Assert.Single(await store.SeedRootKeysAsync(customers, [key], CancellationToken.None));
         Assert.Empty(await store.InsertNewKeysAsync(customers, [key], 5, CancellationToken.None));
+        // A reset forgets the plan's keys, so sealing again rediscovers the same root instead of finding nothing.
+        await store.ResetAsync(CancellationToken.None);
+        Assert.Single(await store.SeedRootKeysAsync(customers, [key], CancellationToken.None));
     }
 
     [Fact]

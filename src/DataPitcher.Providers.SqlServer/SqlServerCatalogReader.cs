@@ -104,7 +104,12 @@ public sealed class SqlServerCatalogReader(string connectionString)
         {
             if (!loaded.Add(current))
                 continue;
-            var columns = await ReadColumnsAsync(current, ct);
+            // DataPitcher's own plan-scoped key tables live in the business schema of the source; they are not part
+            // of the schema being transferred, and letting them into a snapshot would make every seal after the first
+            // look like a schema change.
+            var columns = (await ReadColumnsAsync(current, ct))
+                .Where(pair => !SqlServerStagingTables.IsOwnedStagingTable(pair.Key))
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
             var keys = await ReadKeysAsync(current, columns.Keys, ct);
             foreach (var (name, tableColumns) in columns)
             {

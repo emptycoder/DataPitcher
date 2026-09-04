@@ -119,6 +119,8 @@ public sealed class SqlServerPlanSealingTests(SqlServerClosureFixture fixture)
             );
 
             await sealing.SealAsync(planId, CancellationToken.None);
+            // Sealing the same plan again must rediscover the same rows rather than treat them as already staged.
+            await sealing.SealAsync(planId, CancellationToken.None);
 
             var content = await plans.LoadContentAsync(planId, CancellationToken.None);
             Assert.NotNull(content);

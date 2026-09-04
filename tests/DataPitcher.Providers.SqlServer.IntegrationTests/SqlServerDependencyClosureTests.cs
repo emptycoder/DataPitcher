@@ -771,6 +771,8 @@ internal sealed class CountingClosureStore(IClosureStore inner) : IClosureStore,
         CancellationToken cancellationToken
     ) => inner.MarkIncludedAsync(table, keys, cancellationToken);
 
+    public Task ResetAsync(CancellationToken cancellationToken) => inner.ResetAsync(cancellationToken);
+
     public ValueTask DisposeAsync() =>
         inner is IAsyncDisposable disposable ? disposable.DisposeAsync() : ValueTask.CompletedTask;
 }

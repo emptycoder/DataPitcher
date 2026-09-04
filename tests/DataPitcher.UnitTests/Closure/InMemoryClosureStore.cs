@@ -152,6 +152,16 @@ public sealed class InMemoryClosureStore : IClosureStore
     public IReadOnlyCollection<StableKey> Included(TableDefinition table) =>
         _included.TryGetValue(table, out var keys) ? keys : [];
 
+    public int ResetCalls { get; private set; }
+
+    public Task ResetAsync(CancellationToken cancellationToken)
+    {
+        ResetCalls++;
+        _generations.Clear();
+        _included.Clear();
+        return Task.CompletedTask;
+    }
+
     public Task MarkIncludedAsync(
         TableDefinition table,
         IReadOnlyCollection<StableKey> keys,

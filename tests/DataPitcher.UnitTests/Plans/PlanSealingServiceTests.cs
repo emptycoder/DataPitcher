@@ -237,6 +237,23 @@ public sealed class PlanSealingServiceTests
     }
 
     [Fact]
+    public async Task SealAsync_WhenAPlanIsSealedAgain_StartsFromAnEmptyStagedSetAndFindsTheSameRows()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        await service.SealAsync(planId, CancellationToken.None);
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        Assert.Equal(2, session.Store.ResetCalls);
+        Assert.Equal(2, content.ManifestTotals.PlannedWrites);
+        Assert.Empty(content.Warnings);
+    }
+
+    [Fact]
     public async Task SealAsync_WhenEverySelectedRowAlreadyExistsInTheTarget_SealsAnEmptyPlanAndSaysWhy()
     {
         using var fixture = new ControlDatabaseFixture();

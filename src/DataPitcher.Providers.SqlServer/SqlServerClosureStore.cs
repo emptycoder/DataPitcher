@@ -85,6 +85,8 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         return result;
     }
 
+    public Task ResetAsync(CancellationToken cancellationToken) => _stages.ResetAsync(cancellationToken);
+
     public Task MarkIncludedAsync(
         TableDefinition table,
         IReadOnlyCollection<StableKey> keys,
