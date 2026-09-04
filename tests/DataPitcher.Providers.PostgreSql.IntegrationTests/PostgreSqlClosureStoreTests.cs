@@ -148,4 +148,92 @@ public sealed class PostgreSqlClosureStoreTests : IClassFixture<PostgreSqlClosur
         var probes = await store.ProbeTargetAsync(orders, [relationship], [key], CancellationToken.None);
         Assert.False(probes[key].Constraints[relationship].IsPresent);
     }
+
+    [Fact]
+    public async Task ProbeTargetAsync_WhenAnUnrelatedTargetRowHoldsTheSameKeyValue_ReportsTheKeyValuePresent()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        await CreateProbeTablesAsync(scope, "integer");
+        await scope.ExecuteAsync("INSERT INTO probe_rows VALUES (42, 'source record');");
+        await scope.ExecuteTargetAsync("INSERT INTO probe_rows VALUES (42, 'unrelated target record');");
+
+        var probe = await ProbeAsync(scope, new StableKey([new("id", 42)]));
+
+        Assert.True(probe.Exists);
+        Assert.Equal(new StableKey([new("id", 42)]), probe.TargetKey);
+    }
+
+    [Fact]
+    public async Task ProbeTargetAsync_WhenTheTargetKeyDiffersOnlyByCaseUnderACaseSensitiveColumn_ReportsAbsent()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        await CreateProbeTablesAsync(scope, "text");
+        await scope.ExecuteAsync("INSERT INTO probe_rows VALUES ('ACME', 'source record');");
+        await scope.ExecuteTargetAsync("INSERT INTO probe_rows VALUES ('acme', 'target record');");
+
+        var probe = await ProbeAsync(scope, new StableKey([new("id", "ACME")]));
+
+        Assert.False(probe.Exists);
+    }
+
+    [Fact]
+    public async Task ProbeTargetAsync_WhenTheTargetKeyDiffersOnlyByCaseUnderACaseInsensitiveColumn_ReportsPresent()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        // Under the target's case-insensitive key 'acme' and 'ACME' are one row: inserting 'ACME' would violate its key.
+        await scope.ExecuteTargetAsync(
+            "CREATE COLLATION probe_ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false);"
+        );
+        await CreateProbeTablesAsync(scope, "text", "text COLLATE probe_ci");
+        await scope.ExecuteAsync("INSERT INTO probe_rows VALUES ('ACME', 'source record');");
+        await scope.ExecuteTargetAsync("INSERT INTO probe_rows VALUES ('acme', 'target record');");
+
+        var probe = await ProbeAsync(scope, new StableKey([new("id", "ACME")]));
+
+        Assert.True(probe.Exists);
+        Assert.Equal(new StableKey([new("id", "acme")]), probe.TargetKey);
+    }
+
+    [Fact]
+    public async Task ProbeTargetAsync_WhenNoTargetRowHoldsTheKeyValue_ReportsAbsent()
+    {
+        await using var scope = await _fixture.CreateScopeAsync();
+        await CreateProbeTablesAsync(scope, "integer");
+        await scope.ExecuteAsync("INSERT INTO probe_rows VALUES (42, 'source record');");
+
+        var probe = await ProbeAsync(scope, new StableKey([new("id", 42)]));
+
+        Assert.False(probe.Exists);
+        Assert.Null(probe.TargetKey);
+    }
+
+    private static async Task CreateProbeTablesAsync(
+        PostgreSqlClosureScope scope,
+        string sourceKeyType,
+        string? targetKeyType = null
+    )
+    {
+        await scope.ExecuteAsync(
+            $"CREATE TABLE probe_rows (id {sourceKeyType} NOT NULL CONSTRAINT pk_probe_rows PRIMARY KEY, name text NOT NULL);"
+        );
+        await scope.ExecuteTargetAsync(
+            $"CREATE TABLE probe_rows (id {targetKeyType ?? sourceKeyType} NOT NULL CONSTRAINT pk_probe_rows PRIMARY KEY, name text NOT NULL);"
+        );
+    }
+
+    private static async Task<TargetProbe> ProbeAsync(PostgreSqlClosureScope scope, StableKey key)
+    {
+        var source = await new PostgreSqlCatalogReader(scope.Source).ReadAsync(scope.Schema, CancellationToken.None);
+        var target = await new PostgreSqlCatalogReader(scope.Target).ReadAsync(scope.Schema, CancellationToken.None);
+        var table = source.Table("probe_rows").Definition;
+        await using var store = new PostgreSqlClosureStore(
+            scope.Source,
+            scope.Target,
+            source,
+            target,
+            new Dictionary<TableDefinition, StableKeySelection> { [table] = StableKeySelector.Select(table, null) }
+        );
+        var probes = await store.ProbeTargetAsync(table, [], [key], CancellationToken.None);
+        return probes[key];
+    }
 }

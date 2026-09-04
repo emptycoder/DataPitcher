@@ -28,7 +28,7 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         bool dropOnDispose = true
     )
     {
-        _stages = new SqlServerStagingTables(source, target, sourceSchema, keys, planId, dropOnDispose);
+        _stages = new SqlServerStagingTables(source, target, sourceSchema, keys, planId, dropOnDispose, targetSchema);
         _source = sourceSchema;
         _target = targetSchema;
         _keys = keys;
@@ -67,13 +67,18 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         var columns = KeyColumns(table);
         var target = TargetDefinition(table);
         var targetColumns = columns.Select(column => TargetColumn(target, column)).ToArray();
-        var select = string.Join(", ", columns.Select((_, i) => $"s.[k{i}]"));
+        var select = string.Join(
+            ", ",
+            columns
+                .Select((_, i) => $"s.[k{i}]")
+                .Concat(targetColumns.Select(column => "t." + SqlServerIdentifier.Quote(column)))
+        );
         var join = string.Join(
             " AND ",
             targetColumns.Select((column, i) => $"s.[k{i}]=t.{SqlServerIdentifier.Quote(column)}")
         );
         var sql =
-            $"/* DataPitcher.ProbeTarget */ SELECT {select}, CASE WHEN t.{SqlServerIdentifier.Quote(targetColumns[0])} IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END "
+            $"/* DataPitcher.ProbeTarget */ SELECT {select} "
             + $"FROM {SqlServerStagingTables.Qualified(_stages.TargetTableName(table))} s "
             + $"LEFT JOIN {Qualified(target)} t ON {join}";
         var states = outgoingRelationships.ToDictionary(relationship => relationship, TargetState);
@@ -83,7 +88,10 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
         await using var command = new SqlCommand(sql, connection);
         await using var rows = await command.ExecuteReaderAsync(cancellationToken);
         while (await rows.ReadAsync(cancellationToken))
-            result[ReadKey(rows, table)] = new TargetProbe(rows.GetBoolean(columns.Count), states);
+        {
+            var targetKey = rows.IsDBNull(columns.Count) ? null : ReadTargetKey(rows, columns);
+            result[ReadKey(rows, table)] = new TargetProbe(targetKey is not null, states, targetKey);
+        }
         return result;
     }
 
@@ -179,6 +187,10 @@ public sealed class SqlServerClosureStore : IClosureStore, IAsyncDisposable
                 targetForeignKey.IsTrusted
             );
     }
+
+    /// <summary>The matched target row's key under the source column names, read after the staged key columns.</summary>
+    private static StableKey ReadTargetKey(SqlDataReader rows, IReadOnlyList<string> columns) =>
+        new(columns.Select((column, i) => new KeyComponent(column, rows.GetValue(columns.Count + i))));
 
     private StableKey ReadKey(SqlDataReader rows, TableDefinition table)
     {

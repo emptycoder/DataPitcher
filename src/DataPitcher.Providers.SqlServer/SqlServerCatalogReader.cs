@@ -9,7 +9,14 @@ using Microsoft.Data.SqlClient;
 
 namespace DataPitcher.Providers.SqlServer;
 
-public sealed record SqlServerColumn(string Name, string StoreType, Type ClrType, bool IsNullable, bool IsGenerated);
+public sealed record SqlServerColumn(
+    string Name,
+    string StoreType,
+    Type ClrType,
+    bool IsNullable,
+    bool IsGenerated,
+    string? Collation = null
+);
 
 public sealed record SqlServerTable(TableDefinition Definition, IReadOnlyList<SqlServerColumn> Columns)
 {
@@ -54,7 +61,7 @@ public sealed class SqlServerCatalogReader(string connectionString)
     static SqlServerCatalogReader() => SqlServerEntraAuthentication.EnsureRegistered();
 
     private const string ColumnsSql =
-        "/* DataPitcher.Catalog.Columns */ SELECT t.name, c.name, ty.name, c.max_length, c.is_nullable, CAST(CASE WHEN cc.is_computed = 1 OR c.generated_always_type <> 0 THEN 1 ELSE 0 END AS bit), c.precision, c.scale "
+        "/* DataPitcher.Catalog.Columns */ SELECT t.name, c.name, ty.name, c.max_length, c.is_nullable, CAST(CASE WHEN cc.is_computed = 1 OR c.generated_always_type <> 0 THEN 1 ELSE 0 END AS bit), c.precision, c.scale, c.collation_name "
         + "FROM sys.tables t "
         + "JOIN sys.schemas s ON s.schema_id = t.schema_id "
         + "JOIN sys.columns c ON c.object_id = t.object_id "
@@ -188,7 +195,8 @@ public sealed class SqlServerCatalogReader(string connectionString)
                     StoreType(typeName, rows.GetInt16(3), rows.GetByte(6), rows.GetByte(7)),
                     Map(typeName),
                     rows.GetBoolean(4),
-                    rows.GetBoolean(5)
+                    rows.GetBoolean(5),
+                    rows.IsDBNull(8) ? null : rows.GetString(8)
                 )
             );
         }

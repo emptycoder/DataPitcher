@@ -57,20 +57,28 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
         var columns = KeyColumns(table);
         var target = TargetDefinition(table);
         var targetColumns = columns.Select(column => TargetColumn(target, column)).ToArray();
-        var select = string.Join(", ", columns.Select((_, i) => $"s.k{i}"));
+        var select = string.Join(
+            ", ",
+            columns
+                .Select((_, i) => $"s.k{i}")
+                .Concat(targetColumns.Select(column => "t." + PostgreSqlIdentifier.Quote(column)))
+        );
         var join = string.Join(
             " AND ",
             targetColumns.Select((column, i) => $"s.k{i} = t.{PostgreSqlIdentifier.Quote(column)}")
         );
         var sql =
-            $"/* DataPitcher.ProbeTarget */ SELECT {select}, t.{PostgreSqlIdentifier.Quote(targetColumns[0])} IS NOT NULL "
+            $"/* DataPitcher.ProbeTarget */ SELECT {select} "
             + $"FROM {PostgreSqlStagingTables.Qualified(_stages.TargetTableName(table))} s "
             + $"LEFT JOIN {Qualified(target)} t ON {join}";
         var result = new Dictionary<StableKey, TargetProbe>();
         await using var command = _stages.Target.CreateCommand(sql);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
-            result[ReadKey(reader, columns)] = new TargetProbe(reader.GetBoolean(columns.Count), states);
+        {
+            var targetKey = reader.IsDBNull(columns.Count) ? null : ReadTargetKey(reader, columns);
+            result[ReadKey(reader, columns)] = new TargetProbe(targetKey is not null, states, targetKey);
+        }
         return result;
     }
 
@@ -162,6 +170,10 @@ public sealed class PostgreSqlClosureStore : IClosureStore, IAsyncDisposable
     /// <summary>The target's own spelling of a key column, matched without regard to case.</summary>
     private static string TargetColumn(TableDefinition target, string column) =>
         target.Columns.FirstOrDefault(candidate => DatabaseNames.Equals(candidate.Name, column))?.Name ?? column;
+
+    /// <summary>The matched target row's key under the source column names, read after the staged key columns.</summary>
+    private static StableKey ReadTargetKey(NpgsqlDataReader reader, IReadOnlyList<string> columns) =>
+        new(columns.Select((column, i) => new KeyComponent(column, reader.GetValue(columns.Count + i))));
 
     private static StableKey ReadKey(NpgsqlDataReader reader, IReadOnlyList<string> columns) =>
         new(columns.Select((column, i) => new KeyComponent(column, reader.GetValue(i))));

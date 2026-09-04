@@ -18,6 +18,7 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
     private readonly string _source;
     private readonly string _target;
     private readonly SqlServerSchemaSnapshot _schema;
+    private readonly SqlServerSchemaSnapshot? _targetSchema;
     private readonly IReadOnlyDictionary<TableDefinition, StableKeySelection> _keys;
     private readonly string _plan;
     private readonly bool _dropOnDispose;
@@ -28,16 +29,21 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
         SqlServerSchemaSnapshot schema,
         IReadOnlyDictionary<TableDefinition, StableKeySelection> keys,
         Guid? planId = null,
-        bool dropOnDispose = true
+        bool dropOnDispose = true,
+        SqlServerSchemaSnapshot? targetSchema = null
     )
     {
         _source = source;
         _target = target;
         _schema = schema;
+        _targetSchema = targetSchema;
         _keys = keys;
         _plan = (planId ?? Guid.NewGuid()).ToString("D");
         _dropOnDispose = dropOnDispose;
     }
+
+    private static bool Same(TableDefinition left, TableDefinition right) =>
+        DatabaseNames.Equals(left.Schema, right.Schema) && DatabaseNames.Equals(left.Name, right.Name);
 
     public string SourceConnectionString => _source;
     public string TargetConnectionString => _target;
@@ -279,13 +285,28 @@ public sealed class SqlServerStagingTables : IAsyncDisposable
         await BulkCopyAsync(cs, name, t, keys.Distinct().ToArray(), ct);
     }
 
+    /// <summary>
+    /// A staging table mirrors the columns of the database it lives in, collation included: its keys are joined to
+    /// that database's own table, and SQL Server refuses to compare two implicit collations that differ. The
+    /// target-side table therefore takes the target catalog's type and collation, not the source's.
+    /// </summary>
     private async Task EnsureAsync(string cs, string name, TableDefinition t, CancellationToken ct)
     {
         var columns = Columns(t);
-        var metadata = _schema.Table(t.Schema, t.Name);
+        var metadata =
+            (cs == _target ? _targetSchema?.Tables.FirstOrDefault(candidate => Same(candidate.Definition, t)) : null)
+            ?? _schema.Table(t.Schema, t.Name);
         var declarations = string.Join(
             ", ",
-            columns.Select((column, i) => $"[k{i}] {metadata.Column(column).StoreType} NOT NULL")
+            columns.Select(
+                (column, i) =>
+                {
+                    var declared =
+                        metadata.Columns.FirstOrDefault(candidate => DatabaseNames.Equals(candidate.Name, column))
+                        ?? _schema.Table(t.Schema, t.Name).Column(column);
+                    return $"[k{i}] {declared.StoreType}{(declared.Collation is null ? "" : " COLLATE " + declared.Collation)} NOT NULL";
+                }
+            )
         );
         var index = "UX_" + name;
         var keyList = string.Join(", ", columns.Select((_, i) => $"[k{i}]"));

@@ -172,10 +172,10 @@ public sealed class PlanSealingService(
             warnings.Add(
                 new PlanWarning(
                     "roots_skipped",
-                    $"{closure.SkippedRoots} of {seeds.Keys.Count} selected row(s) already exist in the target and are skipped, together with their dependencies (conflict policy SkipExisting); for example {Describe(closure.SkippedRootSamples)}."
+                    $"{closure.SkippedRoots} of {seeds.Keys.Count} selected row(s) of {root.Schema}.{root.Name} were skipped, together with their dependencies (conflict policy SkipExisting), because a target row already holds their stable-key value ({rootKey.Name}: {string.Join(", ", rootKey.Columns)}); for example {Describe(closure.SkippedRootSamples)}. DataPitcher treats a matching stable key as the same row and has not compared any other column."
                         + (
                             closure.Rows.Count == 0
-                                ? " Nothing is left to transfer: delete those rows from the target or select other rows."
+                                ? " Nothing is left to transfer: remove or re-key those target rows, or select other rows."
                                 : ""
                         )
                 )
@@ -409,13 +409,15 @@ public sealed class PlanSealingService(
     /// fabricate). When the target enforces the constraint they would fail mid-run, so sealing refuses; otherwise
     /// the plan carries a warning.
     /// </summary>
-    private static string Describe(IEnumerable<StableKey> keys) =>
+    /// <summary>"Id=5 (source) -> Id=5 (target)", the shape unique-key collisions use, so both warnings read alike.</summary>
+    private static string Describe(IEnumerable<SkippedRootSample> samples) =>
         string.Join(
             "; ",
-            keys.Select(key =>
-                string.Join(", ", key.Components.Select(component => $"{component.Column}={component.Value}"))
-            )
+            samples.Select(sample => Describe(sample.Source) + " (source) -> " + Describe(sample.Target) + " (target)")
         );
+
+    private static string Describe(StableKey key) =>
+        string.Join(", ", key.Components.Select(component => $"{component.Column}={component.Value}"));
 
     private static IEnumerable<PlanWarning> Orphans(
         IReadOnlyCollection<SourceOrphanWarning> orphans,

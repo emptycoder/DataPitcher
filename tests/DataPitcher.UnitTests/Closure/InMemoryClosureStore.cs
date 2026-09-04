@@ -104,7 +104,14 @@ public sealed class InMemoryClosureStore : IClosureStore
             )
             .ToDictionary(entry => entry.Relationship, entry => entry.State);
         return Task.FromResult<IReadOnlyDictionary<StableKey, TargetProbe>>(
-            keys.ToDictionary(key => key, key => new TargetProbe(_target.Contains(new(table, key)), states))
+            keys.ToDictionary(
+                key => key,
+                key => new TargetProbe(
+                    _target.Contains(new(table, key)),
+                    states,
+                    _target.Contains(new(table, key)) ? key : null
+                )
+            )
         );
     }
 

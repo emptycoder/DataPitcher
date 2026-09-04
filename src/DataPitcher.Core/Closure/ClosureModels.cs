@@ -151,15 +151,23 @@ public sealed record TargetConstraintState(string ConstraintName, bool IsPresent
 
 public sealed class TargetProbe
 {
-    public TargetProbe(bool exists, IReadOnlyDictionary<ClosureRelationship, TargetConstraintState> constraints)
+    public TargetProbe(
+        bool exists,
+        IReadOnlyDictionary<ClosureRelationship, TargetConstraintState> constraints,
+        StableKey? targetKey = null
+    )
     {
         Exists = exists;
+        TargetKey = targetKey;
         Constraints = new ReadOnlyDictionary<ClosureRelationship, TargetConstraintState>(
             constraints.ToDictionary(x => x.Key, x => x.Value)
         );
     }
 
     public bool Exists { get; }
+
+    /// <summary>The stable key as the target row stores it; it can differ from the probed key in spelling when the target compares under a collation.</summary>
+    public StableKey? TargetKey { get; }
 
     public IReadOnlyDictionary<ClosureRelationship, TargetConstraintState> Constraints { get; }
 }
@@ -175,6 +183,9 @@ public sealed record SourceOrphanWarning(string RelationshipName, long Rows);
 /// <summary>The parent keys an expansion found, and how many expanded rows pointed at a parent that does not exist.</summary>
 public sealed record ClosureExpansion(IReadOnlyCollection<StableKey> Keys, long OrphanRows);
 
+/// <summary>A selected row the SkipExisting policy left out, with the target row's own spelling of the key it matched.</summary>
+public sealed record SkippedRootSample(StableKey Source, StableKey Target);
+
 public sealed class ClosureResult
 {
     public ClosureResult(
@@ -182,7 +193,7 @@ public sealed class ClosureResult
         IEnumerable<TargetConstraintWarning> warnings,
         IEnumerable<SourceOrphanWarning>? orphans = null,
         long skippedRoots = 0,
-        IEnumerable<StableKey>? skippedRootSamples = null
+        IEnumerable<SkippedRootSample>? skippedRootSamples = null
     )
     {
         Rows = Array.AsReadOnly(rows.ToArray());
@@ -196,7 +207,7 @@ public sealed class ClosureResult
     public long SkippedRoots { get; }
 
     /// <summary>The first few skipped keys, so an operator can look the rows up in the target instead of taking the count on trust.</summary>
-    public IReadOnlyList<StableKey> SkippedRootSamples { get; }
+    public IReadOnlyList<SkippedRootSample> SkippedRootSamples { get; }
 
     public IReadOnlyCollection<ClosureRow> Rows { get; }
 

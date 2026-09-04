@@ -324,8 +324,10 @@ public sealed class PlanSealingServiceTests
         Assert.Equal(0, content.ManifestTotals.PlannedWrites);
         var warning = Assert.Single(content.Warnings);
         Assert.Equal("roots_skipped", warning.Code);
-        Assert.StartsWith("1 of 1 selected row(s) already exist in the target", warning.Message);
-        Assert.Contains("for example K1=1", warning.Message);
+        Assert.StartsWith("1 of 1 selected row(s) of", warning.Message);
+        Assert.Contains("a target row already holds their stable-key value (PK_C: K1)", warning.Message);
+        Assert.Contains("for example K1=1 (source) -> K1=1 (target)", warning.Message);
+        Assert.Contains("has not compared any other column", warning.Message);
         Assert.Contains("Nothing is left to transfer", warning.Message);
     }
 

@@ -702,9 +702,23 @@ public sealed class DependencyClosureTests
             Root(c, 3, RootConflictPolicy.Upsert)
         );
         Assert.Equal(1, r.SkippedRoots);
-        Assert.Equal([K(1)], r.SkippedRootSamples);
+        var sample = Assert.Single(r.SkippedRootSamples);
+        Assert.Equal(K(1), sample.Source);
+        Assert.Equal(K(1), sample.Target);
         Assert.True(r.Contains(c, K(2)));
         Assert.True(r.Contains(c, K(3)));
+    }
+
+    [Fact]
+    public async Task Closure_KeepsAtMostThreeSamplesOfTheSkipExistingRootsItLeftOut()
+    {
+        var c = T("C");
+        var s = new InMemoryClosureStore();
+        s.MarkTarget(c, K(1), K(2), K(3), K(4), K(5));
+        var r = await Run(s, [], new ClosureRoot(c, [K(1), K(2), K(3), K(4), K(5)], RootConflictPolicy.SkipExisting));
+        Assert.Equal(5, r.SkippedRoots);
+        Assert.Equal(3, r.SkippedRootSamples.Count);
+        Assert.All(r.SkippedRootSamples, sample => Assert.Equal(sample.Source, sample.Target));
     }
 
     [Fact]
