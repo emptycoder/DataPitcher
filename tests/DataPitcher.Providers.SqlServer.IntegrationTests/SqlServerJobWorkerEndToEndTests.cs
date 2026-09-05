@@ -300,6 +300,43 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     }
 
     [Fact]
+    public async Task Seal_WhenAMappedUniqueKeyColumnCollidesUnderItsTargetName_RefusesNamingBothRows()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync(
+            "CREATE TABLE dbo.worker_accounts (id int NOT NULL CONSTRAINT PK_worker_accounts PRIMARY KEY, login nvarchar(64) NOT NULL CONSTRAINT UQ_worker_accounts_login UNIQUE);"
+                + " INSERT dbo.worker_accounts VALUES (2001, N'alice');"
+        );
+        // The target spells the unique column differently and already knows alice under another id.
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE dbo.worker_accounts (id int NOT NULL CONSTRAINT PK_worker_accounts PRIMARY KEY, user_login nvarchar(64) NOT NULL CONSTRAINT UQ_worker_accounts_login UNIQUE);"
+                + " INSERT dbo.worker_accounts VALUES (99, N'alice');"
+        );
+
+        var exception = await Assert.ThrowsAsync<UniqueKeyCollisionException>(() =>
+            RunTransferAsync(
+                scope,
+                "worker_accounts",
+                "PK_worker_accounts",
+                "SELECT * FROM dbo.worker_accounts",
+                mappings:
+                [
+                    new PlanTableMappingRequest(
+                        new PlanReviewAddressResponse("dbo", "worker_accounts"),
+                        null,
+                        [new PlanColumnMappingRequest("login", "user_login")]
+                    ),
+                ]
+            )
+        );
+
+        Assert.Contains(
+            "on unique key (user_login), for example id=2001 (source) -> id=99 (target)",
+            exception.Message
+        );
+    }
+
+    [Fact]
     public async Task Transfer_WhenTheSourceHasAComputedColumnBeforeOtherColumns_WritesEveryValueToItsOwnColumn()
     {
         await using var scope = await fixture.CreateScopeAsync();

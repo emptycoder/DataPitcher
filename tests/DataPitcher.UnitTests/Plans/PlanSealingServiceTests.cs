@@ -309,6 +309,37 @@ public sealed class PlanSealingServiceTests
     }
 
     [Fact]
+    public async Task SealAsync_WhenTheNullableCycleColumnIsRenamedOnTheTarget_StillDefersIt()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var parentToChild = new ForeignKeyDefinition("FK_P_C", Parent, Child, ["CId"], ["K1"], true, true);
+        var session = Session([Child, Parent], [ChildToParent, parentToChild]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.Store.Link(new ClosureRelationship(parentToChild), (K(2), K(1)));
+        // Nullability must be judged on the target column the mapping writes, not on the source column's name.
+        session.TargetSchema = Renamed(session.SourceSchema, "P", "CId", "ChildRef");
+        var (service, plans, planId) = await ArrangeAsync(
+            fixture,
+            session,
+            mappingOverrides:
+            [
+                new TableMappingOverride(
+                    new TableAddress("dbo", "P"),
+                    null,
+                    [new ColumnMappingOverride("CId", "ChildRef")]
+                ),
+            ]
+        );
+
+        await service.SealAsync(planId, CancellationToken.None);
+
+        var content = (await plans.LoadContentAsync(planId, CancellationToken.None))!;
+        var parent = Assert.Single(content.Tables, table => table.Mapping.Source.Name == "P");
+        Assert.Equal(["CId"], parent.DeferredColumns);
+        Assert.Equal("ChildRef", parent.Mapping.Columns.Single(column => column.Source == "CId").Target);
+    }
+
+    [Fact]
     public async Task SealAsync_WritesTheOperatorsColumnMappingIntoThePlan()
     {
         using var fixture = new ControlDatabaseFixture();

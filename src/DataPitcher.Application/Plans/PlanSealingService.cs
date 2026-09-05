@@ -166,7 +166,7 @@ public sealed class PlanSealingService(
             depth.Keys.ToArray(),
             relationships,
             depth,
-            relationship => IsNullable(relationship, session.TargetSchema)
+            relationship => IsNullable(relationship, session.TargetSchema, mapping)
         );
         if (order.Levelled.Count > 0)
             await session.OrderHierarchiesAsync(order.Levelled, stableKeys, planId, cancellationToken);
@@ -278,7 +278,7 @@ public sealed class PlanSealingService(
                 // A nullable levelled self reference can also be held back for the rows the levelling cannot reach.
                 var hierarchy = order
                     .Levelled.Where(relationship =>
-                        relationship.FromTable == group.Key && IsNullable(relationship, targetSchema)
+                        relationship.FromTable == group.Key && IsNullable(relationship, targetSchema, mapping)
                     )
                     .SelectMany(relationship => relationship.FromColumns)
                     .Distinct(DatabaseNames.Comparer)
@@ -513,19 +513,29 @@ public sealed class PlanSealingService(
         );
 
     /// <summary>A relationship can be deferred when the target accepts NULL in every referencing column.</summary>
-    private static bool IsNullable(ClosureRelationship relationship, SchemaSnapshotContent targetSchema)
+    /// <summary>Whether the target can take NULL in the foreign-key columns, judged on the target columns the mapping writes.</summary>
+    private static bool IsNullable(
+        ClosureRelationship relationship,
+        SchemaSnapshotContent targetSchema,
+        PlanMappingReview mapping
+    )
     {
+        var tableMapping = TableMapping(mapping, relationship.FromTable);
         var table = targetSchema.Tables.SingleOrDefault(candidate =>
-            DatabaseNames.Equals(candidate.Schema, relationship.FromTable.Schema)
-            && DatabaseNames.Equals(candidate.Name, relationship.FromTable.Name)
+            DatabaseNames.Equals(candidate.Schema, tableMapping.Target.Schema)
+            && DatabaseNames.Equals(candidate.Name, tableMapping.Target.Name)
         );
         return relationship.FromColumns.All(name =>
-            table is null
-                ? relationship.FromTable.Columns.Any(column =>
+        {
+            if (table is null)
+                return relationship.FromTable.Columns.Any(column =>
                     DatabaseNames.Equals(column.Name, name) && column.IsNullable
-                )
-                : table.Columns.Any(column => DatabaseNames.Equals(column.Name, name) && column.IsNullable)
-        );
+                );
+            var target =
+                tableMapping.Columns.FirstOrDefault(column => DatabaseNames.Equals(column.Source, name))?.Target
+                ?? name;
+            return table.Columns.Any(column => DatabaseNames.Equals(column.Name, target) && column.IsNullable);
+        });
     }
 
     private static IReadOnlyCollection<ClosureRelationship> ReachableRelationships(

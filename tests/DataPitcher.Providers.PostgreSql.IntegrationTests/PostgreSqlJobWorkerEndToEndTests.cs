@@ -439,6 +439,43 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
     }
 
     [Fact]
+    public async Task Seal_WhenAMappedUniqueKeyColumnCollidesUnderItsTargetName_RefusesNamingBothRows()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        await scope.ExecuteAsync(
+            "CREATE TABLE worker_accounts (id integer NOT NULL CONSTRAINT pk_worker_accounts PRIMARY KEY, login text NOT NULL CONSTRAINT uq_worker_accounts_login UNIQUE);"
+                + " INSERT INTO worker_accounts VALUES (2001, 'alice');"
+        );
+        // The target spells the unique column differently and already knows alice under another id.
+        await scope.ExecuteTargetAsync(
+            "CREATE TABLE worker_accounts (id integer NOT NULL CONSTRAINT pk_worker_accounts PRIMARY KEY, user_login text NOT NULL CONSTRAINT uq_worker_accounts_login UNIQUE);"
+                + " INSERT INTO worker_accounts VALUES (99, 'alice');"
+        );
+
+        var exception = await Assert.ThrowsAsync<UniqueKeyCollisionException>(() =>
+            RunTransferAsync(
+                scope,
+                "worker_accounts",
+                "pk_worker_accounts",
+                "SELECT * FROM worker_accounts",
+                mappings:
+                [
+                    new PlanTableMappingRequest(
+                        new PlanReviewAddressResponse(scope.Schema, "worker_accounts"),
+                        null,
+                        [new PlanColumnMappingRequest("login", "user_login")]
+                    ),
+                ]
+            )
+        );
+
+        Assert.Contains(
+            "on unique key (user_login), for example id=2001 (source) -> id=99 (target)",
+            exception.Message
+        );
+    }
+
+    [Fact]
     public async Task Transfer_WhenTwoTablesReferenceEachOther_FillsTheNullableSideAfterTheRows()
     {
         await using var scope = await fixture.CreateScopeAsync();
