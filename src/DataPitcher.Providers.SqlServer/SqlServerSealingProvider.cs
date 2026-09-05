@@ -55,6 +55,20 @@ public sealed class SqlServerSealingProvider : ISealingProvider
     {
         public SchemaSnapshotContent SourceSchema => sourceSchema;
         public SchemaSnapshotContent TargetSchema => targetSchema;
+
+        public bool SupportsStableKeyType(SchemaColumn column)
+        {
+            var baseType = column.StoreType.Split('(')[0].Trim();
+            try
+            {
+                return SqlServerStableKeyCodec.Supports(SqlServerTransferSchemaReader.Map(baseType).Item2);
+            }
+            catch (NotSupportedException)
+            {
+                return false;
+            }
+        }
+
         public IReadOnlyCollection<TableDefinition> SourceTables { get; } =
             sourceCatalog.Tables.Select(table => table.Definition).ToArray();
         public IReadOnlyCollection<ForeignKeyDefinition> SourceForeignKeys { get; } =

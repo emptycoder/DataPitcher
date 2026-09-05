@@ -760,6 +760,7 @@ public sealed class DataPitcherApplication(
             UniqueKeyCollisionException => "unique_key_collision",
             PlanInUseException => "plan_in_use",
             MappingInvalidException => "mapping_invalid",
+            UnsupportedStableKeyException => "stable_key_unsupported",
             InvalidOperationException or NotSupportedException => "seal_rejected",
             _ => "seal_failed",
         };

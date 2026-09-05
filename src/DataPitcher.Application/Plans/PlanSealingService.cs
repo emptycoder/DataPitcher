@@ -25,6 +25,9 @@ public sealed class SourceOrphansException(string message) : InvalidOperationExc
 /// <summary>The plan's column mapping names something the target cannot take; the plan page shows which.</summary>
 public sealed class MappingInvalidException(string message) : InvalidOperationException(message);
 
+/// <summary>A planned table's stable key uses a type the provider cannot record; the plan is refused before any row is read.</summary>
+public sealed class UnsupportedStableKeyException(string message) : InvalidOperationException(message);
+
 /// <summary>Planned rows collide with different target rows on a unique key; verbatim keys cannot merge them.</summary>
 public sealed class UniqueKeyCollisionException(string message) : InvalidOperationException(message);
 
@@ -139,6 +142,7 @@ public sealed class PlanSealingService(
             .Distinct()
             .ToDictionary(table => table, table => StableKeySelector.Select(table, null));
         stableKeys[root] = new StableKeySelection(rootKey);
+        RequireSupportedStableKeys(session, stableKeys);
         var store = session.CreateClosureStore(stableKeys, planId);
         ClosureResult closure;
         try
@@ -389,6 +393,44 @@ public sealed class PlanSealingService(
                 address,
                 table.Columns.Select(column => new ColumnMapping(column.Name, column.Name)).ToArray()
             );
+    }
+
+    /// <summary>
+    /// Every stable key is recorded in the provider's own encoding in the target checkpoint, the ledger and the
+    /// manifest. A type the encoding cannot hold would fail the run on its first batch of that table, after earlier
+    /// batches committed; the schema already says which types the keys use, so the plan is refused here instead.
+    /// </summary>
+    private static void RequireSupportedStableKeys(
+        ISealingSession session,
+        IReadOnlyDictionary<TableDefinition, StableKeySelection> stableKeys
+    )
+    {
+        var unsupported = stableKeys
+            .Where(pair => pair.Value.Constraint is not null)
+            .SelectMany(pair =>
+                pair.Value.Constraint!.Columns.Select(column =>
+                    (
+                        Table: pair.Key,
+                        Column: column,
+                        Declared: session
+                            .SourceSchema.Tables.FirstOrDefault(candidate =>
+                                DatabaseNames.Equals(candidate.Schema, pair.Key.Schema)
+                                && DatabaseNames.Equals(candidate.Name, pair.Key.Name)
+                            )
+                            ?.Columns.FirstOrDefault(candidate => DatabaseNames.Equals(candidate.Name, column))
+                    )
+                )
+            )
+            .Where(item => item.Declared is not null && !session.SupportsStableKeyType(item.Declared))
+            .Select(item => $"{item.Table.Schema}.{item.Table.Name} column {item.Column} ({item.Declared!.StoreType})")
+            .ToArray();
+        if (unsupported.Length == 0)
+            return;
+        throw new UnsupportedStableKeyException(
+            "Stable keys of these types cannot be transferred: "
+                + string.Join("; ", unsupported)
+                + ". DataPitcher records every stable key in its checkpoints, ledger and manifest, and supports integer, exact decimal, character, binary, unique identifier and date-time key columns. Change the key column's type in the source, or leave the table's rows out of the selection, then seal the plan again."
+        );
     }
 
     private static void RequireNoUniqueKeyCollisions(IReadOnlyCollection<UniqueKeyCollision> collisions)

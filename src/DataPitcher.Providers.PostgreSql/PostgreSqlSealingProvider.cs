@@ -58,6 +58,27 @@ public sealed class PostgreSqlSealingProvider : ISealingProvider
     {
         public SchemaSnapshotContent SourceSchema => sourceSchema;
         public SchemaSnapshotContent TargetSchema => targetSchema;
+
+        /// <summary>The snapshot names PostgreSQL types after the CLR type the catalog mapped, so the same names decide here.</summary>
+        public bool SupportsStableKeyType(SchemaColumn column) =>
+            column.StoreType switch
+            {
+                "bigint" => true,
+                "integer" => true,
+                "smallint" => true,
+                "boolean" => true,
+                "numeric" => true,
+                "uuid" => true,
+                "bytea" => true,
+                "date" => true,
+                "time" => true,
+                "timestamp" => true,
+                "timestamptz" => true,
+                "interval" => true,
+                "text" => column.ClrType == typeof(string).FullName,
+                _ => false,
+            };
+
         public IReadOnlyCollection<TableDefinition> SourceTables { get; } =
             sourceCatalog.Tables.Select(table => table.Definition).ToArray();
         public IReadOnlyCollection<ForeignKeyDefinition> SourceForeignKeys { get; } =

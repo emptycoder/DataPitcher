@@ -405,6 +405,56 @@ public sealed class SqlServerJobWorkerEndToEndTests(SqlServerClosureFixture fixt
     }
 
     [Fact]
+    public async Task Seal_WhenTheStableKeyTypeCannotBeRecorded_RefusesNamingTheColumnBeforeAnyRowIsWritten()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE dbo.worker_readings (reading float NOT NULL CONSTRAINT PK_worker_readings PRIMARY KEY, label nvarchar(64) NOT NULL);";
+        await scope.ExecuteAsync(ddl + " INSERT dbo.worker_readings VALUES (1.5, N'one and a half');");
+        await scope.ExecuteTargetAsync(ddl);
+
+        var exception = await Assert.ThrowsAsync<UnsupportedStableKeyException>(() =>
+            RunTransferAsync(
+                scope,
+                "worker_readings",
+                "PK_worker_readings",
+                "SELECT * FROM dbo.worker_readings",
+                keyColumn: "reading"
+            )
+        );
+
+        Assert.Contains("dbo.worker_readings column reading (float)", exception.Message);
+        Assert.Equal(0, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_readings"));
+    }
+
+    [Fact]
+    public async Task Transfer_WhenTheStableKeyIsAVarcharColumn_WritesTheRows()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE dbo.worker_ref_codes (code varchar(100) NOT NULL CONSTRAINT PK_worker_ref_codes PRIMARY KEY, label nvarchar(64) NOT NULL);";
+        await scope.ExecuteAsync(
+            ddl + " INSERT dbo.worker_ref_codes VALUES ('ACTIVE', N'Active'), ('CLOSED', N'Closed');"
+        );
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(
+            scope,
+            "worker_ref_codes",
+            "PK_worker_ref_codes",
+            "SELECT * FROM dbo.worker_ref_codes",
+            keyColumn: "code"
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal(2, await scope.ScalarTargetAsync<int>("SELECT COUNT(*) FROM dbo.worker_ref_codes"));
+        Assert.Equal(
+            "Closed",
+            await scope.ScalarTargetAsync<string>("SELECT label FROM dbo.worker_ref_codes WHERE code = 'CLOSED'")
+        );
+    }
+
+    [Fact]
     public async Task Reseal_WhenASourceRowWasAddedAfterATransfer_SkipsOnlyTheRowTheTargetAlreadyHas()
     {
         await using var scope = await fixture.CreateScopeAsync();

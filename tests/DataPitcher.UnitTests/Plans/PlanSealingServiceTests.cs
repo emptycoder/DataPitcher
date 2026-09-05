@@ -340,6 +340,26 @@ public sealed class PlanSealingServiceTests
     }
 
     [Fact]
+    public async Task SealAsync_WhenAStableKeyTypeCannotBeRecorded_RefusesBeforeTheClosureNamingTheColumn()
+    {
+        using var fixture = new ControlDatabaseFixture();
+        var session = Session([Child, Parent], [ChildToParent]);
+        session.Store.Link(new ClosureRelationship(ChildToParent), (K(1), K(2)));
+        session.StableKeyTypeSupport = column => column.Name != "K1";
+        var (service, plans, planId) = await ArrangeAsync(fixture, session);
+
+        var exception = await Assert.ThrowsAsync<UnsupportedStableKeyException>(() =>
+            service.SealAsync(planId, CancellationToken.None)
+        );
+
+        Assert.Contains("dbo.C column K1 (int)", exception.Message);
+        Assert.Contains("dbo.P column K1 (int)", exception.Message);
+        Assert.Contains("seal the plan again", exception.Message);
+        Assert.Equal(0, session.Store.ResetCalls);
+        Assert.Null(await plans.LoadContentAsync(planId, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task SealAsync_WritesTheOperatorsColumnMappingIntoThePlan()
     {
         using var fixture = new ControlDatabaseFixture();
@@ -622,6 +642,10 @@ public sealed class PlanSealingServiceTests
         public List<string> VerifiedTables { get; } = [];
         public SchemaSnapshotContent SourceSchema { get; } = schema;
         public SchemaSnapshotContent TargetSchema { get; set; } = schema;
+        public Func<SchemaColumn, bool> StableKeyTypeSupport { get; set; } = _ => true;
+
+        public bool SupportsStableKeyType(SchemaColumn column) => StableKeyTypeSupport(column);
+
         public IReadOnlyCollection<TableDefinition> SourceTables => tables;
         public IReadOnlyCollection<ForeignKeyDefinition> SourceForeignKeys => foreignKeys;
         public IReadOnlyCollection<UnresolvedForeignKey> SourceUnresolvedForeignKeys => Unresolved;

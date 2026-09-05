@@ -13,6 +13,12 @@ public interface ISealingSession : IAsyncDisposable
 {
     SchemaSnapshotContent SourceSchema { get; }
     SchemaSnapshotContent TargetSchema { get; }
+
+    /// <summary>
+    /// Whether the provider can record a stable key of this declared column type in its checkpoints, ledger and
+    /// manifest. Sealing asks before any row is read, so an unsupported key type never fails a run mid-write.
+    /// </summary>
+    bool SupportsStableKeyType(SchemaColumn column);
     IReadOnlyCollection<TableDefinition> SourceTables { get; }
     IReadOnlyCollection<ForeignKeyDefinition> SourceForeignKeys { get; }
 

@@ -150,8 +150,42 @@ public sealed class SqlServerManifestMismatchException()
 
 public sealed class SqlServerStrictExactBlockedException(string reason) : InvalidOperationException(reason);
 
+/// <summary>
+/// Encodes a stable key for the checkpoint, ledger and manifest, where it is only ever compared for equality (joins,
+/// EXCEPT, primary keys), never ordered. Each column's type is known on both sides, so a value needs only to be
+/// unambiguous for its own type. The Int, BigInt and NVarChar layouts predate the other types and must not change:
+/// paused jobs hold checkpoints in them.
+/// </summary>
 public static class SqlServerStableKeyCodec
 {
+    /// <summary>
+    /// Types a stable key may use. Approximate numbers (float, real) compare unreliably; text, ntext, image and xml
+    /// cannot be index keys on SQL Server; sql_variant has no single CLR type. Sealing refuses the rest up front.
+    /// </summary>
+    public static bool Supports(SqlDbType type) =>
+        type
+            is SqlDbType.Int
+                or SqlDbType.BigInt
+                or SqlDbType.SmallInt
+                or SqlDbType.TinyInt
+                or SqlDbType.Bit
+                or SqlDbType.Char
+                or SqlDbType.VarChar
+                or SqlDbType.NChar
+                or SqlDbType.NVarChar
+                or SqlDbType.UniqueIdentifier
+                or SqlDbType.Decimal
+                or SqlDbType.Money
+                or SqlDbType.SmallMoney
+                or SqlDbType.Date
+                or SqlDbType.DateTime
+                or SqlDbType.DateTime2
+                or SqlDbType.SmallDateTime
+                or SqlDbType.DateTimeOffset
+                or SqlDbType.Time
+                or SqlDbType.Binary
+                or SqlDbType.VarBinary;
+
     public static byte[] Encode(StableKey key, SqlServerWriteTable table)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -178,52 +212,78 @@ public static class SqlServerStableKeyCodec
 
     private static void Write(ArrayBufferWriter<byte> buffer, object value, SqlDbType type)
     {
-        if (type == SqlDbType.Int && value is int integer)
+        switch (type, value)
         {
-            var span = buffer.GetSpan(4);
-            BinaryPrimitives.WriteInt32BigEndian(span, integer);
-            buffer.Advance(4);
-            return;
+            case (SqlDbType.Int, int integer):
+                StableKeyBytes.WriteInt32(buffer, integer);
+                return;
+            case (SqlDbType.BigInt, long bigint):
+                StableKeyBytes.WriteInt64(buffer, bigint);
+                return;
+            case (SqlDbType.SmallInt, short small):
+                StableKeyBytes.WriteInt16(buffer, small);
+                return;
+            case (SqlDbType.TinyInt, byte tiny):
+                StableKeyBytes.WriteByte(buffer, tiny);
+                return;
+            case (SqlDbType.Bit, bool bit):
+                StableKeyBytes.WriteByte(buffer, bit ? (byte)1 : (byte)0);
+                return;
+            case (SqlDbType.Char or SqlDbType.VarChar or SqlDbType.NChar or SqlDbType.NVarChar, string text):
+                StableKeyBytes.WriteBytes(buffer, Encoding.UTF8.GetBytes(text));
+                return;
+            case (SqlDbType.UniqueIdentifier, Guid guid):
+                StableKeyBytes.WriteGuid(buffer, guid);
+                return;
+            case (SqlDbType.Decimal or SqlDbType.Money or SqlDbType.SmallMoney, decimal number):
+                StableKeyBytes.WriteDecimal(buffer, number);
+                return;
+            case (
+                SqlDbType.Date
+                    or SqlDbType.DateTime
+                    or SqlDbType.DateTime2
+                    or SqlDbType.SmallDateTime,
+                DateTime moment
+            ):
+                StableKeyBytes.WriteDateTime(buffer, moment);
+                return;
+            case (SqlDbType.DateTimeOffset, DateTimeOffset moment):
+                StableKeyBytes.WriteDateTimeOffset(buffer, moment);
+                return;
+            case (SqlDbType.Time, TimeSpan time):
+                StableKeyBytes.WriteInt64(buffer, time.Ticks);
+                return;
+            case (SqlDbType.Binary or SqlDbType.VarBinary, byte[] bytes):
+                StableKeyBytes.WriteBytes(buffer, bytes);
+                return;
+            default:
+                throw new NotSupportedException(
+                    $"Stable-key type {type} is not supported for a value of type {value.GetType().Name}."
+                );
         }
-        if (type == SqlDbType.BigInt && value is long bigint)
-        {
-            var span = buffer.GetSpan(8);
-            BinaryPrimitives.WriteInt64BigEndian(span, bigint);
-            buffer.Advance(8);
-            return;
-        }
-        var text =
-            type == SqlDbType.NVarChar && value is string stringValue
-                ? Encoding.UTF8.GetBytes(stringValue)
-                : throw new NotSupportedException($"Stable-key type {type} is not supported.");
-        var length = buffer.GetSpan(4);
-        BinaryPrimitives.WriteInt32BigEndian(length, text.Length);
-        buffer.Advance(4);
-        buffer.Write(text);
     }
 
-    private static object Read(byte[] bytes, ref int offset, SqlDbType type)
-    {
-        if (type == SqlDbType.Int)
+    private static object Read(byte[] bytes, ref int offset, SqlDbType type) =>
+        type switch
         {
-            var result = BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(offset, 4));
-            offset += 4;
-            return result;
-        }
-        if (type == SqlDbType.BigInt)
-        {
-            var result = BinaryPrimitives.ReadInt64BigEndian(bytes.AsSpan(offset, 8));
-            offset += 8;
-            return result;
-        }
-        if (type == SqlDbType.NVarChar)
-        {
-            var length = BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(offset, 4));
-            offset += 4;
-            var result = Encoding.UTF8.GetString(bytes, offset, length);
-            offset += length;
-            return result;
-        }
-        throw new NotSupportedException($"Stable-key type {type} is not supported.");
-    }
+            SqlDbType.Int => StableKeyBytes.ReadInt32(bytes, ref offset),
+            SqlDbType.BigInt => StableKeyBytes.ReadInt64(bytes, ref offset),
+            SqlDbType.SmallInt => StableKeyBytes.ReadInt16(bytes, ref offset),
+            SqlDbType.TinyInt => StableKeyBytes.ReadByte(bytes, ref offset),
+            SqlDbType.Bit => StableKeyBytes.ReadByte(bytes, ref offset) != 0,
+            SqlDbType.Char or SqlDbType.VarChar or SqlDbType.NChar or SqlDbType.NVarChar => Encoding.UTF8.GetString(
+                StableKeyBytes.ReadBytes(bytes, ref offset)
+            ),
+            SqlDbType.UniqueIdentifier => StableKeyBytes.ReadGuid(bytes, ref offset),
+            SqlDbType.Decimal or SqlDbType.Money or SqlDbType.SmallMoney => StableKeyBytes.ReadDecimal(
+                bytes,
+                ref offset
+            ),
+            SqlDbType.Date or SqlDbType.DateTime or SqlDbType.DateTime2 or SqlDbType.SmallDateTime =>
+                StableKeyBytes.ReadDateTime(bytes, ref offset),
+            SqlDbType.DateTimeOffset => StableKeyBytes.ReadDateTimeOffset(bytes, ref offset),
+            SqlDbType.Time => TimeSpan.FromTicks(StableKeyBytes.ReadInt64(bytes, ref offset)),
+            SqlDbType.Binary or SqlDbType.VarBinary => StableKeyBytes.ReadBytes(bytes, ref offset),
+            _ => throw new NotSupportedException($"Stable-key type {type} is not supported."),
+        };
 }

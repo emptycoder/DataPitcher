@@ -145,8 +145,45 @@ public sealed class PostgreSqlManifestMismatchException()
 
 public sealed class PostgreSqlStrictExactBlockedException(string reason) : InvalidOperationException(reason);
 
+/// <summary>
+/// Encodes a stable key for the checkpoint, ledger and manifest, where it is only ever compared for equality (joins,
+/// EXCEPT, primary keys), never ordered. Each column's type is known on both sides, so a value needs only to be
+/// unambiguous for its own type. The Integer, Bigint and Text layouts predate the other types and must not change:
+/// paused jobs hold checkpoints in them. Temporal types carry a tag because Npgsql hands the same column back as
+/// either of two CLR types (date as DateTime or DateOnly, timestamptz as DateTime or DateTimeOffset), and Decode
+/// must return exactly what Encode received.
+/// </summary>
 public static class PostgreSqlStableKeyCodec
 {
+    private const byte Primary = 0;
+    private const byte Alternate = 1;
+
+    /// <summary>
+    /// Types a stable key may use. Approximate numbers (real, double precision) compare unreliably; json has no
+    /// equality operator and jsonb, xml, inet and macaddr keys are rare enough to wait for a request. Sealing refuses
+    /// the rest up front.
+    /// </summary>
+    public static bool Supports(NpgsqlDbType type) =>
+        type
+            is NpgsqlDbType.Integer
+                or NpgsqlDbType.Bigint
+                or NpgsqlDbType.Smallint
+                or NpgsqlDbType.Boolean
+                or NpgsqlDbType.Numeric
+                or NpgsqlDbType.Money
+                or NpgsqlDbType.Text
+                or NpgsqlDbType.Varchar
+                or NpgsqlDbType.Char
+                or NpgsqlDbType.Name
+                or NpgsqlDbType.Uuid
+                or NpgsqlDbType.Bytea
+                or NpgsqlDbType.Date
+                or NpgsqlDbType.Time
+                or NpgsqlDbType.TimeTz
+                or NpgsqlDbType.Timestamp
+                or NpgsqlDbType.TimestampTz
+                or NpgsqlDbType.Interval;
+
     public static byte[] Encode(StableKey key, PostgreSqlWriteTable table)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -173,49 +210,100 @@ public static class PostgreSqlStableKeyCodec
 
     private static void Write(ArrayBufferWriter<byte> buffer, object value, NpgsqlDbType type)
     {
-        var span = buffer.GetSpan(type is NpgsqlDbType.Integer ? 4 : 8);
-        if (type == NpgsqlDbType.Integer && value is int integer)
+        switch (type, value)
         {
-            BinaryPrimitives.WriteInt32BigEndian(span, integer);
-            buffer.Advance(4);
-            return;
+            case (NpgsqlDbType.Integer, int integer):
+                StableKeyBytes.WriteInt32(buffer, integer);
+                return;
+            case (NpgsqlDbType.Bigint, long bigInteger):
+                StableKeyBytes.WriteInt64(buffer, bigInteger);
+                return;
+            case (NpgsqlDbType.Smallint, short small):
+                StableKeyBytes.WriteInt16(buffer, small);
+                return;
+            case (NpgsqlDbType.Boolean, bool flag):
+                StableKeyBytes.WriteByte(buffer, flag ? (byte)1 : (byte)0);
+                return;
+            case (NpgsqlDbType.Numeric or NpgsqlDbType.Money, decimal number):
+                StableKeyBytes.WriteDecimal(buffer, number);
+                return;
+            case (NpgsqlDbType.Text or NpgsqlDbType.Varchar or NpgsqlDbType.Char or NpgsqlDbType.Name, string text):
+                StableKeyBytes.WriteBytes(buffer, Encoding.UTF8.GetBytes(text));
+                return;
+            case (NpgsqlDbType.Uuid, Guid guid):
+                StableKeyBytes.WriteGuid(buffer, guid);
+                return;
+            case (NpgsqlDbType.Bytea, byte[] bytes):
+                StableKeyBytes.WriteBytes(buffer, bytes);
+                return;
+            case (NpgsqlDbType.Date, DateTime day):
+                StableKeyBytes.WriteByte(buffer, Primary);
+                StableKeyBytes.WriteDateTime(buffer, day);
+                return;
+            case (NpgsqlDbType.Date, DateOnly day):
+                StableKeyBytes.WriteByte(buffer, Alternate);
+                StableKeyBytes.WriteInt32(buffer, day.DayNumber);
+                return;
+            case (NpgsqlDbType.Time or NpgsqlDbType.Interval, TimeSpan span):
+                StableKeyBytes.WriteByte(buffer, Primary);
+                StableKeyBytes.WriteInt64(buffer, span.Ticks);
+                return;
+            case (NpgsqlDbType.Time, TimeOnly time):
+                StableKeyBytes.WriteByte(buffer, Alternate);
+                StableKeyBytes.WriteInt64(buffer, time.Ticks);
+                return;
+            case (NpgsqlDbType.Timestamp or NpgsqlDbType.TimestampTz, DateTime moment):
+                StableKeyBytes.WriteByte(buffer, Primary);
+                StableKeyBytes.WriteDateTime(buffer, moment);
+                return;
+            case (NpgsqlDbType.TimestampTz or NpgsqlDbType.TimeTz, DateTimeOffset moment):
+                StableKeyBytes.WriteByte(buffer, Alternate);
+                StableKeyBytes.WriteDateTimeOffset(buffer, moment);
+                return;
+            default:
+                throw new NotSupportedException(
+                    $"Stable-key type {type} is not supported for a value of type {value.GetType().Name}."
+                );
         }
-        if (type == NpgsqlDbType.Bigint && value is long bigInteger)
-        {
-            BinaryPrimitives.WriteInt64BigEndian(span, bigInteger);
-            buffer.Advance(8);
-            return;
-        }
-        var text =
-            type == NpgsqlDbType.Text && value is string stringValue
-                ? Encoding.UTF8.GetBytes(stringValue)
-                : throw new NotSupportedException($"Stable-key type {type} is not supported.");
-        BinaryPrimitives.WriteInt32BigEndian(span, text.Length);
-        buffer.Advance(4);
-        buffer.Write(text);
     }
 
     private static object Read(byte[] bytes, ref int offset, NpgsqlDbType type)
     {
-        var span = bytes.AsSpan(offset);
-        if (type == NpgsqlDbType.Integer)
+        switch (type)
         {
-            offset += 4;
-            return BinaryPrimitives.ReadInt32BigEndian(span);
+            case NpgsqlDbType.Integer:
+                return StableKeyBytes.ReadInt32(bytes, ref offset);
+            case NpgsqlDbType.Bigint:
+                return StableKeyBytes.ReadInt64(bytes, ref offset);
+            case NpgsqlDbType.Smallint:
+                return StableKeyBytes.ReadInt16(bytes, ref offset);
+            case NpgsqlDbType.Boolean:
+                return StableKeyBytes.ReadByte(bytes, ref offset) != 0;
+            case NpgsqlDbType.Numeric or NpgsqlDbType.Money:
+                return StableKeyBytes.ReadDecimal(bytes, ref offset);
+            case NpgsqlDbType.Text or NpgsqlDbType.Varchar or NpgsqlDbType.Char or NpgsqlDbType.Name:
+                return Encoding.UTF8.GetString(StableKeyBytes.ReadBytes(bytes, ref offset));
+            case NpgsqlDbType.Uuid:
+                return StableKeyBytes.ReadGuid(bytes, ref offset);
+            case NpgsqlDbType.Bytea:
+                return StableKeyBytes.ReadBytes(bytes, ref offset);
+            case NpgsqlDbType.Date:
+                return StableKeyBytes.ReadByte(bytes, ref offset) == Primary
+                    ? StableKeyBytes.ReadDateTime(bytes, ref offset)
+                    : DateOnly.FromDayNumber(StableKeyBytes.ReadInt32(bytes, ref offset));
+            case NpgsqlDbType.Time:
+                return StableKeyBytes.ReadByte(bytes, ref offset) == Primary
+                    ? TimeSpan.FromTicks(StableKeyBytes.ReadInt64(bytes, ref offset))
+                    : new TimeOnly(StableKeyBytes.ReadInt64(bytes, ref offset));
+            case NpgsqlDbType.Interval:
+                offset++;
+                return TimeSpan.FromTicks(StableKeyBytes.ReadInt64(bytes, ref offset));
+            case NpgsqlDbType.Timestamp or NpgsqlDbType.TimestampTz or NpgsqlDbType.TimeTz:
+                return StableKeyBytes.ReadByte(bytes, ref offset) == Primary
+                    ? (object)StableKeyBytes.ReadDateTime(bytes, ref offset)
+                    : StableKeyBytes.ReadDateTimeOffset(bytes, ref offset);
+            default:
+                throw new NotSupportedException($"Stable-key type {type} is not supported.");
         }
-        if (type == NpgsqlDbType.Bigint)
-        {
-            offset += 8;
-            return BinaryPrimitives.ReadInt64BigEndian(span);
-        }
-        if (type == NpgsqlDbType.Text)
-        {
-            var length = BinaryPrimitives.ReadInt32BigEndian(span);
-            offset += 4;
-            var value = Encoding.UTF8.GetString(bytes, offset, length);
-            offset += length;
-            return value;
-        }
-        throw new NotSupportedException($"Stable-key type {type} is not supported.");
     }
 }

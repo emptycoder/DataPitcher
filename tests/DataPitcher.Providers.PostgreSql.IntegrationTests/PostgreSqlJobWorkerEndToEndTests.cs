@@ -339,6 +339,56 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
     }
 
     [Fact]
+    public async Task Seal_WhenTheStableKeyTypeCannotBeRecorded_RefusesNamingTheColumnBeforeAnyRowIsWritten()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE worker_readings (reading double precision NOT NULL CONSTRAINT pk_worker_readings PRIMARY KEY, label text NOT NULL);";
+        await scope.ExecuteAsync(ddl + " INSERT INTO worker_readings VALUES (1.5, 'one and a half');");
+        await scope.ExecuteTargetAsync(ddl);
+
+        var exception = await Assert.ThrowsAsync<UnsupportedStableKeyException>(() =>
+            RunTransferAsync(
+                scope,
+                "worker_readings",
+                "pk_worker_readings",
+                "SELECT * FROM worker_readings",
+                keyColumn: "reading"
+            )
+        );
+
+        Assert.Contains(scope.Schema + ".worker_readings column reading (double precision)", exception.Message);
+        Assert.Equal(0L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_readings"));
+    }
+
+    [Fact]
+    public async Task Transfer_WhenTheStableKeyIsAVarcharColumn_WritesTheRows()
+    {
+        await using var scope = await fixture.CreateScopeAsync();
+        const string ddl =
+            "CREATE TABLE worker_ref_codes (code varchar(100) NOT NULL CONSTRAINT pk_worker_ref_codes PRIMARY KEY, label text NOT NULL);";
+        await scope.ExecuteAsync(
+            ddl + " INSERT INTO worker_ref_codes VALUES ('ACTIVE', 'Active'), ('CLOSED', 'Closed');"
+        );
+        await scope.ExecuteTargetAsync(ddl);
+
+        var job = await RunTransferAsync(
+            scope,
+            "worker_ref_codes",
+            "pk_worker_ref_codes",
+            "SELECT * FROM worker_ref_codes",
+            keyColumn: "code"
+        );
+
+        Assert.True(job.State == JobState.Succeeded, job.FailureCode + ": " + job.FailureDetail);
+        Assert.Equal(2L, await scope.ScalarTargetAsync<long>("SELECT count(*) FROM worker_ref_codes"));
+        Assert.Equal(
+            "Closed",
+            await scope.ScalarTargetAsync<string>("SELECT label FROM worker_ref_codes WHERE code = 'CLOSED'")
+        );
+    }
+
+    [Fact]
     public async Task Reseal_WhenASourceRowWasAddedAfterATransfer_SkipsOnlyTheRowTheTargetAlreadyHas()
     {
         await using var scope = await fixture.CreateScopeAsync();
@@ -659,7 +709,8 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
         Func<IServiceProvider, Guid, Task>? afterSeal = null,
         string? businessSchema = null,
         Func<IServiceProvider, Guid, TransferJob, Task<TransferJob>>? afterRun = null,
-        IReadOnlyList<PlanTableMappingRequest>? mappings = null
+        IReadOnlyList<PlanTableMappingRequest>? mappings = null,
+        string keyColumn = "id"
     )
     {
         businessSchema ??= scope.Schema;
@@ -742,7 +793,7 @@ public sealed class PostgreSqlJobWorkerEndToEndTests(PostgreSqlClosureFixture fi
                     businessSchema,
                     rootTable,
                     primaryKey,
-                    ["id"]
+                    [keyColumn]
                 );
             var application = provider.GetRequiredService<IDataPitcherApplication>();
             var planId = Guid.NewGuid();

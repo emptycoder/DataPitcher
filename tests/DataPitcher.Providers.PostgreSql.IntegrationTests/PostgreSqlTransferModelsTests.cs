@@ -92,22 +92,22 @@ public sealed class PostgreSqlTransferModelsTests : IClassFixture<PostgreSqlClos
     }
 
     [Fact]
-    public void StableKeyCodec_Encode_WhenTheProviderTypeIsNotIntegerBigintOrText_ThrowsNotSupportedException()
+    public void StableKeyCodec_Encode_WhenTheProviderTypeIsApproximate_ThrowsNotSupportedException()
     {
         var table = new PostgreSqlWriteTable(
-            new TableAddress("dp", "uuid_key_rows"),
-            [new("id", "uuid", NpgsqlTypes.NpgsqlDbType.Uuid, true, false, false, false, null)]
+            new TableAddress("dp", "double_key_rows"),
+            [new("id", "double precision", NpgsqlTypes.NpgsqlDbType.Double, true, false, false, false, null)]
         );
-        var key = new StableKey([new KeyComponent("id", Guid.NewGuid())]);
+        var key = new StableKey([new KeyComponent("id", 1.5)]);
         Assert.Throws<NotSupportedException>(() => PostgreSqlStableKeyCodec.Encode(key, table));
     }
 
     [Fact]
-    public void StableKeyCodec_Decode_WhenTheProviderTypeIsNotIntegerBigintOrText_ThrowsNotSupportedException()
+    public void StableKeyCodec_Decode_WhenTheProviderTypeIsApproximate_ThrowsNotSupportedException()
     {
         var table = new PostgreSqlWriteTable(
-            new TableAddress("dp", "uuid_key_rows"),
-            [new("id", "uuid", NpgsqlTypes.NpgsqlDbType.Uuid, true, false, false, false, null)]
+            new TableAddress("dp", "double_key_rows"),
+            [new("id", "double precision", NpgsqlTypes.NpgsqlDbType.Double, true, false, false, false, null)]
         );
         Assert.Throws<NotSupportedException>(() => PostgreSqlStableKeyCodec.Decode([], table));
     }

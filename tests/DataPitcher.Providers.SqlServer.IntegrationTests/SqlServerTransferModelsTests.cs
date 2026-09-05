@@ -162,23 +162,10 @@ public sealed class SqlServerTransferModelsTests(SqlServerClosureFixture fixture
     public void StableKeyCodec_Encode_WhenTheProviderTypeIsUnsupported_ThrowsNotSupportedException()
     {
         var table = new SqlServerWriteTable(
-            new TableAddress("dbo", "uid_key_rows"),
-            [
-                new(
-                    "id",
-                    "uniqueidentifier",
-                    typeof(Guid),
-                    SqlDbType.UniqueIdentifier,
-                    true,
-                    false,
-                    false,
-                    false,
-                    false,
-                    null
-                ),
-            ]
+            new TableAddress("dbo", "float_key_rows"),
+            [new("id", "float", typeof(double), SqlDbType.Float, true, false, false, false, false, null)]
         );
-        var key = new StableKey([new KeyComponent("id", Guid.NewGuid())]);
+        var key = new StableKey([new KeyComponent("id", 1.5)]);
         Assert.Throws<NotSupportedException>(() => SqlServerStableKeyCodec.Encode(key, table));
     }
 
@@ -186,21 +173,8 @@ public sealed class SqlServerTransferModelsTests(SqlServerClosureFixture fixture
     public void StableKeyCodec_Decode_WhenTheProviderTypeIsUnsupported_ThrowsNotSupportedException()
     {
         var table = new SqlServerWriteTable(
-            new TableAddress("dbo", "uid_key_rows"),
-            [
-                new(
-                    "id",
-                    "uniqueidentifier",
-                    typeof(Guid),
-                    SqlDbType.UniqueIdentifier,
-                    true,
-                    false,
-                    false,
-                    false,
-                    false,
-                    null
-                ),
-            ]
+            new TableAddress("dbo", "float_key_rows"),
+            [new("id", "float", typeof(double), SqlDbType.Float, true, false, false, false, false, null)]
         );
         Assert.Throws<NotSupportedException>(() => SqlServerStableKeyCodec.Decode([], table));
     }
